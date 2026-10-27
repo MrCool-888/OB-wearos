@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".DebugRelayReceiver"
+            android:exported="true"
+            android:label="OpenBubbles relay debug">
+            <intent-filter>
+                <action android:name="com.openbubbles.wear.bridge.DEBUG_RELAY" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

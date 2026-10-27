@@ -1,0 +1,21 @@
+.gradle/
+.kotlin/
+build/
+*/build/
+.idea/
+local.properties
+*.iml
+.DS_Store
+dist/
+
+# Local reference source, decompiled artifacts, and toolchains.
+ref/
+work/
+
+# Supplied APK/XAPK inputs.
+*.xapk
+
+# Local release signing material. Generate your own key; never commit these.
+keystore.properties
+*.keystore
+*.jks
