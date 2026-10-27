@@ -90,6 +90,17 @@ class BridgeStore(context: Context) {
         persist()
     }
 
+    fun importPublishedGroup(group: WireThread): WireThread = synchronized(lock) {
+        require(group.isGroup && com.openbubbles.wear.protocol.Protocol.isGroupGuid(group.id))
+        val existing = threads[group.id]
+        val updated = (existing ?: group).copy(title = group.title, isGroup = true, address = null,
+            updatedAt = maxOf(existing?.updatedAt ?: 0L, System.currentTimeMillis()))
+        threads[updated.id] = updated
+        trim()
+        persist()
+        updated
+    }
+
     fun markRemoved(threadId: String) = synchronized(lock) {
         val existing = threads[threadId] ?: return@synchronized
         threads[threadId] = existing.copy(

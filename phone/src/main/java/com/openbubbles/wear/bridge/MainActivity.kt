@@ -275,6 +275,23 @@ private fun BridgeScreen() {
                 )
             }
             item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Groups without notifications", style = MaterialTheme.typography.titleMedium)
+                        Text(GroupShortcutDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
+                        Text("Open OpenBubbles first so it can publish recent named chats. Start Shizuku and grant bridge access above, then import. Reading messages still needs accessibility and an unlocked phone.",
+                            style = MaterialTheme.typography.bodySmall)
+                        Button(enabled = !setupBusy, onClick = {
+                            runSetup { ctx ->
+                                val result = NotificationCenter.discoverGroups(ctx, java.util.UUID.randomUUID().toString())
+                                ShizukuSetup.StepResult(result.error == null, result.error
+                                    ?: "Imported ${result.groups.size} published groups. Sync the watch. ${result.note.orEmpty()}")
+                            }
+                        }) { Text("Find published groups with Shizuku") }
+                    }
+                }
+            }
+            item {
                 RelayCard(
                     enabled = state.relayEnabled,
                     onToggle = { enabled ->

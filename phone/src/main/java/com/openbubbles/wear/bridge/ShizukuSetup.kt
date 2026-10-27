@@ -13,9 +13,9 @@ import rikka.shizuku.Shizuku
  *
  * Nothing here is required: every step has a manual equivalent in Android
  * settings. Shizuku runs shell commands through the `shell` user, never root,
- * and OpenBubbles itself is untouched. The commands only grant the bridge's own
- * notification-listener/accessibility components and exempt it from battery
- * optimization.
+ * and OpenBubbles itself is untouched. Setup commands grant the bridge's own
+ * notification-listener/accessibility components and battery exemption. Optional
+ * group discovery separately reads OpenBubbles' published Android shortcuts.
  */
 object ShizukuSetup {
     const val PERMISSION_REQUEST_CODE = 1129
@@ -184,7 +184,20 @@ object ShizukuSetup {
                 null
             )
             val output = ParcelFileDescriptor.AutoCloseInputStream(process.inputStream)
-                .use { stream -> stream.readBytes().toString(Charsets.UTF_8) }
+                .use { stream ->
+                    val bytes = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val read = stream.read(buffer)
+                        if (read < 0) break
+                        if (bytes.size() + read > 1_000_000) {
+                            process.destroy()
+                            error("Command output exceeded the safe size limit.")
+                        }
+                        bytes.write(buffer, 0, read)
+                    }
+                    bytes.toString(Charsets.UTF_8.name())
+                }
             val exit = process.waitFor()
             ShellResult(exit == 0, output.trim())
         }.getOrElse { error ->

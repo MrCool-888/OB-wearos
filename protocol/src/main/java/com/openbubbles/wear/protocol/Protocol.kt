@@ -39,6 +39,8 @@ object Protocol {
     const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
     const val PATH_CONTACTS_REQUEST = "$BASE_PATH/contacts_request"
     const val PATH_CONTACTS_RESULT = "$BASE_PATH/contacts_result"
+    const val PATH_GROUPS_REQUEST = "$BASE_PATH/groups_request"
+    const val PATH_GROUPS_RESULT = "$BASE_PATH/groups_result"
 
     // DataApi paths (durable snapshots for when the watch app is not running).
     const val DATA_SYNC = "$BASE_PATH/sync"
@@ -166,6 +168,12 @@ object Protocol {
     /** Stable local ID for a conversation created from an address on the watch. */
     fun newThreadId(address: String): String =
         "new:" + (normalizeAddress(address) ?: address.trim().lowercase(Locale.ROOT))
+
+    /** OpenBubbles/BlueBubbles conversation GUIDs, not arbitrary shortcut labels. */
+    fun isChatGuid(id: String): Boolean =
+        Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl}]{1,512}$").matches(id)
+
+    fun isGroupGuid(id: String): Boolean = isChatGuid(id) && id.substringAfter(';').startsWith("+;")
 
     /**
      * Stable ID for a message discovered inside a notification. OpenBubbles does

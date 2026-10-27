@@ -232,15 +232,16 @@ of timing out first.
 
 #### Opening a conversation
 
-1. Send the saved notification content `PendingIntent` and wait for a composer. This is the exact
-   chat and avoids guessing a title.
-2. If the target is a new `new:<address>` thread, launch OpenBubbles with `new_chat_address` and
-   `new_chat_name` extras and wait for its composer.
-3. Otherwise launch OpenBubbles' main activity and try, in order:
-   - use the visible search field or search entry, type the title, and click the best result;
-   - click a visible conversation row whose label contains the title;
-   - scroll the conversation list and retry;
-   - as a last resort, launch a new chat from the known address.
+1. Reject locked-phone automation. Send a saved notification content `PendingIntent`, when
+   available, and wait for a composer with an exact title in the header.
+2. For a recognized stable GUID, open the package-manager-provided exported launcher activity with
+   OpenBubbles' `chatGuid` and `android.intent.extra.shortcut.ID` extras. A group GUID that cannot
+   be opened fails without falling back to a similarly named group.
+3. Only sends may use `new_chat_address` / `new_chat_name` extras to start a new conversation.
+   History navigation never creates a conversation, including for `new:<address>` watch threads.
+4. Otherwise search/scroll the list. History/group navigation requires an exact row match and
+   rejects multiple matching visible rows. Search text entry cannot fall back to pasting into
+   a composer. A restored unrelated composer is not treated as proof of the requested chat.
 
 #### Sending
 
@@ -256,39 +257,49 @@ of timing out first.
 #### Loading history
 
 - Open the conversation and ensure its composer is visible.
-- Scroll to the bottom, then repeatedly scrape visible leaf text nodes inside the main scrollable
+- Scroll to the bottom, then repeatedly scrape visible leaf text/content-description nodes inside the main scrollable
   conversation view while scrolling backward.
 - Filter out dates, timestamps, delivery/read labels, reactions, participant names, the chat title,
   and known UI labels.
 - Infer `fromMe` from bubble alignment: right-aligned bubbles are outgoing.
 - Merge overlapping pages and keep screen-order (top-to-bottom) within each page.
-- Match the scraped sequence against the messages already cached and keep only bubbles before the
-  oldest known one. This is a text/alignment match because accessibility exposes no message GUIDs.
+- Match a unique contiguous prefix of up to 12 oldest watch-window messages by text/direction.
+  Keep only bubbles before that anchor. Missing, repeated or partial/later-only anchors fail
+  clearly instead of treating unmatched newer text as older. An empty anchor permits initial
+  history loading. Completely unreadable text is an error, not exhausted history.
 - Cap at 30 pages. `hasMore` is true when the requested count is exceeded or the top was not
   reached.
 - Assign synthetic timestamps 60 seconds apart before the oldest cached message. Ordering is
   preserved, but exact times are not available.
 
 The selector tuning surface is `OpenBubblesAutomation.kt`. The selectors are best effort and have
-not yet been tuned against a real OpenBubbles Compose accessibility tree, so real-device
+not yet been tuned against a real OpenBubbles Flutter accessibility tree, so real-device
 validation is required.
 
 #### Safety and limits
 
 - The service only looks at windows whose package is an OpenBubbles package.
 - It never reads or modifies OpenBubbles' database, files, credentials, or encryption state.
-- It only runs when the watch requests a send or history job; there is no background scraping.
-- It does not construct OpenBubbles' internal intents or call non-exported components.
+- It only runs when the watch requests a send or history job (including history on chat open).
+- It uses the exported launcher/notification intents and does not call non-exported components.
 - It does not use root or Shizuku.
 
 ### Optional assisted setup and diagnostics
 
-`ShizukuSetup` uses Shizuku's shell process API only for user-requested setup. Notification access
+`ShizukuSetup` uses Shizuku's shell process API for user-requested setup and published-group discovery. Notification access
 is granted through `cmd notification allow_listener`, not by editing Android's legacy settings
 mirror. Accessibility updates preserve the existing colon-separated list and target the bridge's
 Android user. Battery exemption uses `cmd deviceidle whitelist` with a `dumpsys` fallback. Commands
-are bounded by a ten-second shell timeout; root-mode Shizuku is rejected. All steps have manual
+are bounded by a ten-second shell timeout and 1 MB output limit; root-mode Shizuku is rejected. Setup steps have manual
 Android Settings equivalents and OpenBubbles itself is never modified.
+
+`GroupShortcutDiscovery` queries `cmd shortcut get-shortcuts --user USER --flags 19 'PACKAGE'`
+only for the installed OpenBubbles package and bridge's current Android user. Flags select dynamic,
+pinned and cached shortcuts. A bounded parser accepts enabled `iMessage;+;…`, `SMS;+;…`, or
+`RCS;+;…` GUIDs with a non-redacted title and matching owner. Direct, disabled, foreign and
+malformed entries are discarded. Importing a group preserves cached messages/unread/participants.
+The reference OpenBubbles source publishes up to four recent named chats at startup, not every
+group. Shortcut availability and command support need real-device validation.
 
 The **Notification access blocked?** recovery dialog explains Android's sideload restrictions and
 links separately to this package's App info and the exact listener's special-access page. Its
@@ -345,8 +356,9 @@ does not pretend to revoke permission. Offline copies remain until a revocation 
 The watch's new-message picker includes **Choose a contact**, recent direct chats even when no
 address was exposed, and **Group chats**. Group browsing filters the same cached summaries rather
 than fabricating one-to-one recipients. Group notification shortcut IDs and sender labels survive
-parsing/sync and are used for replies. Groups with no observed notification remain undiscoverable;
-this integration does not enumerate OpenBubbles' private group database or create new groups.
+parsing/sync and are used for replies. Since 1.5, groups may also be discovered from Android-published
+shortcuts through optional Shizuku access without a notification. This is only a partial list;
+the integration does not enumerate OpenBubbles' private group database or create new groups.
 
 `WearListenerService` receives live messages and data-item changes. It forwards them to
 `WatchRepository`, which owns all watch state and persistence.
@@ -433,11 +445,18 @@ RANGED_VALUE, with a tap intent into the newest unread chat. Counts represent un
 
 ### History loading
 
-`loadOlder` sends `/history` with the thread ID, title, address, and a limit of 60. While the
-request is in flight, the chat shows **Loading older…**. A result is merged by message ID, sorted
-chronologically, and capped at 220. `hasMore = false` marks the thread exhausted and the UI shows
-**No older messages**. Loading history prepends messages without changing the newest message ID, so
-the chat only auto-scrolls when a genuinely new message arrives.
+Chat open automatically requests history once when phone/relay/automation become ready. Selecting
+a contact/manual recipient opens Chat, not Composer. `loadOlder` sends `/history` with the thread
+ID, title, address, group flag, a limit of 60, and up to 12 oldest visible messages as an anchor.
+Null anchors preserve old-watch behavior; empty anchors explicitly allow initial loading.
+
+Results/failures/125-second timeouts are correlated by thread and request ID. Late callbacks cannot
+clear a newer request. A separate memory-only `historyWindows` map retains the oldest 220 messages
+of the merged older window, while the regular durable thread cache retains the newest 220. Syncs
+update the latter without evicting the older view. **Latest messages** cancels the pending view
+request and returns to the newest cache. Each older page scrolls to the window's start, not its
+bottom. `hasMore = false` marks exhaustion; errors do not. The phone uses the watch's anchor even
+when its own 240-message cache no longer contains that page. Jobs still have a 30-screen limit.
 
 ### Media viewing
 
@@ -495,6 +514,8 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/media_result` | phone → watch | Whether the media data item was published, or an error. |
 | `/contacts_request` | watch → phone | Request a name/address-filtered page from the permitted Android address book. |
 | `/contacts_result` | phone → watch | Correlated contact page, address choices, continuation, permission status, or error. |
+| `/groups_request` | watch → phone | Explicit request to find OpenBubbles-published group shortcuts using Shizuku. |
+| `/groups_result` | phone → watch | Correlated partial group list, note, or error. |
 
 `SyncPayload` and `PongPayload` carry `automationAvailable`. `ThreadSummary` carries `address`,
 `canSend`, and the existing reply/mark-read flags. `SendRequest` carries an optional `threadId`,
@@ -522,16 +543,30 @@ Both services are registered with fine-grained Wear intent filters (`MESSAGE_REC
 ## Why not use OpenBubbles directly?
 
 The supplied 2.0.0 build has no Wear OS module, no public message API, and no exported content
-provider for chat history. The notification and accessibility UI are the supported integration
-surfaces that do not require modifying or repackaging the official app.
+provider for chat history. Notifications, accessible UI, and Android-published conversation
+shortcuts provide integration surfaces without modifying or repackaging the official app.
 
-Non-root Shizuku cannot read OpenBubbles' private database or invoke its non-exported components,
-so it would not remove these limits. Root, a custom OpenBubbles build, or internal APIs would, but
-this project intentionally avoids all three so it keeps working with the official APK.
+Non-root Shizuku cannot read OpenBubbles' private database or invoke its non-exported components.
+It can query Android-published shortcuts for partial group discovery; it cannot supply complete
+history or a complete private group list. This project intentionally avoids root, a custom
+OpenBubbles build, and private-file access.
+
+### WearBubbles reference
+
+The user-suggested [WearBubbles](https://github.com/mdunlap/WearBubbles) was reviewed for group and
+history loading. Its `BlueBubblesApi`, `ChatRepository`, `MessageRepository` and
+`MessageDetailViewModel` load chats/messages directly from a self-hosted BlueBubbles Mac server
+using `/api/v1/chat/query` and `/api/v1/message/query`; older pages use the oldest server timestamp
+as a `before` cursor. The phone companion primarily supplies server configuration. That backend
+is not an Android-app integration API and cannot be assumed available in standalone OpenBubbles.
+Cache-first display, refresh-on-open and explicit older-page loading are useful UX patterns, but
+this bridge must use text anchors rather than authoritative server timestamps/GUIDs for history.
+No WearBubbles source code or Mac-server dependency was incorporated.
 
 ## Failure modes
 
-- **No notification access**: no threads are tracked; the phone UI reports this.
+- **No notification access**: no notification-derived threads are tracked; contacts/shortcuts can
+  still be selected and read using optional automation. The phone UI reports the missing grant.
 - **OpenBubbles absent**: notifications cannot appear; the phone UI reports this.
 - **Data Layer unavailable**: parsing, caching, and automation still work, but the watch cannot
   sync. This is the behavior seen on the Google APIs phone emulator image.
@@ -547,8 +582,8 @@ this project intentionally avoids all three so it keeps working with the officia
 - **Selector change**: a future OpenBubbles UI can move the composer, Send button, or search field.
   The job reports that it could not find the control, and the selectors in
   `OpenBubblesAutomation.kt` need tuning.
-- **Ambiguous history**: repeated text or heavy truncation can confuse the text-based anchor. The
-  bridge avoids obvious duplicates but cannot guarantee a perfect match without message GUIDs.
+- **Ambiguous history**: repeated text or heavy truncation can prevent a unique oldest-text anchor.
+  The bridge reports an alignment error; it does not return unmatched text as older history.
 - **Emulator SystemUI bug**: Android 15 SystemUI can fail to inflate updated long
   `MessagingStyle` notifications and cancel them. The bridge handles removal correctly; this is
   not representative of a physical device.

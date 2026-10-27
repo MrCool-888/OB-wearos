@@ -445,6 +445,47 @@ Release action tests for reply and mark-read need the debug receiver, so those a
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
 
+## 1.5.0 published-group and history checks
+
+Local validation: **100 tests passed** (23 protocol, 49 phone, 28 watch), zero failures/errors.
+Both apps' debug and R8 release builds succeeded. Lint completed with no errors (40 phone / 38
+watch warnings). Signed APKs have matching application IDs/certificates, the same signing key as
+1.4.0, versionName `1.5.0`, versionCode `7`, and no debug receivers. No ADB devices were connected.
+
+Automated coverage adds AOSP-format shortcut parsing (including the space before readable flags),
+disabled/foreign/direct/redacted filtering, package/current-user query scoping, import preservation,
+exact GUID launch extras and exact header matching. History tests cover empty caches, missing or
+ambiguous oldest anchors, later-only matches, repeated text/direction, full-cache older windows,
+multiple pages, snapshots arriving during older viewing, and stale result/failure/timeout IDs.
+Protocol tests cover optional anchors and additive group paths/models.
+
+Required real-device checks (not performed on this build machine):
+
+1. Update both devices to 1.5.0. Start Shizuku through wireless debugging and approve the phone
+   bridge. Open OpenBubbles so it can publish recent named chats. On the watch use
+   **Groups → Find groups (Shizuku)**, or import via the phone's discovery button then sync.
+2. Find a published group that has not notified the bridge. Confirm its existing GUID/title
+   appears, and selection opens that exact group on the phone, not a same-named group or a newly
+   composed recipient list. Discovery is partial: check the empty-result explanation too.
+3. Stop/revoke Shizuku and retry: expect a clear setup hint; existing notification groups remain.
+   Try the package-scoped query on Samsung Android 17/One UI 9; support is not assumed.
+4. Enable accessibility and unlock the phone. Choose an existing contact with no watch messages;
+   selection should open Chat, automatically read text history, and not send/create a new phone
+   conversation. Repeat for a published group and a notification group. Tap Reply explicitly to send.
+5. Open a nonexistent contact conversation: expect an existing-chat-not-found error, not a new
+   phone chat created by history navigation. Test two groups/contacts with the same displayed name;
+   visible duplicate matches should be rejected; stable group GUID navigation must not guess.
+6. Load older pages with 220 messages already cached. The older page must remain visible after
+   a fresh phone thread snapshot; load another page, then tap **Latest messages** to return.
+   Reopening after process death restores the newest cache, not the memory-only older window.
+7. Lock the phone and open a watch chat: cached content remains, but automation asks you to unlock.
+   Unlock and retry. Disable accessibility: cached content/live notification replies still work.
+8. Try an empty/inaccessible accessibility tree and repeated/truncated anchor texts. Expect an
+   error, not false exhaustion or newer messages labeled older. UI times remain approximate;
+   accessibility history is text-only and does not invent group sender names.
+9. Delay one history request past timeout, issue another, then deliver the first response/failure.
+   The newer request must remain pending. Verify Data Layer and UI behavior with actual devices.
+
 ## 1.4.0 contact-picker and group checks
 
 Local validation: **73 tests passed** (20 protocol, 33 phone, 20 watch), with zero failures/errors.

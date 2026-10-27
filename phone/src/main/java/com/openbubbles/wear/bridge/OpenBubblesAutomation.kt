@@ -28,7 +28,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
 /**
- * Drives OpenBubbles' own Compose UI with an AccessibilityService. This is the
+ * Drives OpenBubbles' own accessible UI with an AccessibilityService. This is the
  * fallback for actions that a notification cannot provide:
  *
  * - sending to a chat whose notification has been dismissed
@@ -89,13 +89,14 @@ object OpenBubblesAutomation {
         address: String?,
         text: String,
         contentIntent: PendingIntent?,
+        isGroup: Boolean = false,
         callback: (String?) -> Unit
     ) {
         scope.launch {
             val error = try {
                 withTimeout(90_000L) {
                     mutex.withLock {
-                        performSend(threadId, title, address, text, contentIntent)
+                        performSend(threadId, title, address, text, contentIntent, isGroup)
                     }
                 }
                 null
@@ -131,10 +132,11 @@ object OpenBubblesAutomation {
         title: String?,
         address: String?,
         text: String,
-        contentIntent: PendingIntent?
+        contentIntent: PendingIntent?,
+        isGroup: Boolean
     ) {
         if (text.isBlank()) throw AutomationException("The message is empty.")
-        openConversation(threadId, title, address, contentIntent)
+        openConversation(threadId, title, address, contentIntent, isGroup = isGroup)
 
         val composer = waitForComposer(8_000)
             ?: throw AutomationException("OpenBubbles did not show a message box for this chat.")
@@ -155,7 +157,7 @@ object OpenBubblesAutomation {
         limit: Int,
         contentIntent: PendingIntent?
     ): HistoryOutcome {
-        openConversation(thread.id, thread.title, thread.address, contentIntent)
+        openConversation(thread.id, thread.title, thread.address, contentIntent, isGroup = thread.isGroup, readOnly = true)
         ensureComposer()
 
         val pages = mutableListOf<List<ScrapedLink>>()
@@ -166,20 +168,20 @@ object OpenBubblesAutomation {
         scrollToBottom()
         for (pageIndex in 0 until MAX_PAGES) {
             val root = appRootOrNull() ?: break
-            val scrollable = findScrollable(root) ?: break
+            val scrollable = findScrollable(root) ?: root
             val page = scrapePage(root, scrollable, thread)
             if (page.isNotEmpty()) pages += page
             val signature = pageSignature(page)
             if (page.isNotEmpty()) {
                 val chronological = buildChronological(pages)
-                val older = olderThanKnown(chronological, thread.messages)
+                val older = olderThanKnown(chronological, thread.messages, strict = false)
                 if (older.size >= limit) break
             }
 
             val moved = scrollBackward(scrollable)
             delay(PAGE_DELAY_MS)
             val afterRoot = appRootOrNull() ?: break
-            val afterScrollable = findScrollable(afterRoot) ?: break
+            val afterScrollable = findScrollable(afterRoot) ?: afterRoot
             val afterPage = scrapePage(afterRoot, afterScrollable, thread)
             val afterSignature = pageSignature(afterPage)
             if (!moved) {
@@ -200,11 +202,13 @@ object OpenBubblesAutomation {
         }
 
         val chronological = buildChronological(pages)
+        if (chronological.isEmpty()) throw AutomationException(
+            "OpenBubbles did not expose readable message text. Unlock the phone, open this chat and retry; history was not marked complete.")
         val older = olderThanKnown(chronological, thread.messages)
         if (older.isEmpty()) {
             return HistoryOutcome(
                 messages = emptyList(),
-                hasMore = false,
+                hasMore = !reachedTop,
                 error = null
             )
         }
@@ -254,15 +258,27 @@ object OpenBubblesAutomation {
         threadId: String?,
         title: String?,
         address: String?,
-        contentIntent: PendingIntent?
+        contentIntent: PendingIntent?,
+        isGroup: Boolean = false,
+        readOnly: Boolean = false
     ) {
         val service = requireService()
+        val keyguard = service.getSystemService(android.app.KeyguardManager::class.java)
+        if (keyguard.isKeyguardLocked) throw AutomationException("Unlock the phone before loading history or sending through OpenBubbles automation.")
         if (contentIntent != null) {
             val sent = runCatching { contentIntent.send() }.isSuccess
-            if (sent && waitForComposer(8_000) != null) return
+            if (sent && waitForMatchingComposer(title, 8_000) != null) return
         }
 
-        if (threadId == null || threadId.startsWith("new:")) {
+        if (threadId != null && Protocol.isChatGuid(threadId)) {
+            launchExistingGuid(threadId)
+            if (waitForMatchingComposer(title, 10_000) != null) return
+            // Stable group IDs must never fall back to guessing a similarly named chat.
+            if (isGroup || Protocol.isGroupGuid(threadId)) throw AutomationException(
+                "OpenBubbles did not open the selected group ID. Refresh published groups or open that group on the phone and retry.")
+        }
+
+        if (!readOnly && !isGroup && (threadId == null || threadId.startsWith("new:"))) {
             val recipient = address?.takeIf { it.isNotBlank() }
                 ?: title?.takeIf { it.isNotBlank() }
                 ?: throw AutomationException("Enter a phone number or email address first.")
@@ -273,28 +289,53 @@ object OpenBubblesAutomation {
         launchMain()
         waitForApp(8_000)
         if (waitForComposer(2_000) != null) {
-            if (title.isNullOrBlank() || headerMatches(title)) return
+            // A launcher intent can restore whichever chat was last open. Do
+            // not treat that unrelated composer as proof of the requested chat.
             pressBack()
             delay(700)
         }
 
-        val query = title?.takeIf { it.isNotBlank() }
+        val query = address?.takeIf { readOnly && it.isNotBlank() }
+            ?: title?.takeIf { it.isNotBlank() }
             ?: address?.takeIf { it.isNotBlank() }
             ?: throw AutomationException("This chat has no title to search for.")
         repeat(3) {
-            if (searchAndOpen(query)) return
-            if (clickConversation(query)) return
-            if (scrollAndOpen(query)) return
+            if (searchAndOpen(query, strict = readOnly || isGroup)) return
+            if (clickConversation(query, strict = readOnly || isGroup)) return
+            if (scrollAndOpen(query, strict = readOnly || isGroup)) return
+            if (readOnly && !title.isNullOrBlank() && title != query) {
+                if (searchAndOpen(title, strict = true)) return
+            }
             pressBack()
             delay(600)
         }
 
-        if (!address.isNullOrBlank()) {
+        if (!readOnly && !isGroup && !address.isNullOrBlank()) {
             runCatching { launchNewChat(address, title) }
                 .onSuccess { return }
                 .onFailure { Log.w(TAG, "New-chat fallback failed", it) }
         }
-        throw AutomationException("Could not find \"$query\" in OpenBubbles.")
+        throw AutomationException("Could not find an existing chat for \"$query\" in OpenBubbles. No new conversation was created to read history.")
+    }
+
+    private suspend fun launchExistingGuid(guid: String) {
+        require(Protocol.isChatGuid(guid))
+        val service = requireService()
+        val pkg = BridgeInfo.openBubblesPackage(service) ?: throw AutomationException("OpenBubbles is not installed.")
+        val intent = service.packageManager.getLaunchIntentForPackage(pkg)
+            ?: throw AutomationException("OpenBubbles cannot be opened.")
+        service.startActivity(ConversationLaunch.existingGuid(intent, guid))
+        delay(600)
+    }
+
+    private suspend fun waitForMatchingComposer(title: String?, timeoutMs: Long): AccessibilityNodeInfo? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val composer = appRootOrNull()?.let(::findComposer)
+            if (composer != null && !title.isNullOrBlank() && headerMatches(title)) return composer
+            delay(150)
+        }
+        return null
     }
 
     private suspend fun launchMain() {
@@ -328,7 +369,7 @@ object OpenBubblesAutomation {
         }
     }
 
-    private suspend fun searchAndOpen(query: String): Boolean {
+    private suspend fun searchAndOpen(query: String, strict: Boolean = false): Boolean {
         var root = appRootOrNull() ?: return false
         var search = findSearchField(root)
         if (search == null) {
@@ -340,27 +381,27 @@ object OpenBubblesAutomation {
         }
         click(search)
         delay(120)
-        if (!setText(search, query)) return false
+        if (!setText(search, query, allowComposerPaste = false)) return false
         delay(1_000)
         root = appRootOrNull() ?: return false
-        val result = findResult(root, query, search) ?: return false
+        val result = (if (strict) findExactRow(root, query, search) else findResult(root, query, search)) ?: return false
         click(result)
         delay(700)
         return waitForComposer(8_000) != null
     }
 
-    private suspend fun clickConversation(title: String): Boolean {
+    private suspend fun clickConversation(title: String, strict: Boolean = false): Boolean {
         val root = appRootOrNull() ?: return false
-        val target = findResult(root, title, null) ?: return false
+        val target = (if (strict) findExactRow(root, title, null) else findResult(root, title, null)) ?: return false
         click(target)
         delay(700)
         return waitForComposer(8_000) != null
     }
 
-    private suspend fun scrollAndOpen(title: String): Boolean {
+    private suspend fun scrollAndOpen(title: String, strict: Boolean = false): Boolean {
         repeat(12) {
             val root = appRootOrNull() ?: return false
-            val target = findResult(root, title, null)
+            val target = if (strict) findExactRow(root, title, null) else findResult(root, title, null)
             if (target != null) {
                 click(target)
                 delay(700)
@@ -425,13 +466,11 @@ object OpenBubblesAutomation {
         val root = appRootOrNull() ?: return false
         val rootBounds = Rect().also { root.getBoundsInScreen(it) }
         val maxY = rootBounds.top + rootBounds.height() * 0.28f
-        val wanted = normalize(title)
         return findNodes(root).any { node ->
             val bounds = Rect().also { node.getBoundsInScreen(it) }
-            val label = node.label()
             bounds.top <= maxY &&
-                label.isNotBlank() &&
-                normalize(label).contains(wanted)
+                listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
+                    .any { ConversationLaunch.matchesHeader(it, title) }
         }
     }
 
@@ -566,6 +605,20 @@ object OpenBubblesAutomation {
         return null
     }
 
+    private fun findExactRow(root: AccessibilityNodeInfo, query: String, search: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        val rootBounds = Rect().also { root.getBoundsInScreen(it) }
+        val searchBounds = search?.let { Rect().also(it::getBoundsInScreen) }
+        val candidates = findNodes(root).filter { !isEditable(it) &&
+            it.label().lines().any { line -> normalize(line) == normalize(query) } }
+            .mapNotNull(::clickableAncestor).filter { node ->
+                val bounds = Rect().also(node::getBoundsInScreen)
+                bounds.top >= rootBounds.top + dp(48) && bounds.height() in dp(24)..(rootBounds.height() / 3) &&
+                    bounds.width() >= rootBounds.width() / 2 && (searchBounds == null || !Rect.intersects(bounds, searchBounds))
+            }.distinctBy { Rect().also(it::getBoundsInScreen).toShortString() }
+        if (candidates.size > 1) throw AutomationException("More than one chat matches this name. Open the exact chat on the phone or use a published group shortcut; history was not read from a guessed chat.")
+        return candidates.singleOrNull()
+    }
+
     private fun findSendButton(
         root: AccessibilityNodeInfo,
         composer: AccessibilityNodeInfo?
@@ -646,11 +699,12 @@ object OpenBubblesAutomation {
             .filter { it.isNotBlank() }
             .toSet()
         val results = mutableListOf<ScrapedLink>()
+        val composerTop = findComposer(root)?.let { Rect().also(it::getBoundsInScreen).top }
         val seen = mutableSetOf<String>()
 
         findNodes(root).forEach { node ->
             if (node.isEditable) return@forEach
-            val raw = nodeText(node)
+            val raw = historyText(node)
             if (raw.isBlank()) return@forEach
             if (hasTextChild(node)) return@forEach
             val bounds = Rect().also { node.getBoundsInScreen(it) }
@@ -661,6 +715,7 @@ object OpenBubblesAutomation {
                 return@forEach
             }
             if (bounds.height() > scrollBounds.height() * 0.65f) return@forEach
+            if (bounds.top < rootBounds.top + dp(56) || (composerTop != null && bounds.bottom >= composerTop)) return@forEach
 
             val text = cleanMessageText(raw) ?: return@forEach
             val normalized = normalize(text)
@@ -689,7 +744,7 @@ object OpenBubblesAutomation {
     private fun hasTextChild(node: AccessibilityNodeInfo): Boolean {
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
-            if (nodeText(child).isNotBlank()) return true
+            if (historyText(child).isNotBlank()) return true
         }
         return false
     }
@@ -772,46 +827,18 @@ object OpenBubblesAutomation {
      */
     private fun olderThanKnown(
         scraped: List<ScrapedLink>,
-        knownMessages: List<WireMessage>
+        knownMessages: List<WireMessage>,
+        strict: Boolean = true
     ): List<ScrapedLink> {
         if (scraped.isEmpty()) return emptyList()
         val known = knownMessages
             .filterNot { it.id.startsWith("local-") }
             .filter { it.text.isNotBlank() }
         if (known.isEmpty()) return scraped
-        val knownKeys = known.map(::messageKey).toSet()
-
-        var bestRun = 0
-        var bestStart = -1
-        for (startKnown in known.indices) {
-            val key = messageKey(known[startKnown])
-            for (startScraped in scraped.indices) {
-                if (linkKey(scraped[startScraped]) != key) continue
-                var run = 0
-                while (startKnown + run < known.size &&
-                    startScraped + run < scraped.size &&
-                    messageKey(known[startKnown + run]) ==
-                    linkKey(scraped[startScraped + run])
-                ) {
-                    run++
-                }
-                if (run > bestRun || run == bestRun && startScraped > bestStart) {
-                    bestRun = run
-                    bestStart = startScraped
-                }
-            }
-        }
-
-        if (bestRun > 0 && bestStart >= 0) {
-            return scraped
-                .take(bestStart)
-                .filterNot { linkKey(it) in knownKeys }
-        }
-
-        // The exact text of the last known messages may have been rewritten by
-        // reaction summaries or truncation. Drop anything that definitely
-        // duplicates a cached message rather than returning it twice.
-        return scraped.filterNot { linkKey(it) in knownKeys }
+        val prefix = HistoryAlignment.olderPrefixSize(
+            scraped.map { normalize(it.text) to it.fromMe }, known.map { normalize(it.text) to it.fromMe })
+            ?: if (!strict) return emptyList() else throw AutomationException("Could not safely align the phone's messages with cached history. Refresh the chat and retry; unmatched/newer text was not relabeled as older messages.")
+        return scraped.take(prefix)
     }
 
     private fun linkKey(link: ScrapedLink): String =
@@ -862,7 +889,7 @@ object OpenBubblesAutomation {
         return null
     }
 
-    private fun setText(node: AccessibilityNodeInfo, text: String): Boolean {
+    private fun setText(node: AccessibilityNodeInfo, text: String, allowComposerPaste: Boolean = true): Boolean {
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         val args = Bundle().apply {
@@ -873,7 +900,7 @@ object OpenBubblesAutomation {
             val current = appRootOrNull()?.let(::findComposer)
             if (current == null || normalize(nodeText(current)).isNotEmpty()) return true
         }
-        return pasteText(text)
+        return allowComposerPaste && pasteText(text)
     }
 
     private fun pasteText(text: String): Boolean {
@@ -895,6 +922,10 @@ object OpenBubblesAutomation {
 
     private fun nodeText(node: AccessibilityNodeInfo): String =
         node.text?.toString()?.trim().orEmpty()
+
+    private fun historyText(node: AccessibilityNodeInfo): String =
+        node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }
+            ?: node.contentDescription?.toString()?.trim().orEmpty()
 
     private fun AccessibilityNodeInfo.label(): String {
         val values = listOfNotNull(

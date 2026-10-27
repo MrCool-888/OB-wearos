@@ -203,11 +203,12 @@ fun NewMessageScreen(
                 }
 
                 item { SectionHeader("Group chats") }
+                item { GroupDiscoveryControls(state) }
                 items(groups, key = { "group-${it.id}" }) { group ->
                     RecipientCard(group) { onOpenChat(group.id) }
                 }
                 if (groups.isEmpty()) item {
-                    Text("Groups appear after OpenBubbles posts a group-message notification. The bridge cannot read OpenBubbles' private chat list.",
+                    Text("Find published group shortcuts using Shizuku on the phone, without a notification. Other groups can still appear from notifications; the private chat list is not read.",
                         style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
