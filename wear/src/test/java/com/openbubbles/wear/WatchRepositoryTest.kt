@@ -8,6 +8,10 @@ import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
+import com.openbubbles.wear.protocol.WatchContact
+import com.openbubbles.wear.protocol.ContactAddress
+import com.openbubbles.wear.protocol.ContactsPage
+import com.openbubbles.wear.protocol.PongPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Before
@@ -159,5 +163,75 @@ class WatchRepositoryTest {
         val incoming = local.copy(id = "incoming", fromMe = false, timestamp = System.currentTimeMillis() + 1000)
         WatchRepository.onThread(WireThread(id = "chat", title = "Alex", unread = true, messages = listOf(incoming)), connected = false)
         assertTrue(state.value.threads.getValue("chat").unread)
+    }
+
+    private fun contact(id: String) = WatchContact(id, "Alex $id", listOf(ContactAddress("alex$id@example.com")))
+
+    @Test fun contactPagesAppendWithoutDuplicatesAndRejectStaleSearches() {
+        state.value = state.value.copy(contacts = listOf(contact("1")), contactsQuery = "Alex",
+            contactsRequestId = "page2", contactsRequestOffset = 40)
+        WatchRepository.onContactsPage(ContactsPage(requestId = "old-search", query = "Old", contactsAccess = true))
+        assertEquals("page2", state.value.contactsRequestId)
+        WatchRepository.onContactsPage(ContactsPage(requestId = "page2", query = "Alex", offset = 40,
+            contacts = listOf(contact("1"), contact("2")), nextOffset = 42, contactsAccess = true))
+        assertEquals(listOf("1", "2"), state.value.contacts.map { it.id })
+        assertEquals(42, state.value.contactsNextOffset)
+        assertFalse(state.value.contactsLoading)
+    }
+
+    @Test fun deniedContactPageClearsCachedAddresses() {
+        state.value = state.value.copy(contacts = listOf(contact("1")), contactsRequestId = "r")
+        WatchRepository.onContactsPage(ContactsPage(requestId = "r", contactsAccess = false, error = "Allow Contacts"))
+        assertTrue(state.value.contacts.isEmpty())
+        assertNull(state.value.contactsNextOffset)
+        assertEquals("Allow Contacts", state.value.contactsError)
+    }
+
+    @Test fun contactPermissionRevocationOnMetadataClearsCache() {
+        state.value = state.value.copy(contacts = listOf(contact("1")), contactsNextOffset = 40, contactsRequestId = "r")
+        WatchRepository.onPong(PongPayload(relayEnabled = false, contactsAccess = false))
+        assertTrue(state.value.contacts.isEmpty())
+        assertNull(state.value.contactsRequestId)
+    }
+
+    @Test fun oldPhoneMetadataDoesNotEraseCachedContacts() {
+        state.value = state.value.copy(contacts = listOf(contact("1")), contactsAccess = true)
+        WatchRepository.onPong(PongPayload(relayEnabled = false))
+        assertEquals(1, state.value.contacts.size)
+        assertEquals(true, state.value.contactsAccess)
+    }
+
+    @Test fun pickerIncludesGroupsAndDirectChatsWithoutAddresses() {
+        val group = WireThread(id = "group-id", title = "Family", isGroup = true).toSummary()
+        val direct = WireThread(id = "person-id", title = "Alex").toSummary()
+        val watch = WatchState(conversations = listOf(group, direct))
+        assertEquals(listOf(group), watch.groups)
+        assertEquals(listOf(direct), watch.directChats)
+    }
+
+    @Test fun choosingContactReusesDirectThreadAndNeverSendsOnSelection() {
+        val thread = WireThread(id = "real-chat", title = "Alex", address = "alex@example.com")
+        state.value = state.value.copy(threads = mapOf(thread.id to thread), conversations = listOf(thread.toSummary()), queuedSends = emptyList())
+        assertEquals("real-chat", WatchRepository.startNewChat("alex@example.com", "Alex"))
+        assertTrue(state.value.queuedSends.isEmpty())
+    }
+
+    @Test fun mismatchedContactQueryOrOffsetCannotReplaceCurrentPage() {
+        state.value = state.value.copy(contacts = listOf(contact("1")), contactsQuery = "Alex",
+            contactsRequestId = "r", contactsRequestOffset = 40)
+        WatchRepository.onContactsPage(ContactsPage(requestId = "r", query = "Other", offset = 40, contactsAccess = true))
+        WatchRepository.onContactsPage(ContactsPage(requestId = "r", query = "Alex", offset = 0, contactsAccess = true))
+        assertEquals(listOf("1"), state.value.contacts.map { it.id })
+        assertEquals("r", state.value.contactsRequestId)
+    }
+
+    @Test fun contactCacheIsSeparateFromMessageJournalAndClearedOnRevocation() {
+        state.value = state.value.copy(contactsRequestId = "r")
+        WatchRepository.onContactsPage(ContactsPage(requestId = "r", contacts = listOf(contact("1")), contactsAccess = true))
+        val cache = context.getSharedPreferences("openbubbles_wear_contacts", Context.MODE_PRIVATE)
+        assertTrue(cache.getString("contacts", "")!!.contains("alex1@example.com"))
+        assertFalse(context.getSharedPreferences("openbubbles_wear", Context.MODE_PRIVATE).contains("contacts"))
+        WatchRepository.onPong(PongPayload(relayEnabled = false, contactsAccess = false))
+        assertEquals("[]", cache.getString("contacts", ""))
     }
 }

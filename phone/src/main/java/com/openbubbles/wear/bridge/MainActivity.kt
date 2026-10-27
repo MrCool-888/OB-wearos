@@ -11,6 +11,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -172,6 +174,16 @@ private fun BridgeScreen() {
         }
     }
 
+    val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        scope.launch {
+            withContext(Dispatchers.IO) { NotificationCenter.syncNow(context) }
+            state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
+            setupNotice = if (granted) "Contacts allowed. On the watch open New message → Choose a contact."
+                else "Contacts were not allowed. Recent chats and manual number/email entry still work."
+            setupNoticeFailed = !granted
+        }
+    }
+
     if (showNotificationHelp) {
         NotificationAccessHelpDialog(
             state = state, busy = setupBusy, notice = setupNotice,
@@ -226,6 +238,11 @@ private fun BridgeScreen() {
                         NotificationActions.launchOpenBubbles(context, BridgeInfo.openBubblesPackage(context))
                     }
                 )
+            }
+            item {
+                ContactsCard(state.contactsAccess,
+                    onAllow = { contactsPermission.launch(android.Manifest.permission.READ_CONTACTS) },
+                    onSettings = { runCatching { context.startActivity(NotificationAccessSetup.appInfoIntent(context)) } })
             }
             item {
                 ShizukuCard(
@@ -307,6 +324,23 @@ private fun BridgeScreen() {
             item {
                 Footer(state)
             }
+        }
+    }
+}
+
+@Composable
+private fun ContactsCard(allowed: Boolean, onAllow: () -> Unit, onSettings: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Watch contact picker", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            StatusRow(allowed, "Contacts", if (allowed) "Allowed. Browse names, numbers and email addresses on the watch."
+                else "Optional. Allow access to the phone address book used by OpenBubbles on Android.")
+            Text("When you browse or search on the watch, names and phone/email addresses are copied over the Wear Data Layer. No contact photos, notes, or third-party uploads. OpenBubbles-only private contacts may not be in this address book.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Watch: New message → Choose a contact. Starting a new chat still needs accessibility automation; reading contacts does not.",
+                style = MaterialTheme.typography.bodySmall)
+            if (!allowed) Button(onClick = onAllow) { Text("Allow contact picker") }
+            TextButton(onClick = onSettings) { Text("Contacts permission settings") }
         }
     }
 }

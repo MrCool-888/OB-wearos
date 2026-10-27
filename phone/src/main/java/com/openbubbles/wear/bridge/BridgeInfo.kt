@@ -10,7 +10,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.3.1"
+    const val BRIDGE_VERSION = "1.4.0"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",

@@ -57,6 +57,7 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_SEND -> handleSend(nodeId, data)
                 Protocol.PATH_HISTORY -> handleHistory(nodeId, data)
                 Protocol.PATH_MEDIA_REQUEST -> handleMediaRequest(nodeId, data)
+                Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to handle $path", t)
@@ -87,6 +88,16 @@ class WearBridgeService : WearableListenerService() {
             Protocol.PATH_PONG,
             Wire.encodeBytes(NotificationCenter.pong())
         )
+    }
+
+    private fun handleContactsRequest(nodeId: String, data: ByteArray) {
+        val request = Wire.decodeBytes<com.openbubbles.wear.protocol.ContactsRequest>(data) ?: return
+        val page = if (!NotificationCenter.relayEnabled(applicationContext)) {
+            com.openbubbles.wear.protocol.ContactsPage(requestId = request.requestId,
+                query = request.query.trim().take(80), offset = request.offset,
+                contactsAccess = ContactDirectory.hasAccess(applicationContext), error = "Relay is paused on the phone.")
+        } else ContactDirectory.load(applicationContext, request)
+        WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_CONTACTS_RESULT, Wire.encodeBytes(page))
     }
 
     private fun handleSyncRequest(nodeId: String, data: ByteArray) {

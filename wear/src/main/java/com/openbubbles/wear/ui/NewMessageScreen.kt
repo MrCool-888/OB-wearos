@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.wear.input.RemoteInputIntentHelper
 import com.openbubbles.wear.WatchRepository
 import com.openbubbles.wear.WatchState
+import com.openbubbles.wear.protocol.ThreadSummary
 
 private const val ADDRESS_INPUT_KEY = "openbubbles_wear_new_address"
 
@@ -48,15 +49,12 @@ fun NewMessageScreen(
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
     onStartChat: (String) -> Unit,
+    onOpenContacts: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val listState = rememberScalingLazyListState()
-    val recipients = state.conversations.filter { summary ->
-        !summary.isGroup && (
-            summary.address != null ||
-                state.threads[summary.id]?.address != null
-            )
-    }
+    val recipients = state.directChats
+    val groups = state.groups
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -147,6 +145,12 @@ fun NewMessageScreen(
                 }
 
                 item {
+                    Button(onClick = onOpenContacts, modifier = Modifier.fillMaxWidth()) {
+                        Text("Choose a contact")
+                    }
+                }
+
+                item {
                     Button(
                         onClick = { enterRecipient() },
                         enabled = state.automationAvailable && state.relayEnabled,
@@ -164,48 +168,18 @@ fun NewMessageScreen(
 
                 if (recipients.isNotEmpty()) {
                     item {
-                        SectionHeader("Recent contacts")
+                        SectionHeader("Recent OpenBubbles chats")
                     }
                     items(
                         items = recipients,
                         key = { it.id }
                     ) { summary ->
-                        Card(
-                            onClick = { onOpenChat(summary.id) },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                            )
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                ArtworkPlaceholder(initials = initialsFor(summary.title))
-                                Spacer(Modifier.width(9.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = summary.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    val address = summary.address
-                                        ?: state.threads[summary.id]?.address
-                                    if (!address.isNullOrBlank()) {
-                                        Text(
-                                            text = address,
-                                            style = MaterialTheme.typography.bodyExtraSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        RecipientCard(summary) { onOpenChat(summary.id) }
                     }
                 } else {
                     item {
                         Card(
-                            onClick = { enterRecipient() },
+                            onClick = onOpenContacts,
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow
@@ -213,19 +187,28 @@ fun NewMessageScreen(
                         ) {
                             Column {
                                 Text(
-                                    text = "No known addresses yet",
+                                    text = "No recent chats yet",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "Tap to enter a phone number or email. Once OpenBubbles posts a notification for a chat, it appears here too.",
+                                    text = "Use Choose a contact or enter a number/email. Chats also appear after OpenBubbles posts a notification.",
                                     style = MaterialTheme.typography.bodyExtraSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
+                }
+
+                item { SectionHeader("Group chats") }
+                items(groups, key = { "group-${it.id}" }) { group ->
+                    RecipientCard(group) { onOpenChat(group.id) }
+                }
+                if (groups.isEmpty()) item {
+                    Text("Groups appear after OpenBubbles posts a group-message notification. The bridge cannot read OpenBubbles' private chat list.",
+                        style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 item {
@@ -235,6 +218,23 @@ fun NewMessageScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipientCard(summary: ThreadSummary, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ArtworkPlaceholder(initials = initialsFor(summary.title))
+            Spacer(Modifier.width(9.dp))
+            Column(Modifier.weight(1f)) {
+                Text(summary.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (summary.isGroup) "Group chat" else summary.address ?: "OpenBubbles conversation",
+                    style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
