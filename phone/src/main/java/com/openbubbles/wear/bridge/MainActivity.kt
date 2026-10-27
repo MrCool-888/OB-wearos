@@ -1,14 +1,16 @@
 package com.openbubbles.wear.bridge
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -128,12 +131,58 @@ private fun BridgeScreen() {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf(BridgeUiState()) }
     var refreshing by remember { mutableStateOf(false) }
+    var setupBusy by remember { mutableStateOf(false) }
+    var setupNotice by remember { mutableStateOf<String?>(null) }
+    var setupNoticeFailed by remember { mutableStateOf(false) }
+    var showNotificationHelp by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
             state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
             delay(2000L)
         }
+    }
+
+    fun refreshState() {
+        scope.launch {
+            state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
+        }
+    }
+
+    fun runSetup(action: (Context) -> ShizukuSetup.StepResult) {
+        if (setupBusy) return
+        setupBusy = true
+        setupNotice = null
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { action(context) }.getOrElse {
+                        ShizukuSetup.StepResult(false, it.message ?: "Setup failed. Use the manual Android settings steps instead.")
+                    }
+                }
+                setupNotice = result.message
+                setupNoticeFailed = !result.ok
+                state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
+            } finally {
+                setupBusy = false
+            }
+        }
+    }
+
+    if (showNotificationHelp) {
+        NotificationAccessHelpDialog(
+            state = state, busy = setupBusy, notice = setupNotice,
+            onDismiss = { showNotificationHelp = false },
+            onOpenAppInfo = {
+                runCatching { context.startActivity(NotificationAccessSetup.appInfoIntent(context)) }
+                    .onFailure {
+                        setupNotice = "Open Android Settings → Apps → OpenBubbles Wear → ⋮ → Allow restricted settings."
+                        setupNoticeFailed = true
+                    }
+            },
+            onOpenNotificationAccess = { openNotificationAccessSettings(context) },
+            onUnblockWithShizuku = { runSetup { ShizukuSetup.unblockNotificationAccess(it) } }
+        )
     }
 
     Scaffold(
@@ -169,9 +218,34 @@ private fun BridgeScreen() {
                 SetupCard(
                     state = state,
                     onOpenNotificationAccess = { openNotificationAccessSettings(context) },
+                    onNotificationBlocked = { showNotificationHelp = true },
                     onOpenOpenBubbles = {
                         NotificationActions.launchOpenBubbles(context, BridgeInfo.openBubblesPackage(context))
                     }
+                )
+            }
+            item {
+                ShizukuCard(
+                    state = state,
+                    busy = setupBusy,
+                    notice = setupNotice,
+                    noticeFailed = setupNoticeFailed,
+                    onRequestPermission = {
+                        val granted = ShizukuSetup.requestPermission()
+                        setupNotice = if (granted) {
+                            "Shizuku access is already granted."
+                        } else if (ShizukuSetup.isAvailable()) {
+                            "Approve the Shizuku prompt, then tap Finish setup."
+                        } else {
+                            "Shizuku is not running. Start it, then try again."
+                        }
+                        setupNoticeFailed = !ShizukuSetup.isAvailable()
+                        refreshState()
+                    },
+                    onRunSetup = { runSetup { ShizukuSetup.runAll(it) } },
+                    onOpenManager = { ShizukuSetup.openManager(context) },
+                    onOpenWebsite = { openWebsite(context) },
+                    onDismissNotice = { setupNotice = null }
                 )
             }
             item {
@@ -206,7 +280,14 @@ private fun BridgeScreen() {
                             state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
                             refreshing = false
                         }
-                    }
+                    },
+                    onReconnectListener = {
+                        NotificationCenter.requestListenerRebind()
+                        setupNotice = "Asked Android to reconnect the notification listener."
+                        setupNoticeFailed = false
+                        refreshState()
+                    },
+                    onOpenBatterySettings = { openBatterySettings(context) }
                 )
             }
             item {
@@ -265,6 +346,7 @@ private fun HeroCard(state: BridgeUiState) {
 private fun SetupCard(
     state: BridgeUiState,
     onOpenNotificationAccess: () -> Unit,
+    onNotificationBlocked: () -> Unit,
     onOpenOpenBubbles: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -291,7 +373,7 @@ private fun SetupCard(
                 detail = if (state.notificationAccess) {
                     "Granted. The bridge can read chat notifications."
                 } else {
-                    "Required. Android settings will open on the next screen."
+                    "Required. Use Notification access below, not the ordinary app-notification permission. If Android blocks it, open the help steps."
                 }
             )
             Spacer(Modifier.height(10.dp))
@@ -324,9 +406,251 @@ private fun SetupCard(
                     }
                 }
             }
+            if (!state.notificationAccess) {
+                TextButton(onClick = onNotificationBlocked) {
+                    Text("Notification access blocked?")
+                }
+            }
         }
     }
 }
+
+@Composable
+private fun NotificationAccessHelpDialog(
+    state: BridgeUiState,
+    busy: Boolean,
+    notice: String?,
+    onDismiss: () -> Unit,
+    onOpenAppInfo: () -> Unit,
+    onOpenNotificationAccess: () -> Unit,
+    onUnblockWithShizuku: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unblock notification access") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Android 13+ can block notification access for apps installed from APKs. This is called Restricted settings; allowing ordinary notifications does not remove it.")
+                Text("1. Open Notification access below and try the bridge's switch once. Dismiss any Restricted settings warning.")
+                Text("2. Open App info below. Tap ⋮ at the top right → Allow restricted settings and confirm with your PIN or fingerprint. This option may only appear after step 1.")
+                Text("3. Return to Notification access and enable OpenBubbles Wear. This permission is under Special app access, not App info → Notifications.")
+                Text("Only continue if you trust this bridge: Android gives a notification listener access to all notifications, including sensitive content. The bridge only relays OpenBubbles notifications.")
+                if (state.shizukuPermission && !state.notificationAccess) {
+                    Text("Alternatively, Unblock with Shizuku approves restricted settings for this bridge only and grants its notification-listener access. It does not turn on accessibility automation or change OpenBubbles.")
+                } else if (!state.notificationAccess) {
+                    Text("If the menu is missing, you can optionally start Shizuku using wireless debugging and grant access in the phone bridge's Shizuku card, then return here.")
+                }
+                Text("A work-profile, parental-control, or device-administrator policy may also block access. This app cannot override those policies.")
+                if (state.notificationAccess) Text("Notification access is now granted.", color = MaterialTheme.colorScheme.primary)
+                if (notice != null) Text(notice)
+            }
+        },
+        confirmButton = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (state.shizukuPermission && !state.notificationAccess) {
+                    Button(onClick = onUnblockWithShizuku, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (busy) "Checking access…" else "Unblock with Shizuku")
+                    }
+                }
+                TextButton(onClick = onOpenAppInfo, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Open App info") }
+                TextButton(onClick = onOpenNotificationAccess, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Open Notification access") }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ShizukuCard(
+    state: BridgeUiState,
+    busy: Boolean,
+    notice: String?,
+    noticeFailed: Boolean,
+    onRequestPermission: () -> Unit,
+    onRunSetup: () -> Unit,
+    onOpenManager: () -> Unit,
+    onOpenWebsite: () -> Unit,
+    onDismissNotice: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Optional Shizuku setup",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "No root. Every step is also available manually.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Icon(
+                    imageVector = if (state.shizukuPermission) {
+                        Icons.Filled.CheckCircle
+                    } else {
+                        Icons.Filled.Settings
+                    },
+                    contentDescription = null,
+                    tint = if (state.shizukuPermission) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Shizuku can grant this bridge notification access and accessibility, and exempt it from battery optimization without you hunting through settings. It runs commands as the shell user, never as root, and never modifies OpenBubbles.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (notice != null) {
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = if (noticeFailed) Icons.Filled.Warning else Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = if (noticeFailed) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onDismissNotice) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            when {
+                !state.shizukuAvailable -> {
+                    Text(
+                        if (state.shizukuInstalled) {
+                            "Shizuku is installed but its service isn't running. Start Shizuku with wireless debugging, then return here."
+                        } else {
+                            "Shizuku isn't installed. Install and start it if you want one-tap setup; otherwise use the Android settings buttons above."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (state.shizukuInstalled) {
+                            Button(onClick = onOpenManager) {
+                                Text("Open Shizuku")
+                            }
+                        } else {
+                            Button(onClick = onOpenWebsite) {
+                                Text("Get Shizuku")
+                            }
+                        }
+                    }
+                }
+
+                !state.shizukuPermission -> {
+                    Text(
+                        "Shizuku is running. Grant this app access and Shizuku will show a confirmation prompt.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onRequestPermission) {
+                            Text("Grant Shizuku access")
+                        }
+                        TextButton(onClick = onOpenManager) {
+                            Text("Open Shizuku")
+                        }
+                    }
+                }
+
+                else -> {
+                    StatusRow(
+                        ok = state.notificationAccess,
+                        title = "Notification access",
+                        detail = if (state.notificationAccess) {
+                            "Granted."
+                        } else {
+                            "Not granted yet."
+                        }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    StatusRow(
+                        ok = state.automationAvailable,
+                        title = "Accessibility automation",
+                        detail = if (state.automationAvailable) {
+                            "On. New chats and older history are available."
+                        } else {
+                            "Off. Replies to live notifications still work."
+                        }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    StatusRow(
+                        ok = state.batteryUnrestricted,
+                        title = "Background access",
+                        detail = if (state.batteryUnrestricted) {
+                            "Exempt from battery optimization."
+                        } else {
+                            "Android may pause the bridge in the background."
+                        }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!state.notificationAccess ||
+                            !state.automationAvailable ||
+                            !state.batteryUnrestricted
+                        ) {
+                            Button(onClick = onRunSetup, enabled = !busy) {
+                                Text(if (busy) "Working…" else "Finish setup")
+                            }
+                        } else {
+                            Text(
+                                "All assisted steps are complete.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        TextButton(onClick = onOpenManager) {
+                            Text("Open Shizuku")
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Shizuku is independent of OpenBubbles. If it is unavailable, the manual setup above is fully supported.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 
 @Composable
 private fun AutomationCard(
@@ -434,12 +758,14 @@ private fun RelayCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
 private fun SyncCard(
     state: BridgeUiState,
     refreshing: Boolean,
-    onSync: () -> Unit
+    onSync: () -> Unit,
+    onReconnectListener: () -> Unit,
+    onOpenBatterySettings: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
             Text(
-                "Status",
+                "Status and diagnostics",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -459,7 +785,50 @@ private fun SyncCard(
             if (state.lastWatchName.isNotBlank()) {
                 InfoRow("Watch name", state.lastWatchName)
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+            InfoRow(
+                "Listener service",
+                when {
+                    state.listenerConnected -> "Connected"
+                    state.notificationAccess -> "Reconnecting…"
+                    else -> "Notification access off"
+                }
+            )
+            InfoRow(
+                "Last OpenBubbles alert",
+                if (state.lastNotificationAt > 0L) {
+                    formatRelativeTime(state.lastNotificationAt)
+                } else {
+                    "None seen yet"
+                }
+            )
+            InfoRow(
+                "OpenBubbles",
+                when {
+                    !state.openBubblesInstalled -> "Not installed"
+                    state.openBubblesVersion.isBlank() -> "Installed"
+                    else -> "v${state.openBubblesVersion}"
+                }
+            )
+            InfoRow(
+                "Battery",
+                if (state.batteryUnrestricted) "Unrestricted" else "Optimized"
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = onReconnectListener,
+                    enabled = state.notificationAccess
+                ) {
+                    Text("Reconnect listener")
+                }
+                TextButton(onClick = onOpenBatterySettings) {
+                    Text("Battery settings")
+                }
+            }
+            Spacer(Modifier.height(4.dp))
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -614,10 +983,23 @@ private fun openAutomationSettings(context: Context) {
     }
 }
 
+private fun openBatterySettings(context: Context) {
+    runCatching {
+        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+}
+
+private fun openWebsite(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(ShizukuSetup.WEBSITE))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
 private fun openNotificationAccessSettings(context: Context) {
-    val component = ComponentName(context, NotificationRelayService::class.java)
-    val detail = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
-        .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, component.flattenToString())
+    val detail = NotificationAccessSetup.listenerIntent(context)
     if (runCatching { context.startActivity(detail) }.isSuccess) return
     runCatching {
         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))

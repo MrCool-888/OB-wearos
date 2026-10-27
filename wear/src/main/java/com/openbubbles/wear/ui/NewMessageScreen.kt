@@ -137,12 +137,19 @@ fun NewMessageScreen(
                             isError = false
                         )
                     }
+                } else if (!state.phoneOnline) {
+                    item {
+                        NoticeCard(
+                            message = "Phone offline. You can write now and the message will be queued until it reconnects.",
+                            isError = false
+                        )
+                    }
                 }
 
                 item {
                     Button(
                         onClick = { enterRecipient() },
-                        enabled = state.phoneOnline && state.relayEnabled,
+                        enabled = state.automationAvailable && state.relayEnabled,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(

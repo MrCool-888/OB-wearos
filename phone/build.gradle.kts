@@ -18,11 +18,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.openbubbles.wear.bridge"
+        applicationId = rootProject.extra["companionApplicationId"] as String
         minSdk = 32
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
     }
 
     signingConfigs {
@@ -53,6 +53,8 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions { unitTests.isIncludeAndroidResources = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -85,5 +87,10 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-wearable:19.0.0")
 
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

@@ -56,7 +56,7 @@ fun ComposerScreen(
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val canReply = (thread?.canReply ?: summary?.canReply) == true
     val canSend = (thread?.canSend ?: summary?.canSend) == true
-    val enabled = (canReply || canSend) && state.phoneOnline && state.relayEnabled
+    val enabled = (canReply || canSend) && state.relayEnabled
     val sending = threadId in state.sendingThreads
     val listState = rememberScalingLazyListState()
     var voiceError by remember { mutableStateOf<String?>(null) }
@@ -68,8 +68,7 @@ fun ComposerScreen(
         val results = result.data?.let { RemoteInput.getResultsFromIntent(it) }
         val reply = results?.getCharSequence(REPLY_INPUT_KEY)?.toString()?.trim()
         if (!reply.isNullOrEmpty()) {
-            WatchRepository.sendReply(threadId, reply)
-            onSent()
+            if (WatchRepository.sendReply(threadId, reply)) onSent()
         }
     }
 
@@ -164,12 +163,16 @@ fun ComposerScreen(
                                 !state.relayEnabled ->
                                     "Relay is paused on the phone. Resume it in the bridge app to send."
 
-                                !state.phoneOnline ->
-                                    "The phone isn't reachable, so messages can't be sent right now."
-
                                 else ->
                                     "Enable automation in the bridge app to send in this chat without a live notification."
                             },
+                            isError = false
+                        )
+                    }
+                } else if (!state.phoneOnline) {
+                    item {
+                        NoticeCard(
+                            message = "Phone offline. Your message is saved to the outbox and sent when the phone reconnects.",
                             isError = false
                         )
                     }
@@ -182,8 +185,7 @@ fun ComposerScreen(
                     item(key = "quick-$index") {
                         Button(
                             onClick = {
-                                WatchRepository.sendReply(threadId, reply)
-                                onSent()
+                                if (WatchRepository.sendReply(threadId, reply)) onSent()
                             },
                             enabled = enabled && !sending,
                             modifier = Modifier.fillMaxWidth()

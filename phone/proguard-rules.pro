@@ -7,4 +7,7 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }
+
 -dontwarn kotlinx.serialization.**

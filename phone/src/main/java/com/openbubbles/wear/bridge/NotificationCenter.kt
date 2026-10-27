@@ -32,6 +32,7 @@ object NotificationCenter {
     private val liveByKey = ConcurrentHashMap<String, Live>()
     private val liveByThread = ConcurrentHashMap<String, Live>()
     @Volatile private var service: NotificationRelayService? = null
+    @Volatile private var listenerBound = false
 
     private val handler = Handler(Looper.getMainLooper())
     private val syncRunnable = Runnable { publishSync() }
@@ -73,10 +74,16 @@ object NotificationCenter {
         service = listener
     }
 
+    fun onListenerConnected(listener: NotificationRelayService) {
+        attachService(listener)
+        listenerBound = true
+    }
+
     fun detachService(listener: NotificationRelayService) {
         if (service !== listener) return
         Log.d(TAG, "listener detached; clearing live state")
         service = null
+        listenerBound = false
         liveByKey.clear()
         liveByThread.clear()
         scheduleSync()
@@ -84,7 +91,17 @@ object NotificationCenter {
 
     fun ensureListenerBound() {
         if (!initialized) return
-        if (service != null) return
+        if (listenerBound) return
+        if (!BridgeInfo.hasNotificationAccess(appContext)) return
+        requestListenerRebind()
+    }
+
+    /**
+     * Asks Android to rebind the listener even if our cached service reference
+     * looks alive. Used by diagnostics and after Shizuku grants access.
+     */
+    fun requestListenerRebind() {
+        if (!initialized) return
         if (!BridgeInfo.hasNotificationAccess(appContext)) return
         runCatching {
             NotificationListenerService.requestRebind(
@@ -95,10 +112,18 @@ object NotificationCenter {
         }
     }
 
+    fun listenerConnected(): Boolean = listenerBound
+
+    fun lastNotificationAt(context: Context): Long {
+        init(context)
+        return prefs.lastNotificationAt
+    }
+
     fun onNotificationPosted(sbn: StatusBarNotification) {
         if (!initialized) return
         Log.d(TAG, "received ${sbn.packageName} key=${sbn.key}")
         if (!BridgeInfo.isOpenBubblesPackage(sbn.packageName)) return
+        prefs.lastNotificationAt = System.currentTimeMillis()
         Log.d(TAG, "notification ${sbn.packageName} key=${sbn.key} shortcut=${sbn.notification?.shortcutId}")
         val parsed = NotificationParser.parse(appContext, sbn) ?: return
 

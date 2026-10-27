@@ -59,6 +59,7 @@ fun ChatScreen(
     onOpenPhone: () -> Unit,
     onLoadOlder: () -> Unit,
     onOpenMedia: (String) -> Unit,
+    onSendQueued: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val thread = state.threads[threadId]
@@ -216,6 +217,7 @@ fun ChatScreen(
                         onReply = onReply,
                         onOpenPhone = onOpenPhone,
                         onLoadOlder = onLoadOlder,
+                        onSendQueued = onSendQueued,
                         onRefresh = { WatchRepository.requestThread(threadId) },
                         onMarkRead = { WatchRepository.markRead(threadId) }
                     )
@@ -253,7 +255,11 @@ private fun ChatStatus(
         !state.phoneOnline -> {
             color = scheme.tertiary
             title = "Phone offline"
-            detail = "Showing the last messages cached on the watch."
+            detail = if (state.queuedCount > 0) {
+                "Showing cached messages. Your reply is queued until the phone reconnects."
+            } else {
+                "Showing the last messages cached on the watch. Sends will be queued."
+            }
         }
 
         canSend && !thread.canReply -> {
@@ -371,6 +377,12 @@ private fun MessageBubble(
                         color = content.copy(alpha = 0.7f)
                     )
 
+                    "queued" -> Text(
+                        text = " · Queued",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.8f)
+                    )
+
                     "failed" -> Text(
                         text = " · Not sent",
                         style = MaterialTheme.typography.labelSmall,
@@ -478,6 +490,7 @@ private fun ChatActions(
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
     onLoadOlder: () -> Unit,
+    onSendQueued: () -> Unit,
     onRefresh: () -> Unit,
     onMarkRead: () -> Unit
 ) {
@@ -486,6 +499,7 @@ private fun ChatActions(
     val sending = threadId in state.sendingThreads
     val loadingHistory = threadId in state.loadingHistory
     val historyExhausted = threadId in state.historyExhausted
+    val queuedCount = state.queuedSends.count { it.threadId == threadId }
     val canLoadHistory = state.automationAvailable &&
         thread?.messages?.isNotEmpty() == true &&
         state.phoneOnline &&
@@ -493,17 +507,44 @@ private fun ChatActions(
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Button(
             onClick = onReply,
-            enabled = (canReply || canSend) && state.phoneOnline && !sending,
+            enabled = (canReply || canSend) && state.relayEnabled && !sending,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 when {
                     sending -> "Sending…"
+                    !state.phoneOnline && canReply -> "Queue reply"
+                    !state.phoneOnline && canSend -> "Queue message"
                     canReply -> "Reply"
                     canSend -> "Send message"
                     else -> "Reply unavailable"
                 }
             )
+        }
+
+        if (!state.phoneOnline && (canReply || canSend)) {
+            Text(
+                text = "Phone offline. Messages are saved on the watch and sent when it reconnects.",
+                style = MaterialTheme.typography.bodyExtraSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+
+        if (queuedCount > 0) {
+            Text(
+                text = "$queuedCount queued ${if (queuedCount == 1) "message" else "messages"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+            FilledTonalButton(
+                onClick = onSendQueued,
+                enabled = state.phoneOnline,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.phoneOnline) "Send queued now" else "Queued until reconnect")
+            }
         }
 
         if (canSend && !canReply) {

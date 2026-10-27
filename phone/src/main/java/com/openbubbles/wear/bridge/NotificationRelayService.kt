@@ -16,7 +16,7 @@ class NotificationRelayService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        NotificationCenter.attachService(this)
+        NotificationCenter.onListenerConnected(this)
         NotificationCenter.rescan(this)
     }
 

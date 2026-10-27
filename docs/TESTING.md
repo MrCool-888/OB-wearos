@@ -31,8 +31,8 @@ adb install -r phone/build/outputs/apk/debug/phone-debug.apk
 adb install -r testnotifier/build/outputs/apk/debug/testnotifier-debug.apk
 adb shell pm grant com.openbubbles.messaging android.permission.POST_NOTIFICATIONS
 adb shell cmd appops set com.openbubbles.messaging POST_NOTIFICATION allow
-adb shell cmd appops set com.openbubbles.wear.bridge POST_NOTIFICATION allow
-adb shell cmd notification allow_listener com.openbubbles.wear.bridge/.NotificationRelayService
+adb shell cmd appops set com.openbubbles.wear POST_NOTIFICATION allow
+adb shell cmd notification allow_listener com.openbubbles.wear/com.openbubbles.wear.bridge.NotificationRelayService
 ```
 
 A freshly installed app is in the stopped state, so launch it once before sending it broadcasts:
@@ -57,12 +57,13 @@ automation** in Android's accessibility settings. Alternatively:
 
 ```bash
 adb shell settings put secure enabled_accessibility_services \
-  com.openbubbles.wear.bridge/com.openbubbles.wear.bridge.OpenBubblesAutomationService
+  com.openbubbles.wear/com.openbubbles.wear.bridge.OpenBubblesAutomationService
 adb shell settings put secure accessibility_enabled 1
 ```
 
 The command replaces the enabled-services list. If another accessibility service is already
-enabled, include it as a comma-separated entry instead of overwriting it.
+enabled, include it as a colon-separated entry instead of overwriting it. Optional Shizuku setup
+preserves the list for you.
 
 On Android 13 and newer, enabling accessibility for a sideloaded app through the UI may be blocked
 until you open the bridge's App info and choose **Allow restricted settings**. The adb command above
@@ -127,7 +128,7 @@ The automation send path needs an address or a real OpenBubbles content intent.
 The debug-only `DebugRelayReceiver` exposes relay operations without a watch:
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op status
 ```
 
@@ -146,7 +147,7 @@ action or automation is available; `automation` reports the service state separa
 ### Reply
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY \
   --es op reply --es thread fake-maya --es text OnMyWay
 ```
@@ -167,7 +168,7 @@ For a multi-word reply, quote the entire remote command so the device shell does
 argument:
 
 ```bash
-adb shell "am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell "am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op reply \
   --es thread fake-maya --es text 'On my way'"
 ```
@@ -175,7 +176,7 @@ adb shell "am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
 ### Mark read
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY \
   --es op mark_read --es thread fake-family
 ```
@@ -196,7 +197,7 @@ The bridge marks the cached thread as history-only (`live=false`, `reply=false`,
 With a live notification, `send` uses the notification reply action:
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY \
   --es op send --es thread fake-maya --es text SentFromAdb
 ```
@@ -205,7 +206,7 @@ To exercise the accessibility automation path, use the real OpenBubbles app and 
 with no thread:
 
 ```bash
-adb shell "am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell "am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op send \
   --es address '+15551234567' --es title 'Alice' --es text 'Sent through automation'"
 ```
@@ -220,7 +221,7 @@ OBWearDebug: send new:+15551234567: ok
 A cached thread without a live notification can be sent to with:
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY \
   --es op send --es thread <thread-id> --es text SentFromAdb
 ```
@@ -230,7 +231,7 @@ adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
 With the real OpenBubbles app and automation on:
 
 ```bash
-adb shell "am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell "am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op history \
   --es thread <thread-id> --es title 'Alice' --es address '+15551234567' --es limit 40"
 ```
@@ -263,9 +264,9 @@ The bridge should copy both attachments while the notification URI grant is acti
 cache count and list media IDs:
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op status
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op media
 ```
 
@@ -281,7 +282,7 @@ Publish one cached item to the watch (the debug command only exercises the Data 
 watch must be running and reachable):
 
 ```bash
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op media --es id <media-id>
 ```
 
@@ -302,15 +303,15 @@ Run `--es op clear_cache`, then try an attachment already visible on the watch t
 
 ```bash
 # Request a fresh sync.
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op sync
 
 # Open OpenBubbles on the phone.
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op open_phone --es thread fake-maya
 
 # Drop the bridge cache and saved content intents.
-adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
   -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op clear_cache
 ```
 
@@ -416,7 +417,7 @@ Release builds are minified and do not contain the debug receivers or seed comma
 ./gradlew :phone:assembleRelease :wear:assembleRelease
 adb install -r phone/build/outputs/apk/release/phone-release.apk
 adb -s <watch-serial> install -r wear/build/outputs/apk/release/wear-release.apk
-adb shell cmd notification allow_listener com.openbubbles.wear.bridge/.NotificationRelayService
+adb shell cmd notification allow_listener com.openbubbles.wear/com.openbubbles.wear.bridge.NotificationRelayService
 adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
   -a com.openbubbles.messaging.DEBUG_POST --es chat all
 ```
@@ -433,7 +434,7 @@ Checks performed during development:
 Check that the release build kept the automation service:
 
 ```bash
-adb shell dumpsys package com.openbubbles.wear.bridge
+adb shell dumpsys package com.openbubbles.wear
 adb shell settings get secure enabled_accessibility_services
 ```
 
@@ -443,6 +444,73 @@ because Android identifies accessibility services by component name.
 Release action tests for reply and mark-read need the debug receiver, so those are validated
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
+
+## 1.3.0 pre-device validation and checklist
+
+Final local validation on 2026-10-27: **43 tests passed** (17 protocol, 12 watch, 14 phone);
+both debug and R8 release APKs built successfully; phone/watch lint completed with warnings but
+no errors. Both signed APKs report versionName `1.3.0`, versionCode `4`, and the same release
+certificate. Release manifests contain the tile, complication, notification receiver, and Shizuku
+provider where expected, and exclude the exported debug receivers. APKs and SHA-256 checksums
+are available in `dist/`.
+
+The packaged application ID must be `com.openbubbles.wear` on **both** devices, not the historical
+phone-only `com.openbubbles.wear.bridge`. Matching certificates alone are insufficient for Data
+Layer delivery. Rebuild both variants together from the shared root application-ID setting.
+
+Automated checks cover protocol serialization plus Robolectric regression tests for the outbox,
+fast-result/transport races, full-outbox rejection, paused relay, queued thread migration,
+identical-text refreshes, read/visibility state, hash-colliding notification identities, and phone
+request deduplication (including concurrent copies and interrupted requests). Debug/release
+compilation, R8, Android lint, release signatures, and packaged version metadata are checked too.
+These checks do **not** validate a real OpenBubbles account or paired Data Layer delivery.
+
+Before relying on 1.3.0, test on your actual phone/watch:
+
+1. If upgrading the phone from 1.2.0 or earlier, first remove the old
+   `com.openbubbles.wear.bridge` bridge (its cache is not migrated; do not remove OpenBubbles).
+   Install both 1.3.0 release APKs. Enable phone notification access; allow watch notifications from
+   watch Settings. Receive a message with the watch app closed. Check text/voice reply, mark-read,
+   and the alert's chat deep link. Turn extra alerts off if phone mirroring causes duplicates.
+2. Leave a chat open, return to the watch face, then receive another message. It must alert again;
+   messages received while actively viewing that chat should not raise a duplicate alert.
+3. Disconnect the phone, queue two messages, restart the watch app, and confirm both remain queued.
+   Reconnect and verify exactly one copy of each arrives, in order. Repeat with a stale notification
+   and automation enabled. Pause relay and confirm queued messages are not dispatched until resumed.
+4. Test new recipients, quiet chats, history loading, photos, GIFs, and Hide text previews using the
+   real-device automation checklist above. Inspect OpenBubbles before retrying any unconfirmed send.
+5. Add the Messages tile and a supported unread complication. Check empty, unread, read, offline,
+   queued, and multiple-chat states. Tap each surface and confirm it opens the expected chat.
+6. Without Shizuku, verify manual setup and diagnostics still work. Then optionally start Shizuku
+   using wireless debugging, grant the bridge access, and run **Finish setup**. Confirm an existing
+   accessibility service remains enabled, grants actually show on the status cards, and stopping
+   Shizuku afterward does not break messaging. OEM rejection should leave manual setup usable.
+
+The interrupted emulator processes were not treated as successful device tests. No physical
+phone/watch was connected during the final pre-test validation; end-to-end delivery, Shizuku
+grants, real accessibility selectors, tile rendering, and real attachment URI permissions still
+require the checks above.
+
+### Restricted notification-access regression checks
+
+The nine notification-access setup tests check that App info uses the installed package (not the
+source namespace), the listener settings link uses the exact component, unblock commands affect
+only the bridge/current user, Android 12 skips the Android 13 app-op, normal grants do not change
+restricted settings, existing grants run no shell commands, delayed grants are verified, and an
+exit-code-zero denial is never shown as success. An unsupported app-op can still fall back to a
+verified working notification grant.
+
+On a real Android 13+ phone, install from the APK and test:
+
+1. If notification access is greyed out, tap it once, dismiss the restricted-settings warning, then
+   open **Notification access blocked? → Open App info → ⋮ → Allow restricted settings**. Confirm,
+   return through **Open Notification access**, and enable the bridge.
+2. Confirm that merely allowing ordinary app notifications is not shown as listener access.
+3. If the menu is missing, start non-root Shizuku, grant access to the bridge, and explicitly choose
+   **Unblock with Shizuku** from the recovery dialog. Verify the dialog reports actual access and
+   receives a new OpenBubbles notification; accessibility automation must remain off if it was off.
+4. Test a denied grant or managed-profile policy: setup must retain manual recovery instructions,
+   not report success from the shell exit code. This project does not override administrator policy.
 
 ## Known emulator limitations
 
@@ -504,6 +572,9 @@ Run them with:
 
 ```bash
 ./gradlew :protocol:test
+./gradlew :phone:testDebugUnitTest :wear:testDebugUnitTest
+./gradlew :phone:lintDebug :wear:lintDebug
 ```
 
-HTML output is generated at `protocol/build/reports/tests/test/index.html`.
+HTML reports are generated under each module's `build/reports/tests/`; Android lint reports are
+under `phone/build/reports/` and `wear/build/reports/`.

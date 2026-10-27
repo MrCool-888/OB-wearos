@@ -42,6 +42,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onSync: () -> Unit,
     onOpenPhone: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
+    onToggleAlerts: () -> Unit,
+    onSendQueued: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val listState = rememberScalingLazyListState()
@@ -156,6 +160,110 @@ fun SettingsScreen(
                 item {
                     InfoCard {
                         Text(
+                            text = "Watch notifications",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow(
+                            "Extra alerts",
+                            when {
+                                !state.alertsEnabled -> "Off"
+                                !state.notificationPermission -> "Blocked"
+                                else -> "On"
+                            }
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Get a rich alert with reply, voice input and mark read for each new chat. OpenBubbles' own mirrored notification still appears while this is off.",
+                            style = MaterialTheme.typography.bodyExtraSmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onToggleAlerts,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                if (state.alertsEnabled) {
+                                    "Turn extra alerts off"
+                                } else {
+                                    "Turn extra alerts on"
+                                }
+                            )
+                        }
+                        if (state.alertsEnabled && !state.notificationPermission) {
+                            Spacer(Modifier.height(6.dp))
+                            Button(
+                                onClick = onRequestNotificationPermission,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Allow notifications")
+                            }
+                            Spacer(Modifier.height(2.dp))
+                            TextButton(
+                                onClick = onOpenNotificationSettings,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Open watch notification settings")
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    InfoCard {
+                        Text(
+                            text = "Outbox",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        InfoRow(
+                            "Queued messages",
+                            state.queuedCount.toString()
+                        )
+                        if (state.queuedSends.isEmpty()) {
+                            Text(
+                                text = "Messages written while the phone is offline are kept here and sent automatically after it reconnects.",
+                                style = MaterialTheme.typography.bodyExtraSmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                        } else {
+                            state.queuedSends.takeLast(3).forEach { queued ->
+                                val title = state.threads[queued.threadId]?.title
+                                    ?: state.conversations.firstOrNull { it.id == queued.threadId }?.title
+                                    ?: "Conversation"
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "$title: ${queued.text}",
+                                    style = MaterialTheme.typography.bodyExtraSmall,
+                                    color = scheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = onSendQueued,
+                                enabled = state.phoneOnline,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (state.phoneOnline) {
+                                        "Send queued now"
+                                    } else {
+                                        "Waiting for the phone"
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    InfoCard {
+                        Text(
                             text = "Watch cache",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
@@ -206,7 +314,7 @@ fun SettingsScreen(
                         AboutLine("Chats appear once OpenBubbles posts a notification for them.")
                         AboutLine("Enable automation on the phone to start new chats, send in quiet chats and load older messages.")
                         AboutLine("Muted chats and hidden alerts may be missing until you use them.")
-                        AboutLine("Photos show as a placeholder. Media isn't copied to the watch.")
+                        AboutLine("Photos and GIFs are copied to the watch when you open them. OpenBubbles' Hide text previews setting can prevent attachments from reaching the bridge.")
                         AboutLine("Everything is sent by OpenBubbles on the phone, so your account and encryption stay there.")
                     }
                 }
