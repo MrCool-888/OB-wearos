@@ -74,20 +74,20 @@ No root access, Shizuku, custom OpenBubbles build, or OpenBubbles-side changes a
 
 ## Install
 
-Download the APKs from the [1.3.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.3.0).
+Download the APKs from the [1.3.1 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.3.1).
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.3.0.apk`
-- `dist/OpenBubblesWear-Watch-1.3.0.apk`
+- `dist/OpenBubblesWear-Phone-1.3.1.apk`
+- `dist/OpenBubblesWear-Watch-1.3.1.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.3.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.3.0.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.3.1.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.3.1.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -104,7 +104,7 @@ Google's Wear Data Layer. Their source-code namespaces remain different.
 
 **Upgrading the phone from 1.2.0 or earlier:** the old bridge used
 `com.openbubbles.wear.bridge`, which prevented Data Layer communication with the watch. Uninstall
-that old bridge (not the official OpenBubbles app), install the 1.3.0 phone APK, and grant its
+that old bridge (not the official OpenBubbles app), install the new phone APK, and grant its
 notification/accessibility permissions again. The bridge's old local cache is not migrated;
 OpenBubbles' messages and account are untouched. The watch APK updates normally.
 
@@ -143,8 +143,16 @@ background restrictions.
 
 ### Notification access says "Blocked" or "Restricted setting"
 
-This is an Android security restriction on sideloaded APKs, not the ordinary **Allow notifications**
-permission. In the phone bridge tap **Notification access blocked?** for guided recovery:
+**First check which screen says Blocked.** Samsung's **App info → Notifications** controls alerts
+posted by the phone bridge. The bridge does not post phone alerts, so that screen may say **Blocked**
+with a grey switch. This does **not** mean access to OpenBubbles messages is blocked. Do not change
+device security settings just to enable that unused switch. Use the bridge's **Notification access**
+button, or Android Settings → Apps → Special access → Notification access (menu names vary).
+Watch alerts are configured separately on the watch.
+
+If the actual **Notification access** screen refuses to enable the listener, Android may be
+restricting a sideloaded APK. This is separate from ordinary **Allow notifications** permission.
+In that case, tap **Notification access blocked?** for guided recovery:
 
 1. Open **Notification access** and try the bridge's switch once. Dismiss the restricted-settings
    warning if it appears.
@@ -171,6 +179,20 @@ adb shell cmd notification allow_listener com.openbubbles.wear/com.openbubbles.w
 ```
 
 These steps follow [Android's restricted-settings guidance](https://support.google.com/android/answer/12623953).
+
+### Accessibility is On in Samsung Settings but the bridge says Off
+
+1.3.1 fixes detection of Android's shortened accessibility component names. The phone UI now
+distinguishes **On in Android settings** from **Service connected**; a service that is enabled but
+has not connected is not falsely advertised as ready to the watch. If it stays enabled but
+disconnected, switch it off/on once under Accessibility → Installed apps, then reopen the bridge.
+Shizuku is not required for this detection or for manually enabled accessibility.
+
+If settings still disagree, tap **Copy permission diagnostics** in the phone bridge's Status and
+diagnostics card and share the result. It includes Android release/API level, exact app components,
+grant/connection state, and whether the old bridge is also installed, but no messages, contacts,
+notification text, or other apps' enabled-service names. Real Samsung/One UI builds must still be
+validated on hardware; the project does not claim Android 17 / One UI 9 device verification.
 
 ### Watch setup
 
@@ -345,7 +367,7 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.3.0 and watch app 1.3.0, using protocol version 3. Update
+The current release is phone bridge 1.3.1 and watch app 1.3.1, using protocol version 3. Update
 both APKs together for request deduplication and the latest features. A 1.2.0 watch paired with a 1.1.0
 phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
 cannot use the newer actions.

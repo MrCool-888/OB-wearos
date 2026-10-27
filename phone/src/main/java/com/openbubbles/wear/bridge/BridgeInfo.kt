@@ -6,10 +6,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.3.0"
+    const val BRIDGE_VERSION = "1.3.1"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",
@@ -31,14 +32,25 @@ object BridgeInfo {
      * replies still use OpenBubbles' notification actions.
      */
     fun hasAutomationAccess(context: Context): Boolean {
+        // A connected instance is direct evidence, even while OEM settings APIs
+        // are still propagating their enabled-services list.
+        if (OpenBubblesAutomation.isReady()) return true
         val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
-            as? AccessibilityManager ?: return false
+            as? AccessibilityManager
         val component = ComponentName(context, OpenBubblesAutomationService::class.java)
-        return runCatching {
-            manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-                .any { it.id == component.flattenToString() }
+        val listed = runCatching {
+            manager?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                ?.any { PermissionComponents.matches(it.id, component) } == true
         }.getOrDefault(false)
+        return listed || PermissionComponents.contains(enabledAccessibilityServices(context), component)
     }
+
+    fun isAutomationReady(context: Context): Boolean =
+        hasAutomationAccess(context) && OpenBubblesAutomation.isReady()
+
+    internal fun enabledAccessibilityServices(context: Context): String? = runCatching {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+    }.getOrNull()
 
     @Suppress("DEPRECATION")
     fun isOpenBubblesInstalled(context: Context): Boolean =

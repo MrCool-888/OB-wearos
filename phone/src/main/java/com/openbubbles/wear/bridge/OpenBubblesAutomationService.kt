@@ -1,6 +1,7 @@
 package com.openbubbles.wear.bridge
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 
 /**
@@ -12,6 +13,7 @@ class OpenBubblesAutomationService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         OpenBubblesAutomation.attach(this)
+        NotificationCenter.onAutomationConnectionChanged(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -25,6 +27,13 @@ class OpenBubblesAutomationService : AccessibilityService() {
 
     override fun onDestroy() {
         OpenBubblesAutomation.detach(this)
+        NotificationCenter.onAutomationConnectionChanged(this)
         super.onDestroy()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        OpenBubblesAutomation.detach(this)
+        NotificationCenter.onAutomationConnectionChanged(this)
+        return super.onUnbind(intent)
     }
 }

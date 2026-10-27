@@ -5,6 +5,7 @@
         <package android:name="com.openbubbles.messaging" />
         <package android:name="com.bluebubbles.messaging" />
         <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="com.openbubbles.wear.bridge" />
     </queries>
 
     <application

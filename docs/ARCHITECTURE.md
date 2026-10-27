@@ -303,6 +303,19 @@ The phone UI reports the actual notification-listener connected callback separat
 creation, the last observed OpenBubbles notification, installed OpenBubbles version, battery
 optimization, and Shizuku availability/permission. A reconnect control requests a listener rebind.
 
+Accessibility identities are compared as parsed `ComponentName`s, not raw strings: Android can
+report `com.openbubbles.wear/.bridge.OpenBubblesAutomationService` while our code constructs the
+equivalent fully qualified spelling. Enabled status combines the manager's list, secure-settings
+selection, and a connected instance. Readiness additionally requires the actual service instance.
+Connection/unbind callbacks trigger a metadata refresh so the watch is not told automation is
+ready just because its Settings switch is on. The phone UI distinguishes enabled from connected.
+
+The phone bridge does not request `POST_NOTIFICATIONS` or post its own phone alerts. Samsung's
+greyed-out App info → Notifications switch is therefore not a listener-permission failure; the
+setup UI explains that special Notification access is separate. A user-requested diagnostics copy
+contains only device/app versions and scoped permission/connection flags, never message content,
+contacts, notification text, or other apps' enabled-service entries.
+
 `ActionDedupe` atomically claims request IDs and commits a journal entry before calling OpenBubbles.
 Completed results are persisted and replayed instead of repeating a send. A crash between the side
 effect and saving its result leaves an uncertain failure marker: a replay must not blindly send it

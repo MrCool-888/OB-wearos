@@ -445,6 +445,37 @@ Release action tests for reply and mark-read need the debug receiver, so those a
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
 
+## 1.3.1 Samsung permission-status regression checks
+
+This update addresses a Galaxy S25 / Galaxy Watch6 Classic report: App info → Notifications said
+Blocked with a grey switch, and accessibility was On in Samsung Settings but reported Off by the
+bridge. The user reported Android 17 / One UI 9; no such device is connected to the build machine.
+Robolectric tests do not constitute testing of that OS/OEM build.
+
+Local validation: **52 tests passed** (17 protocol, 12 watch, 23 phone). Phone/watch debug and
+minified release builds succeeded; lint completed with warnings and no errors. Both release APKs
+passed signature verification, use the same certificate/application ID, report version `1.3.1`
+with versionCode `5`, and exclude debug receivers.
+
+New regression checks cover shortened/full component equivalence, rejection of the old bridge
+and other services, malformed values, secure-settings fallbacks, enabled-but-not-connected state,
+actual service attachment/detachment, and diagnostics that exclude other apps' component names.
+
+On the actual Samsung phone:
+
+1. Ignore the phone bridge's App info → Notifications switch: the bridge posts no phone alerts.
+   Use the bridge's **Notification access** button and check the actual listener switch there.
+   Only follow restricted-settings recovery if that special-access switch is blocked.
+2. Turn on Accessibility → Installed apps → OpenBubbles Wear automation. Reopen the bridge. It
+   should say On and distinguish whether the service has connected; it must not say Off just
+   because Android shortened the component name.
+3. Toggle accessibility off/on and check readiness updates on the phone and watch. An enabled,
+   disconnected service should not be advertised as usable automation.
+4. Check for a second, pre-1.3 bridge installation. Only the `com.openbubbles.wear` package serves
+   the current watch; removing an old bridge must not remove OpenBubbles itself.
+5. If any status still disagrees, use **Copy permission diagnostics** and share the output plus
+   the exact blocked screen. No message text or contact information is included.
+
 ## 1.3.0 pre-device validation and checklist
 
 Final local validation on 2026-10-27: **43 tests passed** (17 protocol, 12 watch, 14 phone);
