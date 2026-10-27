@@ -10,6 +10,8 @@ import com.openbubbles.wear.protocol.BridgeError
 import com.openbubbles.wear.protocol.HistoryPayload
 import com.openbubbles.wear.protocol.HistoryRequest
 import com.openbubbles.wear.protocol.MarkReadRequest
+import com.openbubbles.wear.protocol.MediaPayload
+import com.openbubbles.wear.protocol.MediaRequest
 import com.openbubbles.wear.protocol.OpenPhoneRequest
 import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.Protocol
@@ -54,6 +56,7 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_OPEN_PHONE -> handleOpenPhone(nodeId, data)
                 Protocol.PATH_SEND -> handleSend(nodeId, data)
                 Protocol.PATH_HISTORY -> handleHistory(nodeId, data)
+                Protocol.PATH_MEDIA_REQUEST -> handleMediaRequest(nodeId, data)
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to handle $path", t)
@@ -61,6 +64,7 @@ class WearBridgeService : WearableListenerService() {
             val requestId = runCatching { Wire.decode<ReplyRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<SendRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<HistoryRequest>(json)?.requestId }.getOrNull()
+                ?: runCatching { Wire.decode<MediaRequest>(json)?.requestId }.getOrNull()
             WatchLink.sendToNode(
                 applicationContext,
                 nodeId,
@@ -187,6 +191,29 @@ class WearBridgeService : WearableListenerService() {
                         messages = result.messages,
                         hasMore = result.hasMore,
                         error = result.error
+                    )
+                )
+            )
+        }
+    }
+
+    private fun handleMediaRequest(nodeId: String, data: ByteArray) {
+        val request = Wire.decodeBytes<MediaRequest>(data) ?: return
+        NotificationCenter.media(request.mediaId) { info, error ->
+            WatchLink.sendToNode(
+                applicationContext,
+                nodeId,
+                Protocol.PATH_MEDIA_RESULT,
+                Wire.encodeBytes(
+                    MediaPayload(
+                        requestId = request.requestId,
+                        mediaId = request.mediaId,
+                        ok = info != null && error == null,
+                        mimeType = info?.mimeType,
+                        width = info?.width ?: 0,
+                        height = info?.height ?: 0,
+                        size = info?.size ?: 0L,
+                        error = error
                     )
                 )
             )

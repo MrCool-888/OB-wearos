@@ -1,6 +1,7 @@
 package com.openbubbles.wear.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,17 +33,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.AppScaffold
+import coil.compose.AsyncImage
+import com.openbubbles.wear.WatchMedia
 import com.openbubbles.wear.WatchRepository
 import com.openbubbles.wear.WatchState
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
+import java.io.File
 
 @Composable
 fun ChatScreen(
@@ -52,6 +58,7 @@ fun ChatScreen(
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
     onLoadOlder: () -> Unit,
+    onOpenMedia: (String) -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val thread = state.threads[threadId]
@@ -190,7 +197,11 @@ fun ChatScreen(
                     ) { message ->
                         MessageBubble(
                             message = message,
-                            showSender = isGroup && !message.fromMe
+                            media = message.mediaId?.let { state.media[it] },
+                            requestingMedia = message.mediaId != null &&
+                                message.mediaId in state.requestingMedia,
+                            showSender = isGroup && !message.fromMe,
+                            onOpenMedia = onOpenMedia
                         )
                     }
                 }
@@ -280,7 +291,10 @@ private fun ChatStatus(
 @Composable
 private fun MessageBubble(
     message: WireMessage,
-    showSender: Boolean
+    media: WatchMedia?,
+    requestingMedia: Boolean,
+    showSender: Boolean,
+    onOpenMedia: (String) -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
     val fromMe = message.fromMe
@@ -315,16 +329,27 @@ private fun MessageBubble(
                     color = scheme.primary
                 )
             }
-            Text(
-                text = message.displayText,
-                style = MaterialTheme.typography.bodySmall,
-                color = content
-            )
-            if (message.attachment && message.text.isNotBlank()) {
+            if (message.attachment) {
+                AttachmentBubble(
+                    message = message,
+                    media = media,
+                    requesting = requestingMedia,
+                    content = content,
+                    onOpenMedia = onOpenMedia
+                )
+                if (message.text.isNotBlank()) Spacer(Modifier.height(4.dp))
+            }
+            if (message.text.isNotBlank()) {
                 Text(
-                    text = "Photo attached",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = content.copy(alpha = 0.75f)
+                    text = message.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = content
+                )
+            } else if (!message.attachment) {
+                Text(
+                    text = message.displayText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = content
                 )
             }
             Row(
@@ -353,6 +378,92 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentBubble(
+    message: WireMessage,
+    media: WatchMedia?,
+    requesting: Boolean,
+    content: Color,
+    onOpenMedia: (String) -> Unit
+) {
+    val mediaId = message.mediaId
+    val isGif = media?.isGif == true || message.mediaMime == "image/gif"
+    val thumbnailShape = RoundedCornerShape(10.dp)
+    when {
+        media != null && mediaId != null -> {
+            AsyncImage(
+                model = File(media.path),
+                contentDescription = if (isGif) "Animated GIF" else "Photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(112.dp)
+                    .clip(thumbnailShape)
+                    .clickable { onOpenMedia(mediaId) }
+            )
+            Text(
+                text = if (isGif) "Tap to play GIF" else "Tap to view photo",
+                style = MaterialTheme.typography.labelSmall,
+                color = content.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        mediaId != null && requesting -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(88.dp)
+                    .clip(thumbnailShape)
+                    .background(content.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isGif) "Loading GIF…" else "Loading photo…",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = content.copy(alpha = 0.8f),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        mediaId != null -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(88.dp)
+                    .clip(thumbnailShape)
+                    .background(content.copy(alpha = 0.12f))
+                    .clickable { WatchRepository.requestMedia(mediaId) },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = if (isGif) "Load GIF" else "Load photo",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = content
+                    )
+                    Text(
+                        text = "From your phone",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+
+        else -> {
+            Text(
+                text = message.displayText,
+                style = MaterialTheme.typography.bodySmall,
+                color = content
+            )
         }
     }
 }

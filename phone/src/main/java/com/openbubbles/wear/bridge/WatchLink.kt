@@ -3,6 +3,7 @@ package com.openbubbles.wear.bridge
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
@@ -91,6 +92,81 @@ object WatchLink {
         pruneThreads(context, threads.map { it.id }.toSet())
     }
 
+    /**
+     * Publishes one attachment as a Data Layer asset. A changing publication
+     * timestamp forces a change event even when the same photo was requested
+     * more than once.
+     */
+    fun publishMedia(context: Context, info: MediaInfo, onResult: (String?) -> Unit) {
+        val bytes = runCatching { info.file.readBytes() }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) {
+            onResult("The cached photo could not be read.")
+            return
+        }
+        if (bytes.size > MAX_MEDIA_ASSET_BYTES) {
+            onResult("This attachment is too large to send to the watch.")
+            return
+        }
+        val path = Protocol.mediaDataPath(info.id)
+        val request = PutDataMapRequest.create(path)
+        request.dataMap.putString(Protocol.DATA_KEY_MIME, info.mimeType)
+        request.dataMap.putInt(Protocol.DATA_KEY_WIDTH, info.width)
+        request.dataMap.putInt(Protocol.DATA_KEY_HEIGHT, info.height)
+        request.dataMap.putLong(Protocol.DATA_KEY_SIZE, info.size)
+        request.dataMap.putLong(
+            Protocol.DATA_KEY_MEDIA_PUBLISHED_AT,
+            System.currentTimeMillis()
+        )
+        request.dataMap.putAsset(Protocol.DATA_KEY_ASSET, Asset.createFromBytes(bytes))
+        request.setUrgent()
+        Wearable.getDataClient(context).putDataItem(request.asPutDataRequest())
+            .addOnSuccessListener { item ->
+                recordUri(context, path, item.uri.toString())
+                onResult(null)
+            }
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Media data item $path failed", error)
+                onResult("The photo could not be sent to the watch.")
+            }
+    }
+
+    /** Deletes media data items that are no longer referenced by a cached thread. */
+    fun pruneMedia(context: Context, keepMediaIds: Set<String>) {
+        val keepPaths = keepMediaIds.map { Protocol.mediaDataPath(it) }.toSet()
+        val uris = readUris(context)
+        val stale = uris.keys.filter { path ->
+            path.startsWith(Protocol.DATA_MEDIA_PREFIX) && path !in keepPaths
+        }
+        if (stale.isEmpty()) return
+        stale.forEach { path ->
+            val uri = uris.remove(path)
+            if (uri != null) {
+                Wearable.getDataClient(context)
+                    .deleteDataItems(Uri.parse(uri))
+                    .addOnFailureListener { error ->
+                        Log.w(TAG, "Unable to delete stale media item $path", error)
+                    }
+            }
+        }
+        writeUris(context, uris)
+    }
+
+    fun clearMedia(context: Context) {
+        val uris = readUris(context)
+        val mediaPaths = uris.keys.filter { it.startsWith(Protocol.DATA_MEDIA_PREFIX) }
+        mediaPaths.forEach { path ->
+            val uri = uris.remove(path)
+            if (uri != null) {
+                Wearable.getDataClient(context)
+                    .deleteDataItems(Uri.parse(uri))
+                    .addOnFailureListener { error ->
+                        Log.w(TAG, "Unable to delete media item $path", error)
+                    }
+            }
+        }
+        writeUris(context, uris)
+    }
+
     /** Deletes leftovers for conversations that have fallen out of the local cache. */
     fun pruneThreads(context: Context, keepThreadIds: Set<String>) {
         val keepPaths = keepThreadIds.map { Protocol.threadDataPath(it) }.toSet()
@@ -133,4 +209,6 @@ object WatchLink {
             .putString(KEY_URIS, Wire.encode(uris))
             .apply()
     }
+
+    private const val MAX_MEDIA_ASSET_BYTES = 8 * 1024 * 1024
 }

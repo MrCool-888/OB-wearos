@@ -2,7 +2,10 @@ package com.openbubbles.wear
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.Asset
+import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 import com.openbubbles.wear.protocol.ActionResult
@@ -10,6 +13,8 @@ import com.openbubbles.wear.protocol.BridgeError
 import com.openbubbles.wear.protocol.HistoryPayload
 import com.openbubbles.wear.protocol.HistoryRequest
 import com.openbubbles.wear.protocol.MarkReadRequest
+import com.openbubbles.wear.protocol.MediaPayload
+import com.openbubbles.wear.protocol.MediaRequest
 import com.openbubbles.wear.protocol.OpenPhoneRequest
 import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.PongPayload
@@ -25,6 +30,7 @@ import com.openbubbles.wear.protocol.UpdatePayload
 import com.openbubbles.wear.protocol.Wire
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -38,12 +44,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+data class WatchMedia(
+    val id: String,
+    val path: String,
+    val mimeType: String,
+    val width: Int,
+    val height: Int,
+    val size: Long,
+    val createdAt: Long = 0L
+) {
+    val isGif: Boolean get() = mimeType == "image/gif"
+}
+
 data class WatchState(
     val loading: Boolean = true,
     val conversations: List<ThreadSummary> = emptyList(),
     val threads: Map<String, WireThread> = emptyMap(),
+    val media: Map<String, WatchMedia> = emptyMap(),
     val phoneName: String = "",
     val bridgeVersion: String = "",
+    val protocolVersion: Int = 0,
     val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
     val automationAvailable: Boolean = false,
@@ -57,6 +77,7 @@ data class WatchState(
     val sendingThreads: Set<String> = emptySet(),
     val loadingHistory: Set<String> = emptySet(),
     val historyExhausted: Set<String> = emptySet(),
+    val requestingMedia: Set<String> = emptySet(),
     val error: String? = null,
     val info: String? = null
 ) {
@@ -64,23 +85,30 @@ data class WatchState(
 }
 
 object WatchRepository {
+    private const val TAG = "OBWearRepo"
     private const val PREFS_NAME = "openbubbles_wear"
     private const val KEY_THREADS = "threads"
     private const val KEY_CONVERSATIONS = "conversations"
     private const val KEY_QUICK_REPLIES = "quick_replies"
     private const val KEY_PHONE_NAME = "phone_name"
     private const val KEY_BRIDGE_VERSION = "bridge_version"
+    private const val KEY_PROTOCOL_VERSION = "protocol_version"
     private const val KEY_NOTIFICATION_ACCESS = "notification_access"
     private const val KEY_RELAY_ENABLED = "relay_enabled"
     private const val KEY_AUTOMATION_AVAILABLE = "automation_available"
     private const val KEY_LAST_SYNC = "last_sync"
     private const val KEY_PHONE_GENERATED = "phone_generated"
     private const val KEY_READ_AT = "read_at:"
+    private const val KEY_MEDIA_PREFIX = "media:"
     private const val LOCAL_PREFIX = "local-"
     private const val AUTO_PREFIX = "auto-"
     private const val NEW_THREAD_PREFIX = "new:"
+    private const val MEDIA_DIR = "watch_media"
     private const val MAX_MESSAGES = 220
     private const val MAX_THREADS = 40
+    private const val MAX_MEDIA_FILES = 60
+    private const val MAX_MEDIA_BYTES = 40L * 1024 * 1024
+    private const val MEDIA_TIMEOUT_MS = 45_000L
     private const val LOCAL_MATCH_WINDOW_MS = 5 * 60_000L
     private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
     private const val MAX_REPLY_LENGTH = 800
@@ -113,12 +141,15 @@ object WatchRepository {
         val quickReplies = prefs.getString(KEY_QUICK_REPLIES, null)
             ?.let { Wire.decode<List<String>>(it) }
             ?: Protocol.DEFAULT_QUICK_REPLIES
+        val media = loadMedia(prefs, app)
         _state.value = WatchState(
             loading = false,
             conversations = conversations,
             threads = threads,
+            media = media,
             phoneName = prefs.getString(KEY_PHONE_NAME, "").orEmpty(),
             bridgeVersion = prefs.getString(KEY_BRIDGE_VERSION, "").orEmpty(),
+            protocolVersion = prefs.getInt(KEY_PROTOCOL_VERSION, 0),
             notificationAccess = prefs.getBoolean(KEY_NOTIFICATION_ACCESS, false),
             relayEnabled = prefs.getBoolean(KEY_RELAY_ENABLED, true),
             automationAvailable = prefs.getBoolean(KEY_AUTOMATION_AVAILABLE, false),
@@ -127,6 +158,13 @@ object WatchRepository {
             quickReplies = quickReplies
         )
         initialized = true
+        scope.launch {
+            val trimmed = trimMedia(app, _state.value.media)
+            if (trimmed.size != _state.value.media.size) {
+                persistMedia(app, trimmed)
+                _state.update { it.copy(media = trimmed) }
+            }
+        }
         if (threads.isEmpty() || conversations.isEmpty()) {
             restoreFromDataLayer(app, prefs)
         }
@@ -193,6 +231,7 @@ object WatchRepository {
                 threads = existingThreads,
                 phoneName = payload.phoneName,
                 bridgeVersion = payload.bridgeVersion,
+                protocolVersion = payload.version,
                 notificationAccess = payload.notificationAccess,
                 relayEnabled = payload.relayEnabled,
                 automationAvailable = payload.automationAvailable,
@@ -239,9 +278,12 @@ object WatchRepository {
             null
         }
         val adopted = if (alias != null) {
-            val combined = (alias.messages + thread.messages)
-                .associateBy { it.id }
-                .values
+            val combinedById = LinkedHashMap<String, WireMessage>()
+            (alias.messages + thread.messages).forEach { message ->
+                val previous = combinedById[message.id]
+                combinedById[message.id] = previous?.let(message::mergeMediaFrom) ?: message
+            }
+            val combined = combinedById.values
                 .sortedBy { it.timestamp }
                 .takeLast(MAX_MESSAGES)
             thread.copy(
@@ -730,9 +772,12 @@ object WatchRepository {
             }
             return
         }
-        val mergedMessages = (current.messages + payload.messages)
-            .associateBy { it.id }
-            .values
+        val mergedById = LinkedHashMap<String, WireMessage>()
+        (current.messages + payload.messages).forEach { message ->
+            val previous = mergedById[message.id]
+            mergedById[message.id] = previous?.let(message::mergeMediaFrom) ?: message
+        }
+        val mergedMessages = mergedById.values
             .sortedBy { it.timestamp }
             .takeLast(MAX_MESSAGES)
         val updated = current.copy(
@@ -750,6 +795,192 @@ object WatchRepository {
         }
         persist()
     }
+
+    /**
+     * Asks the phone to republish one cached attachment over the Data Layer.
+     * The actual bytes arrive as a data-item asset; the message reply only
+     * carries success or a user-facing error.
+     */
+    fun requestMedia(mediaId: String) {
+        if (!initialized) return
+        val state = _state.value
+        if (state.media.containsKey(mediaId)) return
+        if (mediaId in state.requestingMedia) return
+        if (!state.relayEnabled) {
+            _state.update { it.copy(error = "Relay is paused on the phone.") }
+            return
+        }
+        if (state.protocolVersion in 1 until Protocol.VERSION) {
+            _state.update {
+                it.copy(
+                    error = "Update the phone bridge to 1.2.0 or newer to view photos."
+                )
+            }
+            return
+        }
+        val context = appContext ?: return
+        _state.update {
+            it.copy(requestingMedia = it.requestingMedia + mediaId, error = null)
+        }
+        PhoneLink.send(
+            context,
+            Protocol.PATH_MEDIA_REQUEST,
+            Wire.encodeBytes(
+                MediaRequest(
+                    requestId = UUID.randomUUID().toString(),
+                    mediaId = mediaId
+                )
+            )
+        ) { sent ->
+            if (!sent) {
+                _state.update {
+                    it.copy(
+                        requestingMedia = it.requestingMedia - mediaId,
+                        connected = false,
+                        reachable = false,
+                        error = "Phone isn't reachable. This photo isn't cached on the watch yet."
+                    )
+                }
+            }
+        }
+        scope.launch {
+            delay(MEDIA_TIMEOUT_MS)
+            if (mediaId in _state.value.requestingMedia && _state.value.media[mediaId] == null) {
+                _state.update {
+                    it.copy(
+                        requestingMedia = it.requestingMedia - mediaId,
+                        error = "The photo took too long to arrive from the phone."
+                    )
+                }
+            }
+        }
+    }
+
+    fun onMediaResult(payload: MediaPayload) {
+        if (!initialized) return
+        if (payload.ok) {
+            // Keep the loading state until the asset arrives through the Data
+            // Layer. The request timeout covers a missing data item.
+            return
+        }
+        _state.update {
+            it.copy(
+                requestingMedia = it.requestingMedia - payload.mediaId,
+                error = payload.error ?: "The photo could not be loaded from the phone."
+            )
+        }
+    }
+
+    /**
+     * Reads one media asset off the Data Layer. Called on a listener callback,
+     * so the blocking file descriptor read happens on the repository's IO
+     * dispatcher rather than the main thread.
+     */
+    fun onMediaDataItem(context: Context, mediaId: String, dataMap: DataMap) {
+        if (!initialized) return
+        val asset = dataMap.getAsset(Protocol.DATA_KEY_ASSET) ?: return
+        val mimeType = Protocol.normalizeMimeType(dataMap.getString(Protocol.DATA_KEY_MIME))
+            ?: "image/webp"
+        val width = dataMap.getInt(Protocol.DATA_KEY_WIDTH)
+        val height = dataMap.getInt(Protocol.DATA_KEY_HEIGHT)
+        val declaredSize = dataMap.getLong(Protocol.DATA_KEY_SIZE)
+        scope.launch {
+            val file = writeMediaAsset(context, mediaId, asset)
+            if (file == null) {
+                _state.update {
+                    it.copy(
+                        requestingMedia = it.requestingMedia - mediaId,
+                        error = "The photo could not be saved on the watch."
+                    )
+                }
+                return@launch
+            }
+            val media = WatchMedia(
+                id = mediaId,
+                path = file.absolutePath,
+                mimeType = mimeType,
+                width = width,
+                height = height,
+                size = if (declaredSize > 0L) declaredSize else file.length(),
+                createdAt = System.currentTimeMillis()
+            )
+            val mediaMap = trimMedia(context, _state.value.media + (mediaId to media))
+            persistMedia(context, mediaMap)
+            _state.update {
+                it.copy(
+                    media = mediaMap,
+                    requestingMedia = it.requestingMedia - mediaId,
+                    error = null
+                )
+            }
+        }
+    }
+
+    /**
+     * Debug-only helper used by the watch seed receiver: registers a file that
+     * was already written by the caller. Never used by the production flow.
+     */
+    fun importLocalMedia(
+        id: String,
+        mimeType: String,
+        width: Int,
+        height: Int,
+        bytes: ByteArray
+    ): WatchMedia? {
+        if (!initialized) return null
+        val context = appContext ?: return null
+        val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
+        val file = File(directory, id)
+        val written = runCatching { file.writeBytes(bytes) }.isSuccess
+        if (!written) return null
+        val media = WatchMedia(
+            id = id,
+            path = file.absolutePath,
+            mimeType = mimeType,
+            width = width,
+            height = height,
+            size = bytes.size.toLong(),
+            createdAt = System.currentTimeMillis()
+        )
+        val mediaMap = trimMedia(context, _state.value.media + (id to media))
+        persistMedia(context, mediaMap)
+        _state.update {
+            it.copy(
+                media = mediaMap,
+                requestingMedia = it.requestingMedia - id
+            )
+        }
+        return media
+    }
+
+    private fun writeMediaAsset(context: Context, mediaId: String, asset: Asset): File? =
+        runCatching {
+            val response = Tasks.await(
+                Wearable.getDataClient(context).getFdForAsset(asset),
+                25,
+                TimeUnit.SECONDS
+            )
+            val input = response.inputStream
+                ?: throw IllegalStateException("No asset stream")
+            input.use { stream ->
+                val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
+                val target = File(directory, mediaId)
+                val temp = File(directory, "$mediaId.tmp")
+                temp.outputStream().use { output -> stream.copyTo(output) }
+                if (temp.length() <= 0L) {
+                    temp.delete()
+                    throw IllegalStateException("Empty asset")
+                }
+                if (target.exists()) target.delete()
+                if (!temp.renameTo(target)) {
+                    temp.copyTo(target, overwrite = true)
+                    temp.delete()
+                }
+                target
+            }
+        }.onFailure {
+            Log.w(TAG, "Unable to import media $mediaId", it)
+        }.getOrNull()
 
     fun markRead(threadId: String) {
         if (!initialized) return
@@ -845,11 +1076,7 @@ object WatchRepository {
                 if (optimistic != null) remote.remove(optimistic.id)
             }
             val previous = remote[message.id]
-            remote[message.id] = if (previous?.attachment == true && !message.attachment) {
-                message.copy(attachment = true)
-            } else {
-                message
-            }
+            remote[message.id] = previous?.let(message::mergeMediaFrom) ?: message
         }
         val mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
 
@@ -894,6 +1121,100 @@ object WatchRepository {
         prefs.edit().putLong(KEY_READ_AT + threadId, timestamp).apply()
     }
 
+    private fun loadMedia(
+        prefs: android.content.SharedPreferences,
+        context: Context
+    ): Map<String, WatchMedia> {
+        val directory = File(context.filesDir, MEDIA_DIR)
+        if (!directory.isDirectory) return emptyMap()
+        val loaded = mutableMapOf<String, WatchMedia>()
+        prefs.all.forEach { (key, value) ->
+            if (!key.startsWith(KEY_MEDIA_PREFIX) || value !is String) return@forEach
+            val id = key.removePrefix(KEY_MEDIA_PREFIX)
+            val media = decodeMediaRecord(directory, id, value) ?: return@forEach
+            loaded[id] = media
+        }
+        val staleKeys = prefs.all.keys.filter { key ->
+            key.startsWith(KEY_MEDIA_PREFIX) &&
+                key.removePrefix(KEY_MEDIA_PREFIX) !in loaded
+        }
+        if (staleKeys.isNotEmpty()) {
+            val editor = prefs.edit()
+            staleKeys.forEach(editor::remove)
+            editor.apply()
+        }
+        return loaded
+    }
+
+    private fun trimMedia(
+        context: Context,
+        media: Map<String, WatchMedia>
+    ): Map<String, WatchMedia> {
+        val ordered = media.values.sortedByDescending { it.createdAt }
+        val kept = LinkedHashMap<String, WatchMedia>()
+        var total = 0L
+        for (item in ordered) {
+            val file = File(item.path)
+            if (!file.isFile || file.length() <= 0L) continue
+            if (kept.size >= MAX_MEDIA_FILES) break
+            if (kept.isNotEmpty() && total + file.length() > MAX_MEDIA_BYTES) break
+            kept[item.id] = item
+            total += file.length()
+        }
+        val keptFiles = kept.values.map { File(it.path).name }.toSet()
+        File(context.filesDir, MEDIA_DIR)
+            .listFiles()
+            ?.filter { it.isFile && !it.name.endsWith(".tmp") && it.name !in keptFiles }
+            ?.forEach { it.delete() }
+        return kept
+    }
+
+    private fun persistMedia(context: Context, media: Map<String, WatchMedia>) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        prefs.all.keys
+            .filter { it.startsWith(KEY_MEDIA_PREFIX) }
+            .forEach(editor::remove)
+        media.values.forEach { item ->
+            editor.putString(KEY_MEDIA_PREFIX + item.id, encodeMediaRecord(item))
+        }
+        editor.apply()
+    }
+
+    private fun encodeMediaRecord(media: WatchMedia): String = listOf(
+        media.mimeType,
+        media.width.toString(),
+        media.height.toString(),
+        media.size.toString(),
+        media.createdAt.toString(),
+        File(media.path).name
+    ).joinToString("\t")
+
+    private fun decodeMediaRecord(
+        directory: File,
+        id: String,
+        raw: String
+    ): WatchMedia? {
+        val parts = raw.split('\t')
+        if (parts.size != 6) return null
+        return runCatching {
+            val file = File(directory, parts[5])
+            if (!file.isFile || file.length() <= 0L) {
+                null
+            } else {
+                WatchMedia(
+                    id = id,
+                    path = file.absolutePath,
+                    mimeType = parts[0],
+                    width = parts[1].toInt(),
+                    height = parts[2].toInt(),
+                    size = parts[3].toLong(),
+                    createdAt = parts[4].toLong()
+                )
+            }
+        }.getOrNull()
+    }
+
     private fun persist() {
         val context = appContext ?: return
         val state = _state.value
@@ -904,6 +1225,7 @@ object WatchRepository {
             .putString(KEY_QUICK_REPLIES, Wire.encode(state.quickReplies))
             .putString(KEY_PHONE_NAME, state.phoneName)
             .putString(KEY_BRIDGE_VERSION, state.bridgeVersion)
+            .putInt(KEY_PROTOCOL_VERSION, state.protocolVersion)
             .putBoolean(KEY_NOTIFICATION_ACCESS, state.notificationAccess)
             .putBoolean(KEY_RELAY_ENABLED, state.relayEnabled)
             .putBoolean(KEY_AUTOMATION_AVAILABLE, state.automationAvailable)

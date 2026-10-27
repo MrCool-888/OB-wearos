@@ -38,6 +38,103 @@ class ProtocolTest {
     }
 
     @Test
+    fun mediaDataPathRoundTripsAndRejectsOtherPaths() {
+        val mediaId = Protocol.mediaId("m-1", "image/gif")
+        val path = Protocol.mediaDataPath(mediaId)
+        assertTrue(path.startsWith(Protocol.DATA_MEDIA_PREFIX))
+        assertEquals(mediaId, Protocol.mediaIdFromDataPath(path))
+        assertNull(Protocol.mediaIdFromDataPath("/something/else"))
+        assertNull(Protocol.mediaIdFromDataPath(Protocol.DATA_MEDIA_PREFIX))
+        assertNull(Protocol.mediaIdFromDataPath(Protocol.DATA_MEDIA_PREFIX + "a/b"))
+    }
+
+    @Test
+    fun mediaIdsAreStableAndNormalizeCommonMimeAliases() {
+        val a = Protocol.mediaId("m-1", "image/jpeg")
+        val b = Protocol.mediaId("m-1", "image/jpg")
+        val c = Protocol.mediaId("m-1", "image/gif")
+        val d = Protocol.mediaId("m-2", "image/jpeg")
+        assertEquals(a, b)
+        assertTrue(a != c)
+        assertTrue(a != d)
+        assertEquals("image/jpeg", Protocol.normalizeMimeType(" IMAGE/JPG; charset=binary "))
+        assertTrue(Protocol.isImageMimeType("image/webp"))
+        assertTrue(!Protocol.isImageMimeType("video/mp4"))
+    }
+
+    @Test
+    fun mediaPayloadsRoundTrip() {
+        val request = MediaRequest(requestId = "r1", mediaId = "media-abc", sentAt = 7L)
+        assertEquals(request, Wire.decode<MediaRequest>(Wire.encode(request)))
+
+        val payload = MediaPayload(
+            requestId = "r1",
+            mediaId = "media-abc",
+            ok = true,
+            mimeType = "image/gif",
+            width = 320,
+            height = 240,
+            size = 12_345L
+        )
+        assertEquals(payload, Wire.decode<MediaPayload>(Wire.encode(payload)))
+    }
+
+    @Test
+    fun mediaFieldsSurviveWireRoundTripAndPreview() {
+        val message = WireMessage(
+            id = "m1",
+            threadId = "t",
+            text = "",
+            timestamp = 1L,
+            attachment = true,
+            mediaId = "media-abc",
+            mediaMime = "image/gif",
+            mediaWidth = 320,
+            mediaHeight = 200,
+            mediaSize = 2_000L
+        )
+        assertEquals(message, Wire.decode<WireMessage>(Wire.encode(message)))
+        assertEquals("GIF", message.displayText)
+
+        val caption = message.copy(text = "Look at this", mediaMime = "image/jpeg")
+        assertEquals("Look at this", caption.displayText)
+    }
+
+    @Test
+    fun mergeMediaFromPreservesKnownAttachmentMetadata() {
+        val previous = WireMessage(
+            id = "m1",
+            threadId = "t",
+            text = "Look",
+            timestamp = 1L,
+            attachment = true,
+            mediaId = "media-abc",
+            mediaMime = "image/jpeg",
+            mediaWidth = 800,
+            mediaHeight = 600,
+            mediaSize = 50_000L
+        )
+        val refresh = WireMessage(
+            id = "m1",
+            threadId = "t",
+            text = "Look",
+            timestamp = 1L
+        )
+        val merged = refresh.mergeMediaFrom(previous)
+        assertTrue(merged.attachment)
+        assertEquals("media-abc", merged.mediaId)
+        assertEquals("image/jpeg", merged.mediaMime)
+        assertEquals(800, merged.mediaWidth)
+        assertEquals(600, merged.mediaHeight)
+        assertEquals(50_000L, merged.mediaSize)
+
+        val alreadyKnown = previous.mergeMediaFrom(
+            previous.copy(mediaId = null, attachment = false)
+        )
+        assertEquals(previous, alreadyKnown)
+    }
+
+    @Test
     fun syncPayloadRoundTrips() {
         val thread = WireThread(
             id = "thread-1",

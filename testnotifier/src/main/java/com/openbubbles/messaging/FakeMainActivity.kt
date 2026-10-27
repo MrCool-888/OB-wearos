@@ -20,6 +20,8 @@ class FakeMainActivity : Activity() {
                     adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
                       -a com.openbubbles.messaging.DEBUG_POST --es chat all
 
+                    Chats: maya, family, media (photo + animated GIF)
+
                     This app only exists for bridge testing.
                 """.trimIndent()
                 textSize = 18f

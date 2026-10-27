@@ -87,10 +87,12 @@ checks below.
 `testnotifier` publishes notifications that mirror the structure used by OpenBubbles:
 
 - `MessagingStyle` with a conversation history.
-- Dynamic shortcut IDs (`fake-maya`, `fake-family`).
+- Dynamic shortcut IDs (`fake-maya`, `fake-family`, `fake-media`).
 - Incoming and outgoing messages with sender people.
 - A group conversation with a title and multiple participants.
-- A photo-only entry plus a caption.
+- A media conversation with a static PNG photo and an animated GIF. Both are served through a
+  real `FileProvider` with the same authority OpenBubbles uses
+  (`com.openbubbles.messaging.fileprovider`), so notification URI-grant handling is exercised.
 - A mutable reply action with RemoteInput key `reply_text`.
 - A mark-read action.
 - Per-chat PendingIntent request codes to avoid collisions.
@@ -109,8 +111,8 @@ adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
   -a com.openbubbles.messaging.DEBUG_POST --es chat maya
 ```
 
-Valid values are `maya`, `family`, and `all`. Clear all fake notifications and reset the in-memory
-chat store:
+Valid values are `maya`, `family`, `media`, and `all`. Clear all fake notifications and reset the
+in-memory chat store:
 
 ```bash
 adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
@@ -248,6 +250,54 @@ OBWearDebug: history <thread-id> messages=40 hasMore=true: ok
 A second request should return only messages older than the new oldest cached message. The watch
 shows **No older messages** when `hasMore` is false.
 
+### Media
+
+Post the media conversation:
+
+```bash
+adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
+  -a com.openbubbles.messaging.DEBUG_POST --es chat media
+```
+
+The bridge should copy both attachments while the notification URI grant is active. Confirm the
+cache count and list media IDs:
+
+```bash
+adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op status
+adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op media
+```
+
+Expected phone logs:
+
+```text
+OBWearFake: Posted fake notification for fake-media with 5 messages
+OBWearDebug: thread fake-media cached=true messages=3 media=2 ...
+OBWearDebug: media ids=media-...,media-...
+```
+
+Publish one cached item to the watch (the debug command only exercises the Data Layer path; the
+watch must be running and reachable):
+
+```bash
+adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op media --es id <media-id>
+```
+
+Expected:
+
+```text
+OBWearDebug: media <media-id> image/png 480x320 18798B: ok
+```
+
+On the watch, open **Riley Park** and tap **Load photo**, then **Load GIF**. The static image and the
+animated GIF should appear as thumbnails; tapping a thumbnail opens the full-screen viewer. The GIF
+should animate in both places. Pinch should zoom and double-tap should reset.
+
+Media requests return an error if relay is paused, the phone is offline, or the cache was cleared.
+Run `--es op clear_cache`, then try an attachment already visible on the watch to confirm the error.
+
 ### Other operations
 
 ```bash
@@ -271,7 +321,7 @@ The default thread for reply, mark-read, and history is `fake-maya` if `--es thr
 ```bash
 adb logcat -c
 adb logcat -s OBWearDebug OBWearCenter OBWearParser OBWearActions \
-  OBWearAutomation OBWearIntents OBWearStore OBWearFake OBWearLink
+  OBWearAutomation OBWearIntents OBWearStore OBWearFake OBWearLink OBWearMedia
 ```
 
 ## Inspecting OpenBubbles' accessibility tree
@@ -307,16 +357,28 @@ adb -s <watch-serial> shell am broadcast -n com.openbubbles.wear/.DebugSeedRecei
   -a com.openbubbles.wear.DEBUG_SEED --es mode demo
 
 adb -s <watch-serial> shell am broadcast -n com.openbubbles.wear/.DebugSeedReceiver \
+  -a com.openbubbles.wear.DEBUG_SEED --es mode media
+
+adb -s <watch-serial> shell am broadcast -n com.openbubbles.wear/.DebugSeedReceiver \
   -a com.openbubbles.wear.DEBUG_SEED --es mode clear
 ```
 
 Demo mode is useful for checking:
 
 - Conversation list, unread indicators, and the **New message** action.
-- Chat bubbles, group sender labels, photo placeholder, and timestamps.
+- Chat bubbles, group sender labels, and timestamps.
 - Composer and quick replies.
 - Settings, cache counts, automation state, and the About limitations.
 - Scrolling and swipe-to-dismiss navigation.
+
+Media mode writes a generated 320x200 PNG and a small animated GIF into the watch app's private
+media cache, then seeds a **Riley Park** thread. It exercises thumbnails, the full-screen viewer,
+GIF animation, pinch zoom, and double-tap reset without a phone or Data Layer. Candidate checks:
+
+- Both attachments render as thumbnails, not **Load photo** cards.
+- The GIF animates in the bubble and full-screen viewer.
+- Swipe-to-dismiss and the close button return to the chat.
+- The Settings cache count and media-trim logic still behave after restarting the app.
 
 The demo receiver is debug-only and is not present in release APKs. Seeded threads do not provide a
 real notification, so live reply and automation actions are still rejected unless the phone reports
@@ -337,10 +399,13 @@ sequence:
 4. Open a quiet chat and tap **Load older messages** twice. Confirm older bubbles prepend, the list
    stays scrolled near the newest message, and the second request either returns older messages or
    shows **No older messages**.
-5. Check group chats, emails, international numbers, reaction-heavy threads, photo bubbles, and
-   very long messages.
-6. Rotate/flip the phone or change display size and re-check the Send-button and composer detection.
-7. Revoke accessibility and confirm the app degrades to notification-only replies with a clear
+5. Check group chats, emails, international numbers, reaction-heavy threads, photo bubbles,
+   animated GIFs, and very long messages.
+6. Send a photo and a GIF from the other device, then tap **Load photo** / **Load GIF** on the
+   watch. Confirm the thumbnail, full-screen viewer, GIF animation, and zoom. Turn on OpenBubbles'
+   **Hide text previews** and confirm new media is reported as unavailable rather than crashing.
+7. Rotate/flip the phone or change display size and re-check the Send-button and composer detection.
+8. Revoke accessibility and confirm the app degrades to notification-only replies with a clear
    error for new/quiet sends and history.
 
 ## Release smoke test
@@ -359,7 +424,7 @@ adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
 Checks performed during development:
 
 - Release phone parses the fake `MessagingStyle` notifications.
-- The setup UI reports 2 tracked chats and notification access.
+- The setup UI reports 3 tracked chats, 2 cached photos, and notification access.
 - R8 keeps the protocol serializers and notification parsing code.
 - R8 keeps the manifest-declared automation service.
 - Release watch launches to the empty/offline state without debug-only classes.
@@ -392,8 +457,9 @@ Connection failed with: statusCode=API_UNAVAILABLE
 
 The watch can enumerate the phone peer, and the phone can start the Wear listener, but message/data
 delivery does not complete. Parsing, caching, and notification actions can still be tested through
-the debug receiver. Full end-to-end Data Layer behavior needs a physical phone/watch pair or a
-phone image with working Wear support.
+the debug receiver. Full end-to-end Data Layer behavior, including media asset transfer, needs a
+physical phone/watch pair or a phone image with working Wear support. The watch-only `media` seed
+mode covers image decoding, GIF animation, and the viewer without the Data Layer.
 
 ### Automation needs a real OpenBubbles UI
 
@@ -426,8 +492,10 @@ launching the app is the simplest fix.
 The protocol module has JVM tests for:
 
 - Message ID stability and content sensitivity.
-- Serialization round-trips for sync, thread, update, reply, send, history, and action payloads.
-- Base64url thread-path round-trips.
+- Serialization round-trips for sync, thread, update, reply, send, history, media, and action
+  payloads.
+- Base64url thread-path round-trips and media-path validation.
+- Media ID stability, MIME normalization, image MIME detection, and media-field round-trips.
 - Thread summaries, previews, and automation/address fields.
 - Address normalization and temporary thread IDs.
 - Transport trimming, including keeping the newest messages.

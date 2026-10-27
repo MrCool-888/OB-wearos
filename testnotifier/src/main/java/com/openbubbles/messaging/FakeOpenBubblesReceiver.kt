@@ -6,7 +6,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -25,6 +24,7 @@ import androidx.core.graphics.drawable.IconCompat
  *
  * adb shell am broadcast -n com.openbubbles.messaging/.FakeOpenBubblesReceiver \
  *     -a com.openbubbles.messaging.DEBUG_POST --es chat maya
+ * ... --es chat media   (posts a photo and an animated GIF chat)
  */
 class FakeOpenBubblesReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -43,6 +43,7 @@ class FakeOpenBubblesReceiver : BroadcastReceiver() {
             null, "all" -> FakeChatStore.allChats()
             "maya" -> listOfNotNull(FakeChatStore.chat("fake-maya"))
             "family" -> listOfNotNull(FakeChatStore.chat("fake-family"))
+            "media" -> listOfNotNull(FakeChatStore.chat("fake-media"))
             else -> emptyList()
         }
         if (chats.isEmpty()) {
@@ -65,8 +66,11 @@ internal object FakeOpenBubblesNotifications {
     private const val REQUEST_READ = 42
     private const val REQUEST_CONTENT = 43
 
-    fun notificationId(chatId: String): Int =
-        if (chatId == "fake-family") 9002 else 9001
+    fun notificationId(chatId: String): Int = when (chatId) {
+        "fake-family" -> 9002
+        "fake-media" -> 9003
+        else -> 9001
+    }
 
     fun post(context: Context, chat: FakeChatStore.Chat) {
         ensureChannel(context)
@@ -76,29 +80,20 @@ internal object FakeOpenBubblesNotifications {
             .setConversationTitle(if (chat.isGroup) chat.title else null)
             .setGroupConversation(chat.isGroup)
         messages.forEach { message ->
-            val entry = FakeMessage.create(
-                message.text,
-                message.timestamp,
-                FakeChatStore.personOrNull(message.sender)
+            val person = FakeChatStore.personOrNull(message.sender)
+            style.addMessage(
+                FakeMessage.create(message.text, message.timestamp, person)
             )
-            if (message.attachment) {
-                entry.setData("image/jpeg", Uri.parse("content://fake.openbubbles/photo.jpg"))
-            }
-            style.addMessage(entry)
-        }
-        // A photo-only entry for the last incoming message, like OpenBubbles.
-        // Keeping it on the same message across updates matters: the bridge
-        // derives message IDs from content, not from transient attachment state.
-        if (!chat.isGroup) {
-            val last = messages.lastOrNull { it.sender != null }
-            if (last != null) {
-                val photo = FakeMessage.create(
-                    "",
-                    last.timestamp,
-                    FakeChatStore.personOrNull(last.sender)
-                )
-                photo.setData("image/jpeg", Uri.parse("content://fake.openbubbles/photo.jpg"))
-                style.addMessage(photo)
+            // OpenBubbles posts the image as a second, empty-text entry with the
+            // same timestamp as its caption. The bridge merges the pair back
+            // into one message.
+            val mediaName = message.media
+            if (mediaName != null) {
+                FakeMediaStore.uri(context, mediaName)?.let { uri ->
+                    val media = FakeMessage.create("", message.timestamp, person)
+                    media.setData(FakeMediaStore.mimeType(mediaName), uri)
+                    style.addMessage(media)
+                }
             }
         }
 
@@ -145,10 +140,13 @@ internal object FakeOpenBubblesNotifications {
         )
 
         val latest = messages.lastOrNull()
+        val latestLabel = latest?.text?.takeIf { it.isNotBlank() }
+            ?: latest?.media?.let { if (it.endsWith(".gif")) "GIF" else "Photo" }
+            ?: "New message"
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle(chat.title)
-            .setContentText(latest?.text?.ifBlank { "Photo" } ?: "New message")
+            .setContentText(latestLabel)
             .setStyle(style)
             .setShortcutId(chat.id)
             .setWhen(latest?.timestamp ?: System.currentTimeMillis())

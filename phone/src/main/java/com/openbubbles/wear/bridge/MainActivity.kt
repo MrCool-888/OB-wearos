@@ -446,6 +446,7 @@ private fun SyncCard(
             Spacer(Modifier.height(12.dp))
             InfoRow("Phone", state.phoneName)
             InfoRow("Tracked chats", state.trackedConversations.toString())
+            InfoRow("Cached photos", state.cachedMedia.toString())
             InfoRow(
                 "Watch",
                 when {
@@ -509,7 +510,7 @@ private fun LimitationsCard() {
             Bullet("Conversations appear after OpenBubbles posts a notification for them.")
             Bullet("With automation on, the watch can also start chats and open a chat whose notification is gone.")
             Bullet("Muted chats and hidden alerts may not appear until you send or receive in them.")
-            Bullet("Photo attachments show as a placeholder; media is not copied to the watch.")
+            Bullet("Photos and GIFs are copied into bridge storage from notifications, then sent to the watch when you tap them. Hide text previews in OpenBubbles prevents images from reaching the bridge.")
             Bullet("Replies, automation sends and mark-read all go through OpenBubbles, so your normal account and encryption are preserved.")
         }
     }

@@ -10,7 +10,7 @@ import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationManagerCompat
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.1.0"
+    const val BRIDGE_VERSION = "1.2.0"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",

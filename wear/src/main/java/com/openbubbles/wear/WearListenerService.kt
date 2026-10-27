@@ -78,10 +78,16 @@ class WearListenerService : WearableListenerService() {
                         ?.let { WatchRepository.onHistory(it) }
                 }
 
+                Protocol.PATH_MEDIA_RESULT -> {
+                    Wire.decodeBytes<com.openbubbles.wear.protocol.MediaPayload>(data)
+                        ?.let { WatchRepository.onMediaResult(it) }
+                }
+
                 Protocol.PATH_PING, Protocol.PATH_SYNC_REQUEST,
                 Protocol.PATH_THREAD_REQUEST, Protocol.PATH_REPLY,
                 Protocol.PATH_MARK_READ, Protocol.PATH_OPEN_PHONE,
-                Protocol.PATH_SEND, Protocol.PATH_HISTORY -> Unit
+                Protocol.PATH_SEND, Protocol.PATH_HISTORY,
+                Protocol.PATH_MEDIA_REQUEST -> Unit
 
                 else -> Log.d(TAG, "Ignoring unknown path $path")
             }
@@ -97,11 +103,17 @@ class WearListenerService : WearableListenerService() {
                 if (event.type != DataEvent.TYPE_CHANGED) continue
                 val item = event.dataItem ?: continue
                 val path = item.uri.path ?: continue
-                val json = runCatching {
-                    DataMapItem.fromDataItem(item)
-                        .dataMap
-                        .getString(Protocol.DATA_KEY_JSON)
+                val dataMap = runCatching {
+                    DataMapItem.fromDataItem(item).dataMap
                 }.getOrNull() ?: continue
+                val mediaId = Protocol.mediaIdFromDataPath(path)
+                if (mediaId != null) {
+                    if (dataMap.containsKey(Protocol.DATA_KEY_ASSET)) {
+                        WatchRepository.onMediaDataItem(applicationContext, mediaId, dataMap)
+                    }
+                    continue
+                }
+                val json = dataMap.getString(Protocol.DATA_KEY_JSON) ?: continue
                 when {
                     path == Protocol.DATA_SYNC -> {
                         Wire.decode<SyncPayload>(json)?.let {
