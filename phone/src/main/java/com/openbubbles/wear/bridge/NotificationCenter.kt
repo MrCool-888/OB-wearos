@@ -387,7 +387,8 @@ object NotificationCenter {
             title = displayTitle,
             address = normalizedAddress ?: existing?.address,
             text = text,
-            contentIntent = contentIntents.get(targetId)
+            contentIntent = contentIntents.get(targetId),
+            isGroup = existing?.isGroup == true
         ) { error ->
             if (error != null) {
                 callback(SendResult(targetId, error))
@@ -436,6 +437,8 @@ object NotificationCenter {
         title: String?,
         address: String?,
         limit: Int,
+        isGroup: Boolean = false,
+        anchorMessages: List<WireMessage>? = null,
         callback: (HistoryResult) -> Unit
     ) {
         if (!initialized) {
@@ -462,11 +465,13 @@ object NotificationCenter {
         val thread = existing ?: WireThread(
             id = threadId,
             title = fallbackTitle,
+            isGroup = isGroup || Protocol.isGroupGuid(threadId),
             address = Protocol.normalizeAddress(address),
             canSend = true
         )
         OpenBubblesAutomation.loadHistory(
-            thread = thread,
+            thread = if (anchorMessages == null) thread else thread.copy(messages = anchorMessages
+                .filter { it.threadId == threadId }.sortedBy { it.timestamp }.take(12)),
             limit = limit,
             contentIntent = contentIntents.get(threadId)
         ) { outcome ->
@@ -496,6 +501,12 @@ object NotificationCenter {
             return null
         }
         val packageName = live?.sbn?.packageName ?: BridgeInfo.openBubblesPackage(appContext)
+        if (threadId != null && Protocol.isChatGuid(threadId) && packageName != null) {
+            val launcher = appContext.packageManager.getLaunchIntentForPackage(packageName)
+                ?: return "OpenBubbles cannot be opened."
+            return if (runCatching { appContext.startActivity(ConversationLaunch.existingGuid(launcher, threadId)) }.isSuccess)
+                null else "Android did not allow opening this OpenBubbles conversation."
+        }
         if (NotificationActions.launchOpenBubbles(appContext, packageName)) return null
         return "OpenBubbles is not installed or cannot be opened."
     }
@@ -546,6 +557,19 @@ object NotificationCenter {
 
     fun automationAvailable(): Boolean =
         initialized && BridgeInfo.isAutomationReady(appContext)
+
+    fun discoverGroups(context: Context, requestId: String): com.openbubbles.wear.protocol.GroupsResult {
+        init(context)
+        if (!prefs.relayEnabled) return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = "Relay is paused on the phone.")
+        val result = GroupShortcutDiscovery.discover(context)
+        if (result.error != null) return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = result.error)
+        val imported = result.groups.map { store.importPublishedGroup(it) }.map(::decorate)
+        scheduleSync()
+        return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId,
+            groups = imported.map { it.toSummary() }, note = if (imported.isEmpty()) {
+                "No published groups found. Open OpenBubbles so it can publish its recent named chats, then retry. ${GroupShortcutDiscovery.NOTE}"
+            } else GroupShortcutDiscovery.NOTE)
+    }
 
     fun onAutomationConnectionChanged(context: Context) {
         init(context)

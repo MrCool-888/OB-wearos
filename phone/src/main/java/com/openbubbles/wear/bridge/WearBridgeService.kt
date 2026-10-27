@@ -58,6 +58,11 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_HISTORY -> handleHistory(nodeId, data)
                 Protocol.PATH_MEDIA_REQUEST -> handleMediaRequest(nodeId, data)
                 Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
+                Protocol.PATH_GROUPS_REQUEST -> {
+                    val request = Wire.decodeBytes<com.openbubbles.wear.protocol.GroupsRequest>(data) ?: return
+                    val result = NotificationCenter.discoverGroups(applicationContext, request.requestId)
+                    WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT, Wire.encodeBytes(result))
+                }
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to handle $path", t)
@@ -222,7 +227,9 @@ class WearBridgeService : WearableListenerService() {
             threadId = request.threadId,
             title = request.title,
             address = request.address,
-            limit = request.limit
+            limit = request.limit,
+            isGroup = request.isGroup,
+            anchorMessages = request.anchorMessages
         ) { result ->
             WatchLink.sendToNode(
                 applicationContext,

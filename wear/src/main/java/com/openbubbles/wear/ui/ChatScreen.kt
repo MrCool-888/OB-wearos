@@ -29,6 +29,10 @@ import androidx.wear.compose.material3.TextButton
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +53,7 @@ import com.openbubbles.wear.WatchState
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
 import java.io.File
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun ChatScreen(
@@ -64,7 +69,9 @@ fun ChatScreen(
 ) {
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
-    val messages = thread?.messages.orEmpty()
+    val historyWindow = state.historyWindows[threadId]
+    val messages = historyWindow ?: thread?.messages.orEmpty()
+    var autoHistoryRequested by remember(threadId) { mutableStateOf(false) }
     val newestMessageId = messages.lastOrNull()?.id
     val listState = rememberScalingLazyListState()
     val requesting = threadId in state.requestingThreads
@@ -80,10 +87,24 @@ fun ChatScreen(
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
+    LaunchedEffect(threadId, state.phoneOnline, state.automationAvailable, state.relayEnabled) {
+        if (!autoHistoryRequested && state.phoneOnline && state.automationAvailable && state.relayEnabled) {
+            // Let the cached-thread reply establish the oldest anchor first.
+            kotlinx.coroutines.delay(250)
+            kotlinx.coroutines.withTimeoutOrNull(13_000L) {
+                WatchRepository.state.first { threadId !in it.requestingThreads }
+            }
+            autoHistoryRequested = true
+            WatchRepository.loadOlder(threadId)
+        }
+    }
+    LaunchedEffect(historyWindow?.firstOrNull()?.id) {
+        if (historyWindow != null) runCatching { listState.scrollToItem(0) }
+    }
     // Loading older messages prepends items without changing the newest ID, so
     // only a new message should pull the list back to the bottom.
     LaunchedEffect(newestMessageId) {
-        if (newestMessageId != null) {
+        if (newestMessageId != null && historyWindow == null) {
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
@@ -181,11 +202,11 @@ fun ChatScreen(
                 } else if (messages.isEmpty()) {
                     item {
                         Card(
-                            onClick = { WatchRepository.requestThread(threadId) },
+                            onClick = onLoadOlder,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "No message history yet. Tap to refresh.",
+                                text = "No saved messages yet. Tap to read history from OpenBubbles on the unlocked phone.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -501,10 +522,15 @@ private fun ChatActions(
     val historyExhausted = threadId in state.historyExhausted
     val queuedCount = state.queuedSends.count { it.threadId == threadId }
     val canLoadHistory = state.automationAvailable &&
-        thread?.messages?.isNotEmpty() == true &&
         state.phoneOnline &&
         state.relayEnabled
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (state.historyWindows.containsKey(threadId)) {
+            Text("Viewing older messages · approximate times", style = MaterialTheme.typography.bodyExtraSmall)
+            TextButton(onClick = { WatchRepository.showLatest(threadId) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Latest messages")
+            }
+        }
         Button(
             onClick = onReply,
             enabled = (canReply || canSend) && state.relayEnabled && !sending,

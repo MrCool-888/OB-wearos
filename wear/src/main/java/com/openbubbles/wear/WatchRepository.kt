@@ -93,6 +93,8 @@ data class WatchState(
     val requestingThreads: Set<String> = emptySet(),
     val sendingThreads: Set<String> = emptySet(),
     val loadingHistory: Set<String> = emptySet(),
+    val historyRequests: Map<String, String> = emptyMap(),
+    val historyWindows: Map<String, List<WireMessage>> = emptyMap(),
     val historyExhausted: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
@@ -106,6 +108,8 @@ data class WatchState(
     val contactsRequestId: String? = null,
     val contactsRequestOffset: Int = 0,
     val contactsError: String? = null,
+    val groupsRequestId: String? = null,
+    val groupsNotice: String? = null,
     val error: String? = null,
     val info: String? = null
 ) {
@@ -1003,10 +1007,15 @@ object WatchRepository {
         return threadId
     }
 
+    @Synchronized
     fun loadOlder(threadId: String) {
         if (!initialized) return
         val state = _state.value
         if (threadId in state.loadingHistory) return
+        if (!state.phoneOnline) {
+            _state.update { it.copy(error = "Connect the phone to load history. Saved messages are still available.") }
+            return
+        }
         if (!state.relayEnabled) {
             _state.update { it.copy(error = "Relay is paused on the phone.") }
             return
@@ -1024,6 +1033,7 @@ object WatchRepository {
         _state.update {
             it.copy(
                 loadingHistory = it.loadingHistory + threadId,
+                historyRequests = it.historyRequests + (threadId to requestId),
                 error = null,
                 info = null
             )
@@ -1037,38 +1047,36 @@ object WatchRepository {
                     threadId = threadId,
                     title = thread?.title ?: summary?.title,
                     address = thread?.address ?: summary?.address,
-                    limit = HISTORY_PAGE_SIZE
+                    limit = HISTORY_PAGE_SIZE,
+                    isGroup = thread?.isGroup ?: summary?.isGroup ?: false,
+                    anchorMessages = (state.historyWindows[threadId] ?: thread?.messages.orEmpty())
+                        .filterNot { it.id.startsWith(LOCAL_PREFIX) }.sortedBy { it.timestamp }.take(12)
                 )
             )
         ) { sent ->
             if (!sent) {
-                _state.update {
-                    it.copy(
-                        loadingHistory = it.loadingHistory - threadId,
-                        connected = false,
-                        reachable = false,
-                        error = "Phone isn't reachable. Could not load older messages."
-                    )
-                }
+                onHistoryFailure(threadId, requestId, "Phone isn't reachable. Could not load older messages.", unreachable = true)
             }
         }
         scope.launch {
             delay(125_000L)
-            if (threadId in _state.value.loadingHistory) {
-                _state.update {
-                    it.copy(
-                        loadingHistory = it.loadingHistory - threadId,
-                        error = "The phone took too long to load older messages."
-                    )
-                }
-            }
+            onHistoryFailure(threadId, requestId, "The phone took too long to load older messages.")
         }
     }
 
+    internal fun onHistoryFailure(threadId: String, requestId: String, message: String, unreachable: Boolean = false) {
+        _state.update { if (it.historyRequests[threadId] != requestId) it else it.copy(
+            loadingHistory = it.loadingHistory - threadId, historyRequests = it.historyRequests - threadId,
+            connected = if (unreachable) false else it.connected,
+            reachable = if (unreachable) false else it.reachable, error = message) }
+    }
+
+    @Synchronized
     fun onHistory(payload: HistoryPayload) {
         if (!initialized) return
         val threadId = payload.threadId
         val state = _state.value
+        if (state.historyRequests[threadId] != payload.requestId) return
         val current = state.threads[threadId]
             ?: state.conversations.firstOrNull { it.id == threadId }?.let { summary ->
                 WireThread(
@@ -1084,6 +1092,7 @@ object WatchRepository {
             _state.update {
                 it.copy(
                     loadingHistory = it.loadingHistory - threadId,
+                    historyRequests = it.historyRequests - threadId,
                     error = payload.error
                 )
             }
@@ -1093,7 +1102,8 @@ object WatchRepository {
             _state.update {
                 it.copy(
                     loadingHistory = it.loadingHistory - threadId,
-                    historyExhausted = if (payload.hasMore) it.historyExhausted
+                    historyRequests = it.historyRequests - threadId,
+                    historyExhausted = if (payload.hasMore) it.historyExhausted - threadId
                     else it.historyExhausted + threadId,
                     info = "No older messages were found."
                 )
@@ -1101,25 +1111,68 @@ object WatchRepository {
             return
         }
         val mergedById = LinkedHashMap<String, WireMessage>()
-        (current.messages + payload.messages).forEach { message ->
+        ((state.historyWindows[threadId] ?: current.messages) + payload.messages.filter { it.threadId == threadId }).forEach { message ->
             val previous = mergedById[message.id]
             mergedById[message.id] = previous?.let(message::mergeMediaFrom) ?: message
         }
         val mergedMessages = mergedById.values
             .sortedBy { it.timestamp }
-            .takeLast(MAX_MESSAGES)
-        val updated = current.copy(
-            messages = mergedMessages,
-            updatedAt = maxOf(current.updatedAt, mergedMessages.lastOrNull()?.timestamp ?: 0L)
-        )
-        replaceThread(updated)
+            .take(MAX_MESSAGES)
+        // Keep a durable newest cache as well as the separate older viewing window.
+        replaceThread(mergeThread(current.copy(messages = payload.messages.filter { it.threadId == threadId })))
         _state.update {
             it.copy(
                 loadingHistory = it.loadingHistory - threadId,
+                historyRequests = it.historyRequests - threadId,
+                historyWindows = (it.historyWindows + (threadId to mergedMessages)).entries.toList().takeLast(40).associate { entry -> entry.toPair() },
                 historyExhausted = if (payload.hasMore) it.historyExhausted - threadId
                 else it.historyExhausted + threadId,
                 info = null
             )
+        }
+        persist()
+    }
+
+    @Synchronized
+    fun showLatest(threadId: String) {
+        _state.update { it.copy(historyWindows = it.historyWindows - threadId,
+            loadingHistory = it.loadingHistory - threadId, historyRequests = it.historyRequests - threadId,
+            historyExhausted = it.historyExhausted - threadId) }
+        requestThread(threadId)
+    }
+
+    @Synchronized
+    fun discoverGroups() {
+        val context = appContext ?: return
+        val state = _state.value
+        if (!state.phoneOnline || !state.relayEnabled) {
+            _state.update { it.copy(groupsNotice = "Connect the phone and enable the relay to find published groups.") }
+            return
+        }
+        if (state.groupsRequestId != null) return
+        val id = UUID.randomUUID().toString()
+        _state.update { it.copy(groupsRequestId = id, groupsNotice = null) }
+        PhoneLink.send(context, Protocol.PATH_GROUPS_REQUEST,
+            Wire.encodeBytes(com.openbubbles.wear.protocol.GroupsRequest(requestId = id))) { sent ->
+            if (!sent) _state.update { if (it.groupsRequestId != id) it else it.copy(groupsRequestId = null,
+                groupsNotice = "Phone unreachable. Start Shizuku and grant the bridge access on the phone, then retry.") }
+        }
+        scope.launch {
+            delay(30_000L)
+            _state.update { if (it.groupsRequestId != id) it else it.copy(groupsRequestId = null,
+                groupsNotice = "No group list received. Install matching apps and check Shizuku on the phone.") }
+        }
+    }
+
+    @Synchronized
+    fun onGroups(result: com.openbubbles.wear.protocol.GroupsResult) {
+        if (result.requestId != _state.value.groupsRequestId) return
+        _state.update { state ->
+            val groups = result.groups.filter { it.isGroup && Protocol.isGroupGuid(it.id) }
+            state.copy(groupsRequestId = null, groupsNotice = result.error ?: result.note,
+                conversations = if (result.error != null) state.conversations else
+                    (state.conversations.filterNot { old -> groups.any { it.id == old.id } } + groups)
+                        .sortedByDescending { it.lastTimestamp })
         }
         persist()
     }

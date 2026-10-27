@@ -113,7 +113,7 @@ fun ConversationListScreen(
                     item {
                         Card(onClick = onSync, modifier = Modifier.fillMaxWidth()) {
                             Text("No group chats yet", style = MaterialTheme.typography.titleSmall)
-                            Text("Receive a group message with OpenBubbles notifications enabled, then sync. Group chats use their existing conversation, not a new recipient list.",
+                            Text("Find published groups with Shizuku below, or receive a group notification. Published shortcuts are a partial list, not every group.",
                                 style = MaterialTheme.typography.bodyExtraSmall)
                         }
                     }
@@ -136,6 +136,8 @@ fun ConversationListScreen(
                         )
                     }
                 }
+
+                if (groupsOnly) item { GroupDiscoveryControls(state) }
 
                 item {
                     Button(

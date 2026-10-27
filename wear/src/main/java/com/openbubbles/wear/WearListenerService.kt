@@ -93,6 +93,11 @@ class WearListenerService : WearableListenerService() {
                         ?.let { WatchRepository.onContactsPage(it) }
                 }
 
+                Protocol.PATH_GROUPS_RESULT -> {
+                    Wire.decodeBytes<com.openbubbles.wear.protocol.GroupsResult>(data)
+                        ?.let { WatchRepository.onGroups(it) }
+                }
+
                 Protocol.PATH_PING, Protocol.PATH_SYNC_REQUEST,
                 Protocol.PATH_THREAD_REQUEST, Protocol.PATH_REPLY,
                 Protocol.PATH_MARK_READ, Protocol.PATH_OPEN_PHONE,

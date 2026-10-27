@@ -220,7 +220,10 @@ data class HistoryRequest(
     val title: String? = null,
     val address: String? = null,
     val limit: Int = 100,
-    val sentAt: Long = System.currentTimeMillis()
+    val sentAt: Long = System.currentTimeMillis(),
+    val isGroup: Boolean = false,
+    // Null preserves older watches; empty means no cached text anchor yet.
+    val anchorMessages: List<WireMessage>? = null
 )
 
 @Serializable
@@ -304,4 +307,16 @@ data class ContactsPage(
     val nextOffset: Int? = null,
     val contactsAccess: Boolean = false,
     val error: String? = null
+)
+
+@Serializable
+data class GroupsRequest(val version: Int = Protocol.VERSION, val requestId: String)
+
+@Serializable
+data class GroupsResult(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val groups: List<ThreadSummary> = emptyList(),
+    val error: String? = null,
+    val note: String? = null
 )
