@@ -11,14 +11,42 @@ data class WireMessage(
     val sender: String? = null,
     val fromMe: Boolean = false,
     val attachment: Boolean = false,
+    /** Cached media identifier on the phone and watch, when the attachment is viewable. */
+    val mediaId: String? = null,
+    /** MIME type of the cached media, for example image/jpeg or image/gif. */
+    val mediaMime: String? = null,
+    val mediaWidth: Int = 0,
+    val mediaHeight: Int = 0,
+    val mediaSize: Long = 0L,
     val status: String? = null
 ) {
     val displayText: String
         get() = when {
             text.isNotBlank() -> text
+            mediaMime == "image/gif" -> "GIF"
             attachment -> "Photo"
             else -> "Message"
         }
+
+    /**
+     * Notification refreshes can omit image data temporarily, and restored
+     * cache entries may predate media support. Keep media metadata that was
+     * already known rather than degrading an attachment to a placeholder.
+     */
+    fun mergeMediaFrom(previous: WireMessage): WireMessage {
+        if (mediaId == null && previous.mediaId != null) {
+            return copy(
+                attachment = true,
+                mediaId = previous.mediaId,
+                mediaMime = previous.mediaMime,
+                mediaWidth = previous.mediaWidth,
+                mediaHeight = previous.mediaHeight,
+                mediaSize = previous.mediaSize
+            )
+        }
+        if (!attachment && previous.attachment) return copy(attachment = true)
+        return this
+    }
 }
 
 @Serializable
@@ -200,6 +228,29 @@ data class HistoryPayload(
     val threadId: String,
     val messages: List<WireMessage> = emptyList(),
     val hasMore: Boolean = false,
+    val error: String? = null,
+    val completedAt: Long = System.currentTimeMillis()
+)
+
+/** Asks the phone to publish one cached image or GIF over the Data Layer. */
+@Serializable
+data class MediaRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val mediaId: String,
+    val sentAt: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class MediaPayload(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val mediaId: String,
+    val ok: Boolean,
+    val mimeType: String? = null,
+    val width: Int = 0,
+    val height: Int = 0,
+    val size: Long = 0L,
     val error: String? = null,
     val completedAt: Long = System.currentTimeMillis()
 )

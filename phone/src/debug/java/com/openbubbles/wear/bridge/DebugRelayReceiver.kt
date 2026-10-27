@@ -17,6 +17,8 @@ import java.util.UUID
  * ... --es op send --es thread fake-maya --es text "Sent from adb"
  * ... --es op send --es address +15551234567 --es text "New chat"
  * ... --es op history --es thread fake-maya
+ * ... --es op media                       (list cached media IDs)
+ * ... --es op media --es id media-abc123  (publish one item to the watch)
  *
  * Thread IDs come from the live notification's shortcut ID. Run `status` to
  * list every cached thread and its current capabilities. The `send` and
@@ -84,6 +86,26 @@ class DebugRelayReceiver : BroadcastReceiver() {
                 report(context, "sync", null)
             }
 
+            "media" -> {
+                val id = intent.getStringExtra("id")
+                if (id.isNullOrBlank()) {
+                    val ids = BridgeStore(context).snapshot()
+                        .flatMap { thread -> thread.messages.mapNotNull { it.mediaId } }
+                        .distinct()
+                    report(context, "media ids=${ids.joinToString(",")}", null)
+                } else {
+                    NotificationCenter.media(id) { info, error ->
+                        val summary = if (info != null) {
+                            "media $id ${info.mimeType} ${info.width}x${info.height} " +
+                                "${info.size}B"
+                        } else {
+                            "media $id"
+                        }
+                        report(context, summary, error)
+                    }
+                }
+            }
+
             "clear_cache" -> {
                 NotificationCenter.clearCache(context)
                 report(context, "clear_cache", null)
@@ -92,7 +114,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
             else -> report(
                 context,
                 "unknown op=$op",
-                "Use status, reply, mark_read, open_phone, send, history, sync or clear_cache"
+                "Use status, reply, mark_read, open_phone, send, history, media, sync or clear_cache"
             )
         }
     }
@@ -105,6 +127,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
                 "installed=${BridgeInfo.isOpenBubblesInstalled(context)} " +
                 "relay=${pong.relayEnabled} automation=${pong.automationAvailable} " +
                 "tracked=${pong.trackedConversations} " +
+                "media=${NotificationCenter.mediaCount(context)} " +
                 "access=${pong.notificationAccess}"
         )
         BridgeStore(context).snapshot().forEach { cached ->
@@ -113,6 +136,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
                 TAG,
                 "thread ${cached.id} cached=true " +
                     "messages=${thread.messages.size} " +
+                    "media=${thread.messages.count { it.mediaId != null }} " +
                     "unread=${thread.unread} live=${thread.notificationActive} " +
                     "reply=${thread.canReply} markRead=${thread.canMarkRead} " +
                     "send=${thread.canSend} address=${thread.address}"

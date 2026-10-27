@@ -49,7 +49,7 @@ Application IDs:
 ┌──────────────────────────┐       Data Layer        ┌──────────────────────┐
 │ Phone bridge             │  messages + data items  │ Wear app             │
 │ - parse notification     │ ──────────────────────> │ - cache + UI         │
-│ - merge with cache       │ <────────────────────── │ - sync/thread reqs   │
+│ - cache media + threads  │ <────────────────────── │ - sync/thread reqs   │
 │ - send sync/updates      │   request/action msgs   │ - reply/send/history │
 └───────┬──────────┬───────┘                         └──────────────────────┘
         │          │
@@ -111,9 +111,10 @@ and handles the following:
   number or email. Group chats leave this unset.
 - **Group participants**: distinct incoming sender names, with a fallback to splitting the group
   title.
-- **Attachments**: a non-null image `dataUri` sets `attachment = true`. OpenBubbles may send a
-  caption and an image as separate messages with the same timestamp; they are merged into one
-  `WireMessage`.
+- **Attachments**: a non-null image `dataUri` sets `attachment = true`. The parser records the URI
+  and MIME type, then `MediaCache` copies the bytes while the notification listener still holds the
+  URI grant. OpenBubbles may send a caption and an image as separate messages with the same
+  timestamp; they are merged into one `WireMessage` with the caption text and image metadata.
 - **Text**: trimmed and capped at 800 characters.
 - **Actions**: the first action with remote inputs is the reply action; an action containing
   "read" is mark-read. Availability is reflected in `canReply` / `canMarkRead`, and `canSend` is
@@ -133,7 +134,7 @@ same timestamp, a numeric suffix disambiguates them.
 - Merge by stable message ID, so older observed messages survive after OpenBubbles trims them from
   its notification.
 - If a previously known message had an attachment and a refresh omits the image data, the
-  attachment marker is preserved.
+  attachment marker and any known media metadata are preserved.
 - Automation sends are recorded immediately as `auto-<requestId>` outgoing messages. When the real
   message later arrives, a matching outgoing message with the same text within two minutes
   replaces the optimistic entry.
@@ -146,17 +147,46 @@ same timestamp, a numeric suffix disambiguates them.
 This is not a full message database. It is a best-effort cache of what notifications exposed and
 what automation could read from the screen.
 
+### Media cache
+
+`MediaCache` turns the `dataUri` on `MessagingStyle.Message` entries into watch-friendly files.
+
+- The notification listener copies the URI bytes into `filesDir/media_cache` while Android's
+  temporary notification URI grant is valid. The grant is scoped to the listener package and does
+  not require OpenBubbles to be modified.
+- The MIME type is normalized and cross-checked against the file's magic bytes. Non-image
+  attachments are ignored.
+- Static images are decoded with `ImageDecoder`, scaled to at most 960 px on the longest side, and
+  re-encoded as lossy WebP. The encoder retries at 720 px and 560 px if the first result exceeds
+  the transfer budget.
+- GIFs and animated WebPs are preserved byte-for-byte when they are at most 6 MB, so the watch can
+  animate them. Larger animations fall back to their first frame.
+- A stable media ID is derived from `(message ID, normalized MIME type)`, so repeated notification
+  updates resolve to the same cached file.
+- The cache keeps at most 80 files / 80 MB, prunes anything no longer referenced by a cached thread,
+  and deletes orphaned temporary files. Clearing the bridge cache also clears media and its data
+  items.
+- The phone reports the cache size in its status card. The setup UI warns that OpenBubbles' **Hide
+  text previews** setting suppresses attachment URIs.
+
 ### Publish behavior
 
 `NotificationCenter` publishes in two ways:
 
 1. **Live messages** (`MessageClient`) for immediate UI updates: `sync`, `thread`, `update`, action
-   results, history results.
+   results, history results, and media results.
 2. **Durable data items** (`DataApi`) so a watch app that was not running can restore a recent
-   snapshot: a sync summary plus one item per thread.
+   snapshot: a sync summary plus one item per thread. Attachment bytes are published separately as
+   one data item per requested media ID.
 
 `WatchLink` encodes thread IDs as base64url path segments because shortcut IDs may contain `/`,
-spaces, or other unsafe characters. It prunes data items for threads that no longer exist.
+spaces, or other unsafe characters. Media IDs are hashes, so they are used directly in
+`/openbubbles_wear/media/<mediaId>`. It prunes data items for threads and media that no longer exist.
+
+When the watch asks for a photo, the phone publishes a data item containing an `Asset` plus MIME
+type, dimensions, size, and a fresh `published_at` value. The timestamp forces a change event even
+when the same photo is requested twice. Assets are transferred separately from the data-item map,
+so they are not subject to the 100 KB item-map limit. The bridge caps an individual asset at 8 MB.
 
 The Wear Data Layer rejects items over 100 KB. `Wire.threadForTransport` drops oldest messages
 until a thread encodes to 90 KB or less. The phone's cache is not trimmed by this; only the copy
@@ -259,11 +289,13 @@ validation is required.
 - Full threads that the user has opened or that arrived live.
 - Phone/bridge metadata, notification access, relay state, automation availability.
 - Connectivity (`connected`, `reachable`), sync timestamps, quick replies.
-- In-flight send/history requests and per-thread history exhaustion state.
+- In-flight send/history/media requests and per-thread history exhaustion state.
+- Cached media metadata (file path, MIME type, dimensions, size) keyed by media ID.
 - Transient UI notices (`error`, `info`).
 
 The watch cache persists up to 40 threads and 220 messages per thread. It is designed for offline
-reading, not as an authoritative history.
+reading, not as an authoritative history. Media is persisted separately: the watch keeps the most
+recent 60 files / 40 MB in `filesDir/watch_media` and records their metadata in SharedPreferences.
 
 ### Sync and thread aliasing
 
@@ -312,6 +344,22 @@ chronologically, and capped at 220. `hasMore = false` marks the thread exhausted
 **No older messages**. Loading history prepends messages without changing the newest message ID, so
 the chat only auto-scrolls when a genuinely new message arrives.
 
+### Media viewing
+
+- A media bubble shows **Load photo** or **Load GIF** until its bytes are present on the watch.
+  Tapping it sends `/media_request` with the stable media ID.
+- The phone republishes the cached file as a data-item asset. `WearListenerService` sees the
+  `/media/<id>` change, calls `DataClient.getFdForAsset`, copies the bytes to `filesDir/watch_media`,
+  and records the metadata. The repository clears the per-ID loading state and trims the cache.
+- The chat bubble switches to a Coil `AsyncImage` thumbnail. Tapping the thumbnail opens the
+  full-screen viewer, which also uses Coil so GIFs and animated WebPs keep playing. Pinch zooms and
+  double-tap resets the image.
+- Media requests time out after 45 seconds. A phone error, an unreachable phone, a pruned phone
+  cache, or a failed asset read produces a notice and a **Try again** action.
+- Media metadata on `WireMessage` is preserved across notification refreshes, thread merges, and
+  history merges so an already-known photo does not degrade to a text placeholder.
+- The Watch UI never requests media automatically; only the bubble the user taps is transferred.
+
 ### UI
 
 The Compose for Wear OS UI uses `AppScaffold` + `TimeText` and `ScalingLazyColumn` screens:
@@ -319,7 +367,8 @@ The Compose for Wear OS UI uses `AppScaffold` + `TimeText` and `ScalingLazyColum
 - Conversation list with **New message** and empty/offline states.
 - New-message screen with an address remote-input action and recent one-to-one contacts.
 - Chat screen with message bubbles, sender labels, status, send/reply, history, and mark-read
-  actions.
+  actions, plus photo/GIF thumbnails and loading states.
+- Full-screen media viewer with GIF playback, pinch zoom, and double-tap reset.
 - Composer with quick replies and Wear remote input for voice/keyboard.
 - Settings with connection, relay, automation, cache, and limitation information.
 
@@ -327,7 +376,7 @@ Navigation is a small explicit stack with back and swipe-to-dismiss handling.
 
 ## Protocol
 
-Protocol version is **2**. All message paths live under `/openbubbles_wear`. Payloads are UTF-8
+Protocol version is **3**. All message paths live under `/openbubbles_wear`. Payloads are UTF-8
 JSON produced by kotlinx.serialization with unknown keys ignored.
 
 | Path | Direction | Purpose |
@@ -347,18 +396,23 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/open_phone` | watch → phone | Ask the phone to open OpenBubbles. |
 | `/history` | watch → phone | Ask the phone to scrape older messages from OpenBubbles' UI. |
 | `/history_result` | phone → watch | Older messages, `hasMore`, or an error. |
+| `/media_request` | watch → phone | Ask the phone to publish one cached attachment. |
+| `/media_result` | phone → watch | Whether the media data item was published, or an error. |
 
 `SyncPayload` and `PongPayload` carry `automationAvailable`. `ThreadSummary` carries `address`,
 `canSend`, and the existing reply/mark-read flags. `SendRequest` carries an optional `threadId`,
 `address`, `title`, and `text`. `HistoryRequest` carries `threadId`, optional `title`/`address`, and
-a `limit`.
+a `limit`. `WireMessage` carries optional `mediaId`, `mediaMime`, `mediaWidth`, `mediaHeight`, and
+`mediaSize`. `MediaRequest` carries the media ID; `MediaPayload` echoes it with the transfer result.
 
 Durable Data API paths:
 
 - `/openbubbles_wear/sync`
 - `/openbubbles_wear/thread/<base64url(threadId)>`
+- `/openbubbles_wear/media/<mediaId>`
 
-Data item value key: `json`. Thread data items use the transport-trimmed copy.
+Thread data items use the key `json` and the transport-trimmed copy. Media data items use `asset`,
+`mime`, `width`, `height`, `size`, and `published_at`.
 
 Capabilities are advertised through `res/values/wear.xml`:
 
@@ -387,6 +441,10 @@ this project intentionally avoids all three so it keeps working with the officia
 - **Notification removed**: cache remains; mark-read disappears, and reply/send require automation.
 - **Automation disabled**: new chats, quiet-chat sends, and history requests fail with a setup
   message; live notification replies still work.
+- **Media unavailable**: OpenBubbles may omit attachment URIs when **Hide text previews** is on, the
+  bridge may have already pruned the file, or the notification URI grant may have expired before it
+  could be copied. The watch shows **Load photo** with a phone-reported error and can retry while
+  the phone still has the file.
 - **Automation blocked**: Android may refuse a background activity launch or OpenBubbles may not
   become visible. The send/history job returns an error to the watch after its timeout.
 - **Selector change**: a future OpenBubbles UI can move the composer, Send button, or search field.

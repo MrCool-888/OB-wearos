@@ -128,13 +128,7 @@ class BridgeStore(context: Context) {
                 if (optimistic != null) byId.remove(optimistic.id)
             }
             val previous = byId[incoming.id]
-            byId[incoming.id] = if (previous?.attachment == true && !incoming.attachment) {
-                // Notification refreshes can omit image data temporarily. Keep the
-                // photo marker rather than degrading an already-known attachment.
-                incoming.copy(attachment = true)
-            } else {
-                incoming
-            }
+            byId[incoming.id] = previous?.let(incoming::mergeMediaFrom) ?: incoming
         }
         return byId.values
             .sortedBy { it.timestamp }

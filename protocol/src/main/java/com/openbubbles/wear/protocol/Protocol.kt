@@ -12,7 +12,7 @@ import java.util.Locale
  * asks the phone to perform actions against the live OpenBubbles notification.
  */
 object Protocol {
-    const val VERSION = 2
+    const val VERSION = 3
 
     const val CAPABILITY_PHONE = "openbubbles_wear_bridge"
     const val CAPABILITY_WATCH = "openbubbles_wear"
@@ -35,17 +35,27 @@ object Protocol {
     const val PATH_SEND = "$BASE_PATH/send"
     const val PATH_HISTORY = "$BASE_PATH/history"
     const val PATH_HISTORY_RESULT = "$BASE_PATH/history_result"
+    const val PATH_MEDIA_REQUEST = "$BASE_PATH/media_request"
+    const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
 
     // DataApi paths (durable snapshots for when the watch app is not running).
     const val DATA_SYNC = "$BASE_PATH/sync"
     const val DATA_THREAD_PREFIX = "$BASE_PATH/thread/"
+    const val DATA_MEDIA_PREFIX = "$BASE_PATH/media/"
     const val DATA_KEY_JSON = "json"
+    const val DATA_KEY_MIME = "mime"
+    const val DATA_KEY_WIDTH = "width"
+    const val DATA_KEY_HEIGHT = "height"
+    const val DATA_KEY_SIZE = "size"
+    const val DATA_KEY_ASSET = "asset"
+    const val DATA_KEY_MEDIA_PUBLISHED_AT = "published_at"
 
     const val ACTION_REPLY = "reply"
     const val ACTION_MARK_READ = "mark_read"
     const val ACTION_OPEN_PHONE = "open_phone"
     const val ACTION_SEND = "send"
     const val ACTION_HISTORY = "history"
+    const val ACTION_MEDIA = "media"
 
     val DEFAULT_QUICK_REPLIES: List<String> = listOf(
         "On my way",
@@ -81,6 +91,47 @@ object Protocol {
             String(Base64.getUrlDecoder().decode(padded), StandardCharsets.UTF_8)
         }.getOrNull()
     }
+
+    /** Media IDs are hashes, so they are safe to use directly in a data path. */
+    fun mediaDataPath(mediaId: String): String = DATA_MEDIA_PREFIX + mediaId
+
+    fun mediaIdFromDataPath(path: String): String? {
+        if (!path.startsWith(DATA_MEDIA_PREFIX)) return null
+        return path.removePrefix(DATA_MEDIA_PREFIX)
+            .takeIf { it.isNotEmpty() && !it.contains('/') }
+    }
+
+    /**
+     * Stable ID for a cached attachment. It is derived from the message's own
+     * stable ID and the normalized MIME type so repeated notification updates
+     * resolve to the same cached file.
+     */
+    fun mediaId(messageId: String, mimeType: String): String {
+        val raw = messageId + "\u0001" + (normalizeMimeType(mimeType) ?: "application/octet-stream")
+        val digest = MessageDigest.getInstance("SHA-1")
+            .digest(raw.toByteArray(StandardCharsets.UTF_8))
+        return "media-" + digest.joinToString(separator = "") {
+            "%02x".format(it.toInt() and 0xff)
+        }
+    }
+
+    fun normalizeMimeType(raw: String?): String? {
+        val value = raw
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return when (value) {
+            "image/jpg", "image/pjpeg" -> "image/jpeg"
+            "image/x-png" -> "image/png"
+            "image/x-gif" -> "image/gif"
+            else -> value
+        }
+    }
+
+    fun isImageMimeType(mimeType: String?): Boolean =
+        normalizeMimeType(mimeType)?.startsWith("image/") == true
 
     /**
      * Normalizes a phone number or email address so a notification address and

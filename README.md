@@ -1,9 +1,9 @@
 # OpenBubbles Wear
 
 An unofficial Wear OS companion for [OpenBubbles](https://openbubbles.app/). The watch shows
-OpenBubbles conversations, replies to notifications, starts new chats, and loads older messages.
-All message sending still happens inside the official phone app; this project never talks to Apple's
-servers directly and never handles your account or encryption keys.
+OpenBubbles conversations, replies to notifications, starts new chats, loads older messages, and
+views photos and GIFs. All message sending still happens inside the official phone app; this project
+never talks to Apple's servers directly and never handles your account or encryption keys.
 
 > This project is not affiliated with OpenBubbles or Apple. It works with the official
 > OpenBubbles 2.0.x APK without modifying it.
@@ -11,9 +11,10 @@ servers directly and never handles your account or encryption keys.
 ## How it works
 
 OpenBubbles already builds a `MessagingStyle` notification for each active conversation. That
-notification contains recent messages, sender names, attachment flags, reply actions, and the
+notification contains recent messages, sender names, attachment URIs, reply actions, and the
 handle of the other person. The bridge reads those notifications through Android's notification
-listener, caches a copy, and sends it over the Wear OS Data Layer.
+listener, copies attachments into app-private storage, caches a copy, and sends it over the Wear OS
+Data Layer.
 
 ```
 OpenBubbles (phone)
@@ -51,7 +52,8 @@ setup, or message transport.
 - Optimistic send bubbles (`Sending…` / `Not sent`) that resolve when the phone confirms.
 - Small offline cache on the watch, so recent chats remain readable without the phone.
 - Sync status, relay state, automation state, and cache information in the watch Settings screen.
-- Photo messages are marked as `Photo`; media itself is not transferred.
+- **Photos and GIFs**: tap an attachment on the watch to fetch its cached copy from the phone, then
+  tap again for a full-screen view. Animated GIFs play automatically; pinch to zoom or double-tap.
 
 ## Requirements
 
@@ -69,15 +71,15 @@ No root access, Shizuku, custom OpenBubbles build, or OpenBubbles-side changes a
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.1.0.apk`
-- `dist/OpenBubblesWear-Watch-1.1.0.apk`
+- `dist/OpenBubblesWear-Phone-1.2.0.apk`
+- `dist/OpenBubblesWear-Watch-1.2.0.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb install -r dist/OpenBubblesWear-Phone-1.1.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.1.0.apk
+adb install -r dist/OpenBubblesWear-Phone-1.2.0.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.2.0.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -138,6 +140,8 @@ existing one by title when loading history.
   the button reads **Send message** and the phone performs the send through OpenBubbles' composer.
 - **Load older messages** (with automation on) asks the phone to scroll OpenBubbles' chat screen
   and prepend the older bubbles it can read.
+- Tap a photo or GIF bubble to copy its cached copy from the phone, then tap the thumbnail to open
+  the full-screen viewer. GIFs animate in both the thumbnail and the viewer.
 - **Mark as read** invokes OpenBubbles' mark-read notification action when available.
 - **Open on phone** reopens the matching OpenBubbles conversation, using a saved content intent
   when the notification is gone.
@@ -166,8 +170,14 @@ existing one by title when loading history.
 - **Automation is not instant.** The phone may need to open OpenBubbles, navigate, type, and
   verify the send. A send can take up to about 90 seconds and history loading up to about two
   minutes. The phone should be unlocked and able to launch OpenBubbles.
-- **No media transfer.** Photos are shown as a placeholder. Attachments, reactions, stickers, and
-  rich content are not copied to the watch.
+- **Media comes from notifications.** Image bytes are copied only while OpenBubbles' notification
+  still exposes its attachment URI. Photos are downscaled for the watch; GIFs and animated WebPs
+  keep their animation when they fit the transfer budget, otherwise only the first frame is sent.
+  OpenBubbles' **Hide text previews** setting also suppresses image data, so media will not appear
+  while it is enabled. History loaded through accessibility contains text only.
+- **Media caches are bounded.** The phone keeps roughly 80 attachments (80 MB), and the watch keeps
+  the most recent 60 (40 MB). Older images may need to be re-sent by OpenBubbles before they can be
+  viewed again.
 - **Actions need a live notification, unless automation is on.** If a notification is dismissed,
   cancelled by OpenBubbles, or lost after a reboot, mark-read is unavailable and reply falls back
   to automation if it is enabled.
@@ -196,6 +206,9 @@ OpenBubbles account and chat UI.
 - Reply text is passed to OpenBubbles' own notification `PendingIntent`; new-chat and quiet-chat
   sends are typed into OpenBubbles' own composer. The bridge does not handle account credentials
   or encryption keys.
+- Photo and GIF bytes are copied from OpenBubbles' notification attachment URIs into the bridge's
+  app-private cache, then transferred to the watch over the Wear Data Layer. They are not uploaded
+  anywhere else. Clearing the bridge cache or uninstalling the app removes the phone copy.
 - Release builds do not include the exported debug receivers. Debug builds do, so keep them off
   production devices.
 
@@ -255,9 +268,10 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.1.0 and watch app 1.1.0, using protocol version 2. Update
-both APKs together for the new send/history features. A 1.1.0 watch paired with a 1.0.0 phone
-falls back to notification-only behavior, but a 1.0.0 watch cannot use the new actions.
+The current release is phone bridge 1.2.0 and watch app 1.2.0, using protocol version 3. Update
+both APKs together for the media, send, and history features. A 1.2.0 watch paired with a 1.1.0
+phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
+cannot use the newer actions.
 
 ### Project layout
 

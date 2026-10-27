@@ -32,6 +32,16 @@
         <receiver
             android:name="com.openbubbles.messaging.FakeOpenBubblesActionReceiver"
             android:exported="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.openbubbles.messaging.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/fake_file_paths" />
+        </provider>
     </application>
 
 </manifest>

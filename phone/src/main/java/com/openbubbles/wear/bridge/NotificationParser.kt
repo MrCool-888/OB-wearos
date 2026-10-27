@@ -2,6 +2,7 @@ package com.openbubbles.wear.bridge
 
 import android.app.Notification
 import android.content.Context
+import android.net.Uri
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -22,7 +23,8 @@ object NotificationParser {
         val thread: WireThread,
         val hasReply: Boolean,
         val hasMarkRead: Boolean,
-        val hasContentIntent: Boolean
+        val hasContentIntent: Boolean,
+        val mediaSources: Map<String, MediaSource> = emptyMap()
     )
 
     fun parse(context: Context, sbn: StatusBarNotification): Parsed? {
@@ -55,7 +57,8 @@ object NotificationParser {
         val isGroup = style.isGroupConversation
 
         val drafts = buildDrafts(sbn, style)
-        val messages = assignIds(threadId, mergeCaptionAndImage(drafts))
+        val assigned = assignIds(threadId, mergeCaptionAndImage(drafts))
+        val messages = assigned.messages
         val participants = participants(isGroup, title, messages)
         val address = if (isGroup) null else messageAddress(style)
 
@@ -80,7 +83,8 @@ object NotificationParser {
             thread = thread,
             hasReply = reply != null,
             hasMarkRead = markRead != null,
-            hasContentIntent = notification.contentIntent != null
+            hasContentIntent = notification.contentIntent != null,
+            mediaSources = assigned.mediaSources
         )
     }
 
@@ -89,7 +93,9 @@ object NotificationParser {
         val timestamp: Long,
         val sender: String?,
         val fromMe: Boolean,
-        val attachment: Boolean
+        val attachment: Boolean,
+        val mediaUri: Uri? = null,
+        val mediaMimeType: String? = null
     )
 
     private fun buildDrafts(sbn: StatusBarNotification, style: NotificationCompat.MessagingStyle): List<Draft> {
@@ -97,6 +103,7 @@ object NotificationParser {
         return style.messages.map { message ->
             val text = cleanText(message.text)
             val dataUri = runCatching { message.dataUri }.getOrNull()
+            val dataMimeType = runCatching { message.dataMimeType }.getOrNull()
             val person = message.person
             val senderName = person
                 ?.name
@@ -113,34 +120,62 @@ object NotificationParser {
                 timestamp = message.timestamp.takeIf { it > 0 } ?: fallbackTimestamp,
                 sender = if (fromMe) null else (senderName ?: "Unknown"),
                 fromMe = fromMe,
-                attachment = dataUri != null
+                attachment = dataUri != null,
+                mediaUri = dataUri,
+                mediaMimeType = dataMimeType
             )
         }.sortedBy { it.timestamp }
     }
 
     /**
      * OpenBubbles posts a caption and an image as two entries with the same
-     * timestamp. The watch gets one compact message instead.
+     * timestamp. The watch gets one compact message instead. The image can
+     * appear before or after its caption depending on the OpenBubbles version.
      */
     private fun mergeCaptionAndImage(drafts: List<Draft>): List<Draft> {
         val merged = mutableListOf<Draft>()
         for (draft in drafts) {
             val previous = merged.lastOrNull()
-            if (draft.attachment && draft.text.isEmpty() && previous != null &&
-                !previous.attachment && previous.timestamp == draft.timestamp &&
+            if (previous != null &&
+                previous.timestamp == draft.timestamp &&
                 previous.sender == draft.sender
             ) {
-                merged[merged.lastIndex] = previous.copy(attachment = true)
-            } else {
-                merged += draft
+                if (draft.mediaUri != null && draft.text.isEmpty() &&
+                    !previous.attachment && previous.text.isNotEmpty()
+                ) {
+                    merged[merged.lastIndex] = previous.copy(
+                        attachment = true,
+                        mediaUri = draft.mediaUri,
+                        mediaMimeType = draft.mediaMimeType
+                    )
+                    continue
+                }
+                if (previous.attachment && previous.text.isEmpty() &&
+                    draft.mediaUri == null && draft.text.isNotEmpty()
+                ) {
+                    merged[merged.lastIndex] = draft.copy(
+                        attachment = true,
+                        mediaUri = previous.mediaUri,
+                        mediaMimeType = previous.mediaMimeType
+                    )
+                    continue
+                }
             }
+            merged += draft
         }
         return merged
     }
 
-    private fun assignIds(threadId: String, drafts: List<Draft>): List<WireMessage> {
+    private data class Assigned(
+        val messages: List<WireMessage>,
+        val mediaSources: Map<String, MediaSource>
+    )
+
+    private fun assignIds(threadId: String, drafts: List<Draft>): Assigned {
         val counts = mutableMapOf<String, Int>()
-        return drafts.map { draft ->
+        val messages = mutableListOf<WireMessage>()
+        val sources = mutableMapOf<String, MediaSource>()
+        drafts.forEach { draft ->
             val base = Protocol.messageId(
                 threadId = threadId,
                 timestamp = draft.timestamp,
@@ -150,7 +185,7 @@ object NotificationParser {
             val seen = (counts[base] ?: 0) + 1
             counts[base] = seen
             val id = if (seen == 1) base else "$base-$seen"
-            WireMessage(
+            val message = WireMessage(
                 id = id,
                 threadId = threadId,
                 text = draft.text,
@@ -159,7 +194,14 @@ object NotificationParser {
                 fromMe = draft.fromMe,
                 attachment = draft.attachment
             )
+            messages += message
+            if (draft.attachment) {
+                draft.mediaUri?.let { uri ->
+                    sources[id] = MediaSource(uri, draft.mediaMimeType)
+                }
+            }
         }
+        return Assigned(messages, sources)
     }
 
     /**

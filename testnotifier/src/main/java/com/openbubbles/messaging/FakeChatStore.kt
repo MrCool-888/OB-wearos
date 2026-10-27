@@ -19,12 +19,14 @@ object FakeChatStore {
         val text: String,
         val timestamp: Long,
         val sender: String?,
-        val attachment: Boolean = false
+        val attachment: Boolean = false,
+        val media: String? = null
     )
 
     private val chats = linkedMapOf(
         "fake-maya" to Chat("fake-maya", "Maya Chen", false, listOf("Maya Chen")),
-        "fake-family" to Chat("fake-family", "Family", true, listOf("Mom", "Dad", "Sam", "Me"))
+        "fake-family" to Chat("fake-family", "Family", true, listOf("Mom", "Dad", "Sam", "Me")),
+        "fake-media" to Chat("fake-media", "Riley Park", false, listOf("Riley Park"))
     )
 
     private val messages = ConcurrentHashMap<String, MutableList<Message>>()
@@ -48,6 +50,12 @@ object FakeChatStore {
                 Message("I can drive", now - 100 * 60_000L, "Sam"),
                 Message("I'll bring dessert", now - 90 * 60_000L, null),
                 Message("Amazing, see you Sunday x", now - 62 * 60_000L, "Mom")
+            )
+
+            "fake-media" -> listOf(
+                Message("Look at this view from the trail", now - 9 * 60_000L, "Riley Park", media = "test-photo.png"),
+                Message("And this one moves", now - 6 * 60_000L, "Riley Park", media = "test-anim.gif"),
+                Message("Sending one back later", now - 2 * 60_000L, null)
             )
 
             else -> emptyList()

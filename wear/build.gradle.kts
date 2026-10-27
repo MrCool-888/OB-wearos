@@ -21,8 +21,8 @@ android {
         applicationId = "com.openbubbles.wear"
         minSdk = 30
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -88,6 +88,9 @@ dependencies {
     implementation("androidx.wear:wear-input:1.2.0")
 
     implementation("com.google.android.gms:play-services-wearable:19.0.0")
+
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-gif:2.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

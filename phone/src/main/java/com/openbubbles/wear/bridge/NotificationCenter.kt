@@ -27,6 +27,7 @@ object NotificationCenter {
     private lateinit var prefs: BridgePreferences
     private lateinit var store: BridgeStore
     private lateinit var contentIntents: PendingIntentStore
+    private lateinit var mediaCache: MediaCache
 
     private val liveByKey = ConcurrentHashMap<String, Live>()
     private val liveByThread = ConcurrentHashMap<String, Live>()
@@ -62,6 +63,7 @@ object NotificationCenter {
             prefs = BridgePreferences(appContext)
             store = BridgeStore(appContext)
             contentIntents = PendingIntentStore(appContext)
+            mediaCache = MediaCache(appContext)
             initialized = true
         }
     }
@@ -114,7 +116,13 @@ object NotificationCenter {
             ?.timestamp
             ?: 0L
         val unread = latestTimestamp > 0L && latestTimestamp > prefs.readAt(live.threadId)
-        val incoming = parsed.thread.copy(unread = unread)
+        val existing = store.get(parsed.thread.id)
+        val parsedWithMedia = runCatching {
+            mediaCache.ingest(parsed.thread, parsed.mediaSources, previous = existing)
+        }.onFailure {
+            Log.w(TAG, "Unable to cache media for ${parsed.thread.id}", it)
+        }.getOrDefault(parsed.thread)
+        val incoming = parsedWithMedia.copy(unread = unread)
         val incomingAddress = Protocol.normalizeAddress(incoming.address)
         val temporary = if (!incoming.isGroup && incomingAddress != null) {
             store.snapshot().firstOrNull { existing ->
@@ -198,6 +206,7 @@ object NotificationCenter {
                 Protocol.PATH_SYNC,
                 Wire.encodeBytes(payload)
             )
+            pruneMedia(threads)
             prefs.lastPublishAt = System.currentTimeMillis()
         }
     }
@@ -216,6 +225,7 @@ object NotificationCenter {
             WatchLink.putSync(appContext, payload)
             threads.forEach { WatchLink.putThread(appContext, it) }
             WatchLink.pruneThreads(appContext, threads.map { it.id }.toSet())
+            pruneMedia(threads)
             prefs.lastPublishAt = System.currentTimeMillis()
         }
     }
@@ -501,6 +511,8 @@ object NotificationCenter {
         init(context)
         store.clear()
         contentIntents.clear()
+        mediaCache.clear()
+        WatchLink.clearMedia(appContext)
         liveByKey.clear()
         liveByThread.clear()
         prefs.clearCachedMessages()
@@ -508,6 +520,38 @@ object NotificationCenter {
 
     fun automationAvailable(): Boolean =
         initialized && BridgeInfo.hasAutomationAccess(appContext)
+
+    fun mediaCount(context: Context): Int {
+        init(context)
+        return mediaCache.count()
+    }
+
+    /**
+     * Publishes one cached attachment as a Data Layer asset. The watch imports
+     * it from the resulting data-item event.
+     */
+    fun media(mediaId: String, callback: (MediaInfo?, String?) -> Unit) {
+        if (!initialized) {
+            callback(null, "The bridge is still starting.")
+            return
+        }
+        if (!prefs.relayEnabled) {
+            callback(null, "Relay is paused on the phone.")
+            return
+        }
+        val info = mediaCache.info(mediaId)
+        if (info == null) {
+            callback(null, "This photo is no longer cached on the phone.")
+            return
+        }
+        WatchLink.publishMedia(appContext, info) { error ->
+            if (error == null) {
+                callback(info, null)
+            } else {
+                callback(null, error)
+            }
+        }
+    }
 
     private fun buildSync(threads: List<WireThread>): SyncPayload = SyncPayload(
         generatedAt = System.currentTimeMillis(),
@@ -536,6 +580,14 @@ object NotificationCenter {
         scheduleSync()
     }
 
+    private fun pruneMedia(threads: List<WireThread>) {
+        val mediaIds = threads
+            .flatMap { thread -> thread.messages.mapNotNull { it.mediaId } }
+            .toSet()
+        mediaCache.prune(mediaIds)
+        WatchLink.pruneMedia(appContext, mediaIds)
+    }
+
     private fun publishThreadUpdate(thread: WireThread) {
         if (!initialized || !prefs.relayEnabled) return
         WatchLink.putThread(appContext, thread)
@@ -558,6 +610,7 @@ object NotificationCenter {
         val payload = buildSync(threads)
         WatchLink.putSync(appContext, payload)
         WatchLink.pruneThreads(appContext, threads.map { it.id }.toSet())
+        pruneMedia(threads)
         WatchLink.broadcast(
             appContext,
             Protocol.PATH_SYNC,

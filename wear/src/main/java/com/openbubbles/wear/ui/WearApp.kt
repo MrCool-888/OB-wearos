@@ -13,12 +13,13 @@ import androidx.wear.compose.material3.MaterialTheme
 import com.openbubbles.wear.WatchRepository
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "1.1.0"
+const val WATCH_APP_VERSION = "1.2.0"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
     data class Chat(val threadId: String) : WearScreen
     data class Composer(val threadId: String) : WearScreen
+    data class Media(val threadId: String, val mediaId: String) : WearScreen
     data object NewMessage : WearScreen
     data object Settings : WearScreen
 }
@@ -77,7 +78,16 @@ fun WearApp() {
                 onReply = { push(WearScreen.Composer(screen.threadId)) },
                 onOpenPhone = { WatchRepository.openOnPhone(screen.threadId) },
                 onLoadOlder = { WatchRepository.loadOlder(screen.threadId) },
+                onOpenMedia = { mediaId ->
+                    push(WearScreen.Media(screen.threadId, mediaId))
+                },
                 onDismissNotice = { WatchRepository.clearNotices() }
+            )
+
+            is WearScreen.Media -> MediaViewerScreen(
+                state = state,
+                mediaId = screen.mediaId,
+                onBack = { pop() }
             )
 
             WearScreen.NewMessage -> NewMessageScreen(
