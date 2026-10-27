@@ -175,6 +175,12 @@ private fun BridgeScreen() {
                 )
             }
             item {
+                AutomationCard(
+                    state = state,
+                    onOpenAutomation = { openAutomationSettings(context) }
+                )
+            }
+            item {
                 RelayCard(
                     enabled = state.relayEnabled,
                     onToggle = { enabled ->
@@ -323,6 +329,80 @@ private fun SetupCard(
 }
 
 @Composable
+private fun AutomationCard(
+    state: BridgeUiState,
+    onOpenAutomation: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Send without a notification",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "Optional accessibility service",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Icon(
+                    imageVector = if (state.automationAvailable) {
+                        Icons.Filled.CheckCircle
+                    } else {
+                        Icons.Filled.Settings
+                    },
+                    contentDescription = null,
+                    tint = if (state.automationAvailable) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                if (state.automationAvailable) {
+                    "On. The watch can start new chats and send in chats whose notification is gone. It can also load older messages."
+                } else {
+                    "Turn this on to start chats, send in chats that aren't notifying, and load older messages. Replies to live notifications work without it."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.automationAvailable) {
+                    TextButton(onClick = onOpenAutomation) {
+                        Text("Automation settings")
+                    }
+                } else {
+                    Button(onClick = onOpenAutomation) {
+                        Icon(
+                            Icons.Filled.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Enable automation")
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "It only operates OpenBubbles' own screens. Messages are still sent and encrypted by OpenBubbles, and no account data is copied.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 private fun RelayCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
@@ -426,10 +506,11 @@ private fun LimitationsCard() {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Bullet("Conversations appear only after OpenBubbles posts a notification for them.")
-            Bullet("Muted chats, hidden alerts and history older than the notification cache may not appear.")
+            Bullet("Conversations appear after OpenBubbles posts a notification for them.")
+            Bullet("With automation on, the watch can also start chats and open a chat whose notification is gone.")
+            Bullet("Muted chats and hidden alerts may not appear until you send or receive in them.")
             Bullet("Photo attachments show as a placeholder; media is not copied to the watch.")
-            Bullet("Replies and mark-read use OpenBubbles' own notification actions, so your normal account and encryption are preserved.")
+            Bullet("Replies, automation sends and mark-read all go through OpenBubbles, so your normal account and encryption are preserved.")
         }
     }
 }
@@ -523,6 +604,12 @@ private fun Bullet(text: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+private fun openAutomationSettings(context: Context) {
+    runCatching {
+        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 }
 
