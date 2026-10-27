@@ -90,17 +90,18 @@ object ShizukuSetup {
         if (automationGranted(context)) {
             return StepResult(true, "Automation is already on.")
         }
-        val component = ComponentName(
+        val target = ComponentName(
             context,
             OpenBubblesAutomationService::class.java
-        ).flattenToString()
+        )
+        val component = target.flattenToString()
         val current = readSecure("enabled_accessibility_services")
             ?: return StepResult(false, "Shizuku could not read accessibility settings.")
         val parts = current.split(':')
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .toMutableList()
-        if (component !in parts) {
+        if (parts.none { PermissionComponents.matches(it, target) }) {
             parts += component
             val written = writeSecure(
                 "enabled_accessibility_services",

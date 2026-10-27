@@ -1,10 +1,13 @@
 package com.openbubbles.wear.bridge
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -287,7 +290,15 @@ private fun BridgeScreen() {
                         setupNoticeFailed = false
                         refreshState()
                     },
-                    onOpenBatterySettings = { openBatterySettings(context) }
+                    onOpenBatterySettings = { openBatterySettings(context) },
+                    onCopyDiagnostics = {
+                        scope.launch {
+                            val report = withContext(Dispatchers.IO) { BridgeDiagnostics.create(context, state) }
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                .setPrimaryClip(ClipData.newPlainText("OpenBubbles Wear permissions", report))
+                            Toast.makeText(context, "Permission diagnostics copied (no messages or contacts).", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 )
             }
             item {
@@ -369,13 +380,27 @@ private fun SetupCard(
             Spacer(Modifier.height(10.dp))
             StatusRow(
                 ok = state.notificationAccess,
-                title = "Notification access",
+                title = "Read OpenBubbles notifications",
                 detail = if (state.notificationAccess) {
                     "Granted. The bridge can read chat notifications."
                 } else {
                     "Required. Use Notification access below, not the ordinary app-notification permission. If Android blocks it, open the help steps."
                 }
             )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "App info → Notifications controls alerts posted by this phone app, not access to OpenBubbles messages. The bridge does not post phone alerts, so that screen may say Blocked with a grey switch. Use the Notification access button below. Watch alerts are configured on the watch.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (state.legacyBridgeInstalled) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "The old bridge is also installed. This version uses com.openbubbles.wear. Remove only the old com.openbubbles.wear.bridge installation so you do not enable the wrong service. Do not uninstall OpenBubbles.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             Spacer(Modifier.height(10.dp))
             StatusRow(
                 ok = state.watchesConnected > 0,
@@ -427,12 +452,13 @@ private fun NotificationAccessHelpDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Unblock notification access") },
+        title = { Text("Notification access help") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Text("If App info → Notifications says Blocked and its switch is grey, that is NOT notification-listener access. This bridge does not post phone alerts. First use Open Notification access below; do not change system security settings just to enable ordinary phone alerts.")
                 Text("Android 13+ can block notification access for apps installed from APKs. This is called Restricted settings; allowing ordinary notifications does not remove it.")
                 Text("1. Open Notification access below and try the bridge's switch once. Dismiss any Restricted settings warning.")
                 Text("2. Open App info below. Tap ⋮ at the top right → Allow restricted settings and confirm with your PIN or fingerprint. This option may only appear after step 1.")
@@ -601,13 +627,9 @@ private fun ShizukuCard(
                     )
                     Spacer(Modifier.height(8.dp))
                     StatusRow(
-                        ok = state.automationAvailable,
+                        ok = state.automationEnabled,
                         title = "Accessibility automation",
-                        detail = if (state.automationAvailable) {
-                            "On. New chats and older history are available."
-                        } else {
-                            "Off. Replies to live notifications still work."
-                        }
+                        detail = state.automationStatus
                     )
                     Spacer(Modifier.height(8.dp))
                     StatusRow(
@@ -622,7 +644,7 @@ private fun ShizukuCard(
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (!state.notificationAccess ||
-                            !state.automationAvailable ||
+                            !state.automationEnabled ||
                             !state.batteryUnrestricted
                         ) {
                             Button(onClick = onRunSetup, enabled = !busy) {
@@ -674,13 +696,13 @@ private fun AutomationCard(
                 }
                 Spacer(Modifier.width(12.dp))
                 Icon(
-                    imageVector = if (state.automationAvailable) {
+                    imageVector = if (state.automationEnabled) {
                         Icons.Filled.CheckCircle
                     } else {
                         Icons.Filled.Settings
                     },
                     contentDescription = null,
-                    tint = if (state.automationAvailable) {
+                    tint = if (state.automationEnabled) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -690,8 +712,8 @@ private fun AutomationCard(
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                if (state.automationAvailable) {
-                    "On. The watch can start new chats and send in chats whose notification is gone. It can also load older messages."
+                if (state.automationEnabled) {
+                    state.automationStatus
                 } else {
                     "Turn this on to start chats, send in chats that aren't notifying, and load older messages. Replies to live notifications work without it."
                 },
@@ -700,7 +722,7 @@ private fun AutomationCard(
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.automationAvailable) {
+                if (state.automationEnabled) {
                     TextButton(onClick = onOpenAutomation) {
                         Text("Automation settings")
                     }
@@ -760,7 +782,8 @@ private fun SyncCard(
     refreshing: Boolean,
     onSync: () -> Unit,
     onReconnectListener: () -> Unit,
-    onOpenBatterySettings: () -> Unit
+    onOpenBatterySettings: () -> Unit,
+    onCopyDiagnostics: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
@@ -771,6 +794,7 @@ private fun SyncCard(
             )
             Spacer(Modifier.height(12.dp))
             InfoRow("Phone", state.phoneName)
+            InfoRow("Android", "${android.os.Build.VERSION.RELEASE} / API ${android.os.Build.VERSION.SDK_INT}")
             InfoRow("Tracked chats", state.trackedConversations.toString())
             InfoRow("Cached photos", state.cachedMedia.toString())
             InfoRow(
@@ -794,6 +818,14 @@ private fun SyncCard(
                     state.listenerConnected -> "Connected"
                     state.notificationAccess -> "Reconnecting…"
                     else -> "Notification access off"
+                }
+            )
+            InfoRow(
+                "Accessibility service",
+                when {
+                    state.automationAvailable -> "Connected"
+                    state.automationEnabled -> "Enabled; not connected"
+                    else -> "Off"
                 }
             )
             InfoRow(
@@ -827,6 +859,9 @@ private fun SyncCard(
                 TextButton(onClick = onOpenBatterySettings) {
                     Text("Battery settings")
                 }
+            }
+            TextButton(onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                Text("Copy permission diagnostics")
             }
             Spacer(Modifier.height(4.dp))
             HorizontalDivider()
@@ -894,7 +929,11 @@ private fun Footer(state: BridgeUiState) {
         horizontalArrangement = Arrangement.Center
     ) {
         Text(
-            if (state.openBubblesInstalled) "Ready for OpenBubbles notifications" else "OpenBubbles not detected",
+            when {
+                !state.openBubblesInstalled -> "OpenBubbles not detected"
+                !state.notificationAccess -> "Enable notification-listener access above"
+                else -> "Ready for OpenBubbles notifications"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

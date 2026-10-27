@@ -544,7 +544,12 @@ object NotificationCenter {
     }
 
     fun automationAvailable(): Boolean =
-        initialized && BridgeInfo.hasAutomationAccess(appContext)
+        initialized && BridgeInfo.isAutomationReady(appContext)
+
+    fun onAutomationConnectionChanged(context: Context) {
+        init(context)
+        scheduleSync()
+    }
 
     fun mediaCount(context: Context): Int {
         init(context)
