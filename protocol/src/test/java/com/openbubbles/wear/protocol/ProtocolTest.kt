@@ -127,6 +127,82 @@ class ProtocolTest {
     }
 
     @Test
+    fun addressNormalizationMatchesNotificationsAndTypedAddresses() {
+        assertEquals("+15551234567", Protocol.normalizeAddress("tel:+1 (555) 123-4567"))
+        assertEquals("+15551234567", Protocol.normalizeAddress("iMessage;-;+1 (555) 123-4567"))
+        assertEquals("alice@example.com", Protocol.normalizeAddress("mailto:Alice@Example.com"))
+        assertEquals("alice@example.com", Protocol.normalizeAddress(" ALICE@EXAMPLE.COM "))
+        assertNull(Protocol.normalizeAddress(""))
+        assertNull(Protocol.normalizeAddress("not-an-address"))
+        assertEquals("new:+15551234567", Protocol.newThreadId("+1 555 123 4567"))
+        assertEquals(
+            Protocol.newThreadId("alice@example.com"),
+            Protocol.newThreadId("mailto:Alice@Example.com")
+        )
+    }
+
+    @Test
+    fun sendAndHistoryPayloadsRoundTrip() {
+        val send = SendRequest(
+            requestId = "r1",
+            threadId = "new:+15551234567",
+            address = "+15551234567",
+            title = "Alice",
+            text = "Hello",
+            sentAt = 5L
+        )
+        assertEquals(send, Wire.decode<SendRequest>(Wire.encode(send)))
+
+        val history = HistoryPayload(
+            requestId = "r2",
+            threadId = "t1",
+            messages = listOf(WireMessage("m1", "t1", "Old", 3L, sender = "Alice")),
+            hasMore = true
+        )
+        assertEquals(history, Wire.decode<HistoryPayload>(Wire.encode(history)))
+    }
+
+    @Test
+    fun transportTrimmingKeepsNewestMessages() {
+        val messages = (1..40).map { index ->
+            WireMessage(
+                id = "m$index",
+                threadId = "t",
+                text = "x".repeat(400) + index,
+                timestamp = index.toLong()
+            )
+        }
+        val thread = WireThread(id = "t", title = "Alice", messages = messages, updatedAt = 40L)
+        val trimmed = Wire.threadForTransport(thread, maxBytes = 6_000)
+        assertTrue(trimmed.messages.size < messages.size)
+        assertTrue(trimmed.messages.isNotEmpty())
+        assertEquals(messages.last().id, trimmed.messages.last().id)
+        assertTrue(Wire.encode(trimmed).toByteArray().size <= 6_000)
+    }
+
+    @Test
+    fun summaryCarriesAutomationFields() {
+        val thread = WireThread(
+            id = "t",
+            title = "Alice",
+            address = "alice@example.com",
+            canSend = true
+        )
+        val summary = thread.toSummary()
+        assertEquals("alice@example.com", summary.address)
+        assertTrue(summary.canSend)
+        assertTrue(
+            SyncPayload(
+                generatedAt = 1L,
+                phoneName = "Pixel",
+                bridgeVersion = "1.1.0",
+                notificationAccess = true,
+                automationAvailable = true
+            ).automationAvailable
+        )
+    }
+
+    @Test
     fun defaultQuickRepliesAreNotSerializedAway() {
         val pong = PongPayload()
         val decoded = Wire.decode<PongPayload>(Wire.encode(pong))

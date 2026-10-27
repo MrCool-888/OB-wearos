@@ -143,6 +143,10 @@ fun SettingsScreen(
                             if (state.relayEnabled) "On" else "Paused"
                         )
                         InfoRow(
+                            "Automation",
+                            if (state.automationAvailable) "On" else "Off"
+                        )
+                        InfoRow(
                             "Last sync",
                             if (state.lastSyncAt > 0L) relativeTime(state.lastSyncAt) else "Never"
                         )
@@ -200,9 +204,10 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         AboutLine("Chats appear once OpenBubbles posts a notification for them.")
-                        AboutLine("Muted chats, hidden alerts and old history may be missing.")
+                        AboutLine("Enable automation on the phone to start new chats, send in quiet chats and load older messages.")
+                        AboutLine("Muted chats and hidden alerts may be missing until you use them.")
                         AboutLine("Photos show as a placeholder. Media isn't copied to the watch.")
-                        AboutLine("Replies and mark-read use OpenBubbles' own notification actions, so your account and encryption stay on the phone.")
+                        AboutLine("Everything is sent by OpenBubbles on the phone, so your account and encryption stay there.")
                     }
                 }
 

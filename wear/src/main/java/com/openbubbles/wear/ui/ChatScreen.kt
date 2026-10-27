@@ -51,13 +51,16 @@ fun ChatScreen(
     onBack: () -> Unit,
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
+    onLoadOlder: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val messages = thread?.messages.orEmpty()
+    val newestMessageId = messages.lastOrNull()?.id
     val listState = rememberScalingLazyListState()
     val requesting = threadId in state.requestingThreads
+    val canSend = thread?.canSend == true || summary?.canSend == true
 
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val isGroup = thread?.isGroup ?: summary?.isGroup ?: false
@@ -65,9 +68,14 @@ fun ChatScreen(
 
     LaunchedEffect(threadId) {
         WatchRepository.requestThread(threadId)
-    }
-    LaunchedEffect(threadId, messages.size) {
         if (messages.isNotEmpty()) {
+            runCatching { listState.scrollToItem(messages.size + 1) }
+        }
+    }
+    // Loading older messages prepends items without changing the newest ID, so
+    // only a new message should pull the list back to the bottom.
+    LaunchedEffect(newestMessageId) {
+        if (newestMessageId != null) {
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
@@ -136,7 +144,8 @@ fun ChatScreen(
                         state = state,
                         thread = thread,
                         hasSummary = summary != null,
-                        requesting = requesting
+                        requesting = requesting,
+                        canSend = canSend
                     )
                 }
 
@@ -190,9 +199,12 @@ fun ChatScreen(
                     ChatActions(
                         state = state,
                         thread = thread,
+                        threadId = threadId,
                         requesting = requesting,
+                        canSend = canSend,
                         onReply = onReply,
                         onOpenPhone = onOpenPhone,
+                        onLoadOlder = onLoadOlder,
                         onRefresh = { WatchRepository.requestThread(threadId) },
                         onMarkRead = { WatchRepository.markRead(threadId) }
                     )
@@ -207,7 +219,8 @@ private fun ChatStatus(
     state: WatchState,
     thread: WireThread?,
     hasSummary: Boolean,
-    requesting: Boolean
+    requesting: Boolean,
+    canSend: Boolean
 ) {
     val scheme = MaterialTheme.colorScheme
     val color: Color
@@ -232,10 +245,16 @@ private fun ChatStatus(
             detail = "Showing the last messages cached on the watch."
         }
 
+        canSend && !thread.canReply -> {
+            color = scheme.primary
+            title = "Send through your phone"
+            detail = "No live reply action. The phone will open this chat in OpenBubbles to send."
+        }
+
         !thread.notificationActive -> {
             color = scheme.tertiary
             title = "History only"
-            detail = "Open this chat in OpenBubbles on the phone to load reply actions."
+            detail = "Enable automation in the bridge app to send in this chat."
         }
 
         !thread.canReply -> {
@@ -342,21 +361,66 @@ private fun MessageBubble(
 private fun ChatActions(
     state: WatchState,
     thread: WireThread?,
+    threadId: String,
     requesting: Boolean,
+    canSend: Boolean,
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
+    onLoadOlder: () -> Unit,
     onRefresh: () -> Unit,
     onMarkRead: () -> Unit
 ) {
     val canReply = thread?.canReply == true
     val canMarkRead = thread?.canMarkRead == true
+    val sending = threadId in state.sendingThreads
+    val loadingHistory = threadId in state.loadingHistory
+    val historyExhausted = threadId in state.historyExhausted
+    val canLoadHistory = state.automationAvailable &&
+        thread?.messages?.isNotEmpty() == true &&
+        state.phoneOnline &&
+        state.relayEnabled
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Button(
             onClick = onReply,
-            enabled = canReply,
+            enabled = (canReply || canSend) && state.phoneOnline && !sending,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (canReply) "Reply" else "Reply unavailable")
+            Text(
+                when {
+                    sending -> "Sending…"
+                    canReply -> "Reply"
+                    canSend -> "Send message"
+                    else -> "Reply unavailable"
+                }
+            )
+        }
+
+        if (canSend && !canReply) {
+            Text(
+                text = "The phone will open this chat in OpenBubbles to send.",
+                style = MaterialTheme.typography.bodyExtraSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+
+        if (state.automationAvailable) {
+            if (historyExhausted) {
+                Text(
+                    text = "No older messages",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            } else {
+                FilledTonalButton(
+                    onClick = onLoadOlder,
+                    enabled = canLoadHistory && !loadingHistory,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (loadingHistory) "Loading older…" else "Load older messages")
+                }
+            }
         }
 
         if (canMarkRead) {

@@ -54,9 +54,10 @@ fun ComposerScreen(
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val title = thread?.title ?: summary?.title ?: "Conversation"
-    val canReply = (thread?.canReply ?: summary?.canReply) == true &&
-        state.phoneOnline &&
-        state.relayEnabled
+    val canReply = (thread?.canReply ?: summary?.canReply) == true
+    val canSend = (thread?.canSend ?: summary?.canSend) == true
+    val enabled = (canReply || canSend) && state.phoneOnline && state.relayEnabled
+    val sending = threadId in state.sendingThreads
     val listState = rememberScalingLazyListState()
     var voiceError by remember { mutableStateOf<String?>(null) }
 
@@ -125,7 +126,16 @@ fun ComposerScreen(
                 }
 
                 item {
-                    SectionHeader("Reply")
+                    SectionHeader(if (canReply) "Reply" else "Message")
+                }
+
+                if (sending) {
+                    item {
+                        NoticeCard(
+                            message = "Sending through OpenBubbles on your phone…",
+                            isError = false
+                        )
+                    }
                 }
 
                 val notice = state.error ?: state.info
@@ -147,18 +157,18 @@ fun ComposerScreen(
                         )
                     }
                 }
-                if (!canReply) {
+                if (!enabled) {
                     item {
                         NoticeCard(
                             message = when {
                                 !state.relayEnabled ->
-                                    "Relay is paused on the phone. Resume it in the bridge app to reply."
+                                    "Relay is paused on the phone. Resume it in the bridge app to send."
 
                                 !state.phoneOnline ->
-                                    "The phone isn't reachable, so replies can't be sent right now."
+                                    "The phone isn't reachable, so messages can't be sent right now."
 
                                 else ->
-                                    "Open this chat in OpenBubbles on the phone to make reply actions available."
+                                    "Enable automation in the bridge app to send in this chat without a live notification."
                             },
                             isError = false
                         )
@@ -175,7 +185,7 @@ fun ComposerScreen(
                                 WatchRepository.sendReply(threadId, reply)
                                 onSent()
                             },
-                            enabled = canReply,
+                            enabled = enabled && !sending,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(reply)
@@ -186,10 +196,10 @@ fun ComposerScreen(
                 item {
                     FilledTonalButton(
                         onClick = { launchVoiceInput() },
-                        enabled = canReply,
+                        enabled = enabled && !sending,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Speak or type a reply")
+                        Text(if (canReply) "Speak or type a reply" else "Speak or type a message")
                     }
                 }
 

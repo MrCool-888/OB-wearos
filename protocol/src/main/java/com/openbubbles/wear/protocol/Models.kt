@@ -32,6 +32,9 @@ data class WireThread(
     val notificationActive: Boolean = false,
     val canReply: Boolean = false,
     val canMarkRead: Boolean = false,
+    val canSend: Boolean = false,
+    /** Phone number or email address for a one-to-one chat, when available. */
+    val address: String? = null,
     val updatedAt: Long = 0L
 ) {
     fun latestMessage(): WireMessage? = messages.maxByOrNull { it.timestamp }
@@ -50,10 +53,12 @@ data class WireThread(
             notificationActive = notificationActive,
             canReply = canReply,
             canMarkRead = canMarkRead,
+            canSend = canSend,
             lastTimestamp = latest?.timestamp ?: updatedAt,
             lastPreview = latest?.displayText ?: "",
             messageCount = messages.size,
-            participants = participants
+            participants = participants,
+            address = address
         )
     }
 }
@@ -67,10 +72,12 @@ data class ThreadSummary(
     val notificationActive: Boolean = false,
     val canReply: Boolean = false,
     val canMarkRead: Boolean = false,
+    val canSend: Boolean = false,
     val lastTimestamp: Long = 0L,
     val lastPreview: String = "",
     val messageCount: Int = 0,
-    val participants: List<String> = emptyList()
+    val participants: List<String> = emptyList(),
+    val address: String? = null
 )
 
 @Serializable
@@ -81,6 +88,7 @@ data class SyncPayload(
     val bridgeVersion: String,
     val notificationAccess: Boolean,
     val relayEnabled: Boolean = true,
+    val automationAvailable: Boolean = false,
     val conversations: List<ThreadSummary> = emptyList()
 )
 
@@ -127,6 +135,7 @@ data class PongPayload(
     val bridgeVersion: String = "",
     val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
+    val automationAvailable: Boolean = false,
     val trackedConversations: Int = 0,
     val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES
 )
@@ -154,6 +163,45 @@ data class OpenPhoneRequest(
     val requestId: String,
     val threadId: String? = null,
     val sentAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Sends a message through OpenBubbles' own compose UI. This is used when the
+ * conversation has no live notification (and therefore no reply action), or
+ * when starting a brand-new conversation.
+ */
+@Serializable
+data class SendRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String? = null,
+    val address: String? = null,
+    val title: String? = null,
+    val text: String,
+    val sentAt: Long = System.currentTimeMillis()
+)
+
+/** Asks the phone to scroll OpenBubbles' UI and return older messages. */
+@Serializable
+data class HistoryRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String,
+    val title: String? = null,
+    val address: String? = null,
+    val limit: Int = 100,
+    val sentAt: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class HistoryPayload(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String,
+    val messages: List<WireMessage> = emptyList(),
+    val hasMore: Boolean = false,
+    val error: String? = null,
+    val completedAt: Long = System.currentTimeMillis()
 )
 
 @Serializable

@@ -63,7 +63,13 @@ object WatchLink {
     }
 
     fun putThread(context: Context, thread: WireThread) {
-        putJson(context, Protocol.threadDataPath(thread.id), Wire.encode(thread), recordUri = true)
+        val transport = Wire.threadForTransport(thread)
+        putJson(
+            context,
+            Protocol.threadDataPath(thread.id),
+            Wire.encode(transport),
+            recordUri = true
+        )
     }
 
     private fun putJson(context: Context, path: String, json: String, recordUri: Boolean) {

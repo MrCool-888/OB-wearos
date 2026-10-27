@@ -13,16 +13,20 @@ import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.ThreadPayload
 import com.openbubbles.wear.protocol.UpdatePayload
 import com.openbubbles.wear.protocol.Wire
+import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 object NotificationCenter {
     private const val TAG = "OBWearCenter"
+    private const val MAX_SEND_LENGTH = 800
 
     private var initialized = false
     private lateinit var appContext: Context
     private lateinit var prefs: BridgePreferences
     private lateinit var store: BridgeStore
+    private lateinit var contentIntents: PendingIntentStore
 
     private val liveByKey = ConcurrentHashMap<String, Live>()
     private val liveByThread = ConcurrentHashMap<String, Live>()
@@ -37,6 +41,19 @@ object NotificationCenter {
         val parsed: NotificationParser.Parsed
     )
 
+    data class SendResult(
+        val threadId: String?,
+        val error: String?,
+        val message: WireMessage? = null
+    )
+
+    data class HistoryResult(
+        val threadId: String,
+        val messages: List<WireMessage> = emptyList(),
+        val hasMore: Boolean = false,
+        val error: String? = null
+    )
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
@@ -44,6 +61,7 @@ object NotificationCenter {
             appContext = context.applicationContext
             prefs = BridgePreferences(appContext)
             store = BridgeStore(appContext)
+            contentIntents = PendingIntentStore(appContext)
             initialized = true
         }
     }
@@ -89,6 +107,7 @@ object NotificationCenter {
         }
         liveByKey[sbn.key] = live
         liveByThread[live.threadId] = live
+        contentIntents.put(live.threadId, sbn.notification?.contentIntent)
 
         val latestTimestamp = parsed.thread.messages
             .lastOrNull { !it.fromMe }
@@ -96,7 +115,16 @@ object NotificationCenter {
             ?: 0L
         val unread = latestTimestamp > 0L && latestTimestamp > prefs.readAt(live.threadId)
         val incoming = parsed.thread.copy(unread = unread)
-        val stored = store.upsertIncoming(incoming)
+        val incomingAddress = Protocol.normalizeAddress(incoming.address)
+        val temporary = if (!incoming.isGroup && incomingAddress != null) {
+            store.snapshot().firstOrNull { existing ->
+                existing.id != incoming.id &&
+                    Protocol.normalizeAddress(existing.address) == incomingAddress
+            }
+        } else {
+            null
+        }
+        val stored = store.upsertIncoming(incoming, mergeFromId = temporary?.id)
         val decorated = decorate(stored)
         publishThreadUpdate(decorated)
         scheduleSync()
@@ -209,6 +237,7 @@ object NotificationCenter {
         bridgeVersion = BridgeInfo.BRIDGE_VERSION,
         notificationAccess = initialized && BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = initialized && prefs.relayEnabled,
+        automationAvailable = automationAvailable(),
         trackedConversations = if (initialized) store.snapshot().size else 0,
         quickReplies = if (initialized) prefs.quickReplies() else Protocol.DEFAULT_QUICK_REPLIES
     )
@@ -246,10 +275,188 @@ object NotificationCenter {
         return null
     }
 
+    /**
+     * Sends through OpenBubbles' notification action when a chat is live, or
+     * through the optional accessibility automation when its notification is
+     * gone. The callback runs on the caller's thread.
+     */
+    fun send(
+        requestId: String,
+        threadId: String?,
+        address: String?,
+        title: String?,
+        rawText: String,
+        callback: (SendResult) -> Unit
+    ) {
+        if (!initialized) {
+            callback(SendResult(threadId, "The bridge is still starting."))
+            return
+        }
+        if (!prefs.relayEnabled) {
+            callback(SendResult(threadId, "Relay is paused on the phone."))
+            return
+        }
+        val text = rawText.trim().take(MAX_SEND_LENGTH)
+        if (text.isBlank()) {
+            callback(SendResult(threadId, "The message is empty."))
+            return
+        }
+        val existing = threadId?.let { store.get(it) }
+        val normalizedAddress = Protocol.normalizeAddress(address)
+            ?: Protocol.normalizeAddress(existing?.address)
+            ?: address?.trim()?.takeIf { it.isNotBlank() }
+        val targetId = threadId
+            ?: normalizedAddress?.let { Protocol.newThreadId(it) }
+        if (targetId == null) {
+            callback(SendResult(null, "Enter a phone number or email address first."))
+            return
+        }
+        val displayTitle = title?.trim()?.takeIf { it.isNotBlank() }
+            ?: existing?.title?.takeIf { it.isNotBlank() }
+            ?: address?.trim()?.takeIf { it.isNotBlank() }
+            ?: "New chat"
+
+        val live = liveByThread[targetId]
+        val action = live?.let { NotificationActions.replyAction(it.sbn.notification) }
+        if (action != null) {
+            if (!NotificationActions.sendReply(appContext, action, text)) {
+                callback(
+                    SendResult(
+                        targetId,
+                        "OpenBubbles rejected the reply. Open the conversation on the phone and try again."
+                    )
+                )
+                return
+            }
+            prefs.markReadAt(targetId)
+            store.markRead(targetId)
+            recordSent(targetId, requestId, text)
+            publishAfterAction(targetId)
+            callback(SendResult(targetId, null))
+            return
+        }
+
+        if (!automationAvailable()) {
+            callback(
+                SendResult(
+                    targetId,
+                    "This chat isn't notifying. Enable the optional automation service in the bridge app to send without a notification."
+                )
+            )
+            return
+        }
+
+        OpenBubblesAutomation.send(
+            threadId = targetId,
+            title = displayTitle,
+            address = normalizedAddress ?: existing?.address,
+            text = text,
+            contentIntent = contentIntents.get(targetId)
+        ) { error ->
+            if (error != null) {
+                callback(SendResult(targetId, error))
+            } else {
+                prefs.markReadAt(targetId)
+                val message = recordSent(targetId, requestId, text)
+                val fallback = existing ?: WireThread(
+                    id = targetId,
+                    title = displayTitle,
+                    address = normalizedAddress,
+                    canSend = true
+                )
+                store.mergeHistory(targetId, listOfNotNull(message), fallback)
+                publishAfterAction(targetId)
+                callback(SendResult(targetId, null, message))
+            }
+        }
+    }
+
+    /**
+     * Records an optimistic outgoing message. Its "auto-" ID lets the store
+     * replace it when the same message arrives from a real notification.
+     */
+    private fun recordSent(threadId: String, requestId: String, text: String): WireMessage {
+        val now = System.currentTimeMillis()
+        val message = WireMessage(
+            id = BridgeStore.AUTO_MESSAGE_PREFIX + requestId,
+            threadId = threadId,
+            text = text,
+            timestamp = now,
+            fromMe = true,
+            status = "sent"
+        )
+        if (store.get(threadId) != null) {
+            store.mergeHistory(threadId, listOf(message))
+        }
+        return message
+    }
+
+    /**
+     * Uses OpenBubbles' own chat screen to scroll back through older bubbles.
+     * The callback runs on the caller's thread.
+     */
+    fun history(
+        threadId: String,
+        title: String?,
+        address: String?,
+        limit: Int,
+        callback: (HistoryResult) -> Unit
+    ) {
+        if (!initialized) {
+            callback(HistoryResult(threadId, error = "The bridge is still starting."))
+            return
+        }
+        if (!prefs.relayEnabled) {
+            callback(HistoryResult(threadId, error = "Relay is paused on the phone."))
+            return
+        }
+        if (!automationAvailable()) {
+            callback(
+                HistoryResult(
+                    threadId,
+                    error = "Older messages need the optional automation service. Enable it in the bridge app on the phone."
+                )
+            )
+            return
+        }
+        val existing = store.get(threadId)
+        val fallbackTitle = title?.trim()?.takeIf { it.isNotBlank() }
+            ?: address?.trim()?.takeIf { it.isNotBlank() }
+            ?: "Conversation"
+        val thread = existing ?: WireThread(
+            id = threadId,
+            title = fallbackTitle,
+            address = Protocol.normalizeAddress(address),
+            canSend = true
+        )
+        OpenBubblesAutomation.loadHistory(
+            thread = thread,
+            limit = limit,
+            contentIntent = contentIntents.get(threadId)
+        ) { outcome ->
+            if (outcome.messages.isNotEmpty()) {
+                store.mergeHistory(threadId, outcome.messages, thread)
+                publishAfterAction(threadId)
+            }
+            callback(
+                HistoryResult(
+                    threadId = threadId,
+                    messages = outcome.messages,
+                    hasMore = outcome.hasMore,
+                    error = outcome.error
+                )
+            )
+        }
+    }
+
     fun openPhone(threadId: String?): String? {
         if (!initialized) return "The bridge is still starting."
         val live = threadId?.let { liveByThread[it] }
         if (live != null && NotificationActions.openContentIntent(appContext, live.sbn.notification)) {
+            return null
+        }
+        val savedIntent = threadId?.let { contentIntents.get(it) }
+        if (savedIntent != null && runCatching { savedIntent.send() }.isSuccess) {
             return null
         }
         val packageName = live?.sbn?.packageName ?: BridgeInfo.openBubblesPackage(appContext)
@@ -293,10 +500,14 @@ object NotificationCenter {
     fun clearCache(context: Context) {
         init(context)
         store.clear()
+        contentIntents.clear()
         liveByKey.clear()
         liveByThread.clear()
         prefs.clearCachedMessages()
     }
+
+    fun automationAvailable(): Boolean =
+        initialized && BridgeInfo.hasAutomationAccess(appContext)
 
     private fun buildSync(threads: List<WireThread>): SyncPayload = SyncPayload(
         generatedAt = System.currentTimeMillis(),
@@ -304,15 +515,18 @@ object NotificationCenter {
         bridgeVersion = BridgeInfo.BRIDGE_VERSION,
         notificationAccess = BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = prefs.relayEnabled,
+        automationAvailable = automationAvailable(),
         conversations = threads.map { it.toSummary() }
     )
 
     private fun decorate(thread: WireThread): WireThread {
         val live = liveByThread[thread.id]
+        val canReply = live?.parsed?.hasReply == true
         return thread.copy(
             notificationActive = live != null,
-            canReply = live?.parsed?.hasReply == true,
-            canMarkRead = live?.parsed?.hasMarkRead == true
+            canReply = canReply,
+            canMarkRead = live?.parsed?.hasMarkRead == true,
+            canSend = canReply || automationAvailable()
         )
     }
 
@@ -328,7 +542,7 @@ object NotificationCenter {
         WatchLink.broadcast(
             appContext,
             Protocol.PATH_UPDATE,
-            Wire.encodeBytes(UpdatePayload(thread = thread))
+            Wire.encodeBytes(UpdatePayload(thread = Wire.threadForTransport(thread)))
         )
     }
 

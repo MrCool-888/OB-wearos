@@ -42,6 +42,7 @@ fun ConversationListScreen(
     state: WatchState,
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onNewMessage: () -> Unit,
     onSync: () -> Unit,
     onOpenPhone: () -> Unit,
     onDismissNotice: () -> Unit
@@ -113,6 +114,16 @@ fun ConversationListScreen(
                             summary = summary,
                             onClick = { onOpenThread(summary.id) }
                         )
+                    }
+                }
+
+                item {
+                    Button(
+                        onClick = onNewMessage,
+                        enabled = state.phoneOnline && state.relayEnabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("New message")
                     }
                 }
 

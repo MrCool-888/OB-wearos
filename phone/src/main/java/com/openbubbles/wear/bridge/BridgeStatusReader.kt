@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 data class BridgeUiState(
     val notificationAccess: Boolean = false,
     val openBubblesInstalled: Boolean = false,
+    val automationAvailable: Boolean = false,
     val relayEnabled: Boolean = true,
     val trackedConversations: Int = 0,
     val watchesConnected: Int = 0,
@@ -25,6 +26,7 @@ fun readBridgeUiState(context: Context): BridgeUiState {
     return BridgeUiState(
         notificationAccess = BridgeInfo.hasNotificationAccess(context),
         openBubblesInstalled = BridgeInfo.isOpenBubblesInstalled(context),
+        automationAvailable = BridgeInfo.hasAutomationAccess(context),
         relayEnabled = NotificationCenter.relayEnabled(context),
         trackedConversations = NotificationCenter.trackedCount(context),
         watchesConnected = reachableWatchCount(context),

@@ -1,13 +1,16 @@
 package com.openbubbles.wear.bridge
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationManagerCompat
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.0.0"
+    const val BRIDGE_VERSION = "1.1.0"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",
@@ -20,6 +23,21 @@ object BridgeInfo {
     fun hasNotificationAccess(context: Context): Boolean =
         NotificationManagerCompat.getEnabledListenerPackages(context)
             .contains(context.packageName)
+
+    /**
+     * Optional accessibility automation. It is only used for sending in chats
+     * without a live notification and for loading older messages. Normal
+     * replies still use OpenBubbles' notification actions.
+     */
+    fun hasAutomationAccess(context: Context): Boolean {
+        val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
+            as? AccessibilityManager ?: return false
+        val component = ComponentName(context, OpenBubblesAutomationService::class.java)
+        return runCatching {
+            manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .any { it.id == component.flattenToString() }
+        }.getOrDefault(false)
+    }
 
     @Suppress("DEPRECATION")
     fun isOpenBubblesInstalled(context: Context): Boolean =

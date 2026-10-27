@@ -16,7 +16,7 @@ import com.openbubbles.wear.protocol.WireThread
  */
 object NotificationParser {
     private const val TAG = "OBWearParser"
-    private const val MAX_TEXT_LENGTH = 1200
+    private const val MAX_TEXT_LENGTH = 800
 
     data class Parsed(
         val thread: WireThread,
@@ -57,6 +57,7 @@ object NotificationParser {
         val drafts = buildDrafts(sbn, style)
         val messages = assignIds(threadId, mergeCaptionAndImage(drafts))
         val participants = participants(isGroup, title, messages)
+        val address = if (isGroup) null else messageAddress(style)
 
         val reply = NotificationActions.replyAction(notification)
         val markRead = NotificationActions.markReadAction(notification)
@@ -71,6 +72,8 @@ object NotificationParser {
             notificationActive = true,
             canReply = reply != null,
             canMarkRead = markRead != null,
+            canSend = reply != null,
+            address = address,
             updatedAt = messages.lastOrNull()?.timestamp ?: sbn.postTime
         )
         return Parsed(
@@ -158,6 +161,17 @@ object NotificationParser {
             )
         }
     }
+
+    /**
+     * OpenBubbles attaches the handle of the other person as the MessagingStyle
+     * Person URI. That URI lets the bridge reopen the exact chat even after the
+     * notification shortcut is gone.
+     */
+    private fun messageAddress(style: NotificationCompat.MessagingStyle): String? =
+        style.messages.asSequence()
+            .mapNotNull { message -> message.person?.uri?.toString() }
+            .mapNotNull { uri -> Protocol.normalizeAddress(uri) }
+            .firstOrNull()
 
     private fun participants(
         isGroup: Boolean,

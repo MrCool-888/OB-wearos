@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenBubbles Wear Bridge</string>
+    <string name="accessibility_service_label">OpenBubbles Wear automation</string>
+    <string name="accessibility_service_description">Optional. Lets the watch send in conversations that are not currently notifying and load older messages. It only reads and taps OpenBubbles\' own screens; your account and encryption stay in OpenBubbles.</string>
 </resources>
