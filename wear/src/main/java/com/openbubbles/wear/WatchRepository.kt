@@ -19,7 +19,6 @@ import com.openbubbles.wear.protocol.OpenPhoneRequest
 import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.Protocol
-import com.openbubbles.wear.protocol.ReplyRequest
 import com.openbubbles.wear.protocol.SendRequest
 import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.SyncRequest
@@ -34,6 +33,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,6 +43,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class QueuedSend(
+    val requestId: String,
+    val threadId: String,
+    val text: String,
+    val address: String? = null,
+    val title: String? = null,
+    val useReply: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val attempts: Int = 0
+)
 
 data class WatchMedia(
     val id: String,
@@ -78,10 +92,18 @@ data class WatchState(
     val loadingHistory: Set<String> = emptySet(),
     val historyExhausted: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
+    val queuedSends: List<QueuedSend> = emptyList(),
+    val alertsEnabled: Boolean = true,
+    val notificationPermission: Boolean = true,
+    val visibleThreadId: String? = null,
     val error: String? = null,
     val info: String? = null
 ) {
     val phoneOnline: Boolean get() = connected || reachable
+    val queuedCount: Int get() = queuedSends.size
+    val canPostNotifications: Boolean get() = alertsEnabled && notificationPermission
+
+    fun queuedFor(threadId: String): Boolean = queuedSends.any { it.threadId == threadId }
 }
 
 object WatchRepository {
@@ -100,6 +122,10 @@ object WatchRepository {
     private const val KEY_PHONE_GENERATED = "phone_generated"
     private const val KEY_READ_AT = "read_at:"
     private const val KEY_MEDIA_PREFIX = "media:"
+    private const val KEY_QUEUE = "send_queue"
+    private const val KEY_ALERTS_ENABLED = "alerts_enabled"
+    private const val KEY_NOTIFY_BASELINE = "notify_baseline"
+    private const val KEY_NOTIFIED_AT = "notified_at:"
     private const val LOCAL_PREFIX = "local-"
     private const val AUTO_PREFIX = "auto-"
     private const val NEW_THREAD_PREFIX = "new:"
@@ -113,6 +139,8 @@ object WatchRepository {
     private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
     private const val MAX_REPLY_LENGTH = 800
     private const val HISTORY_PAGE_SIZE = 60
+    private const val MAX_QUEUE = 100
+    private const val QUEUE_DISPATCH_TIMEOUT_MS = 20_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(WatchState())
@@ -121,6 +149,8 @@ object WatchRepository {
     private var initialized = false
     private var lastSyncRequestAt = 0L
     private var dataLayerRestoreStarted = false
+    @Volatile
+    private var queueFlushing = false
     private val pendingSends = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile
     private var appContext: Context? = null
@@ -142,10 +172,13 @@ object WatchRepository {
             ?.let { Wire.decode<List<String>>(it) }
             ?: Protocol.DEFAULT_QUICK_REPLIES
         val media = loadMedia(prefs, app)
+        val queued = loadQueue(prefs)
+        val reconciledThreads = reconcileQueuedMessages(threads, queued)
+        ensureNotificationBaseline(prefs, reconciledThreads, conversations)
         _state.value = WatchState(
             loading = false,
             conversations = conversations,
-            threads = threads,
+            threads = reconciledThreads,
             media = media,
             phoneName = prefs.getString(KEY_PHONE_NAME, "").orEmpty(),
             bridgeVersion = prefs.getString(KEY_BRIDGE_VERSION, "").orEmpty(),
@@ -155,7 +188,10 @@ object WatchRepository {
             automationAvailable = prefs.getBoolean(KEY_AUTOMATION_AVAILABLE, false),
             lastSyncAt = prefs.getLong(KEY_LAST_SYNC, 0L),
             phoneGeneratedAt = prefs.getLong(KEY_PHONE_GENERATED, 0L),
-            quickReplies = quickReplies
+            quickReplies = quickReplies,
+            queuedSends = queued,
+            alertsEnabled = prefs.getBoolean(KEY_ALERTS_ENABLED, true),
+            notificationPermission = WatchNotifications.areSystemNotificationsAllowed(app)
         )
         initialized = true
         scope.launch {
@@ -172,16 +208,26 @@ object WatchRepository {
             _state.update { it.copy(reachable = reachable) }
         }
         ping(app)
+        if (queued.isNotEmpty()) {
+            scope.launch {
+                delay(1_000L)
+                flushQueue()
+            }
+        }
     }
 
     fun onAppResumed() {
         if (!initialized) return
         // Probe the phone and refresh if this app has been away for a while.
         val context = appContext ?: return
+        _state.update {
+            it.copy(notificationPermission = WatchNotifications.areSystemNotificationsAllowed(context))
+        }
         PhoneLink.checkReachable(context) { reachable ->
             _state.update { it.copy(reachable = reachable) }
         }
         ping(context)
+        flushQueue()
         if (System.currentTimeMillis() - _state.value.lastSyncAt > 15_000L) {
             sync(context, manual = false)
         }
@@ -193,6 +239,7 @@ object WatchRepository {
         applySync(payload, connected = !fromCache)
     }
 
+    @Synchronized
     private fun applySync(payload: SyncPayload, connected: Boolean) {
         val summaries = payload.conversations.sortedByDescending { it.lastTimestamp }
         val byId = summaries.associateBy { it.id }
@@ -221,13 +268,17 @@ object WatchRepository {
             .toMap()
         val existingThreads = updatedThreads.filterNot { (id, thread) ->
             if (!id.startsWith(NEW_THREAD_PREFIX)) return@filterNot false
+            if (_state.value.queuedFor(id) || pendingSends.containsValue(id)) return@filterNot false
             val address = Protocol.normalizeAddress(thread.address) ?: return@filterNot false
             realIdsByAddress.containsKey(address)
         }
+        val localSummaries = existingThreads.values.filter { thread ->
+            thread.id !in byId && (_state.value.queuedFor(thread.id) || pendingSends.containsValue(thread.id))
+        }.map { it.toSummary() }
         _state.update {
             it.copy(
                 loading = false,
-                conversations = summaries,
+                conversations = (summaries + localSummaries).sortedByDescending { it.lastTimestamp },
                 threads = existingThreads,
                 phoneName = payload.phoneName,
                 bridgeVersion = payload.bridgeVersion,
@@ -244,6 +295,15 @@ object WatchRepository {
             )
         }
         persist()
+        if (connected) {
+            val context = appContext
+            if (context != null) {
+                summaries.filterNot { it.unread }.forEach { summary ->
+                    WatchNotifications.cancel(context, summary.id)
+                }
+            }
+            flushQueue()
+        }
     }
 
     fun onThreadPayload(payload: ThreadPayload) {
@@ -261,6 +321,7 @@ object WatchRepository {
         onThread(thread, connected = true)
     }
 
+    @Synchronized
     fun onThread(thread: WireThread, connected: Boolean = true) {
         if (!initialized) return
         if (!connected) {
@@ -295,9 +356,17 @@ object WatchRepository {
             thread
         }
 
-        val merged = mergeThread(adopted)
+        val merged = mergeThread(adopted).let {
+            if (_state.value.visibleThreadId == it.id) {
+                markReadAt(it.id, System.currentTimeMillis())
+                it.copy(unread = false)
+            } else it
+        }
         val threads = (_state.value.threads + (merged.id to merged)).toMutableMap()
         if (alias != null) threads.remove(alias.id)
+        if (alias != null) {
+            pendingSends.replaceAll { _, id -> if (id == alias.id) merged.id else id }
+        }
         val conversations = (
             _state.value.conversations.filterNot { it.id == merged.id || it.id == alias?.id } +
                 merged.toSummary()
@@ -307,6 +376,12 @@ object WatchRepository {
                 loading = false,
                 threads = capThreads(threads),
                 conversations = conversations,
+                queuedSends = it.queuedSends.map { queued ->
+                    if (queued.threadId == alias?.id) queued.copy(threadId = merged.id) else queued
+                },
+                sendingThreads = if (alias != null && alias.id in it.sendingThreads) {
+                    it.sendingThreads - alias.id + merged.id
+                } else it.sendingThreads,
                 connected = connected || it.connected,
                 reachable = connected || it.reachable,
                 lastSyncAt = if (connected) System.currentTimeMillis() else it.lastSyncAt,
@@ -316,10 +391,20 @@ object WatchRepository {
             )
         }
         persist()
+        appContext?.let { context ->
+            WatchNotifications.syncThread(
+                context = context,
+                thread = merged,
+                state = _state.value,
+                allowNotify = connected
+            )
+        }
     }
 
+    @Synchronized
     fun onActionResult(result: ActionResult) {
         if (!initialized) return
+        removeQueuedSend(result.requestId)
         val preview = result.threadId
         when (result.action) {
             Protocol.ACTION_REPLY -> {
@@ -343,7 +428,10 @@ object WatchRepository {
             }
 
             Protocol.ACTION_SEND -> {
-                val target = pendingSends.remove(result.requestId)
+                val pendingTarget = pendingSends.remove(result.requestId)
+                val target = _state.value.threads.values.firstOrNull { thread ->
+                    thread.messages.any { it.id == LOCAL_PREFIX + result.requestId }
+                }?.id ?: pendingTarget
                     ?: result.threadId
                     ?: preview
                 val localId = LOCAL_PREFIX + result.requestId
@@ -391,6 +479,7 @@ object WatchRepository {
             }
         }
         persist()
+        flushQueue()
     }
 
     fun onPong(pong: PongPayload) {
@@ -408,6 +497,7 @@ object WatchRepository {
             )
         }
         persist()
+        flushQueue()
     }
 
     fun onBridgeError(error: BridgeError) {
@@ -417,6 +507,7 @@ object WatchRepository {
     fun onPeerConnected() {
         if (!initialized) return
         _state.update { it.copy(reachable = true) }
+        flushQueue()
     }
 
     fun onPeerDisconnected() {
@@ -512,17 +603,22 @@ object WatchRepository {
         }
     }
 
-    fun sendReply(threadId: String, rawText: String) {
-        if (!initialized) return
+    @Synchronized
+    fun sendReply(threadId: String, rawText: String): Boolean {
+        if (!initialized) return false
         val text = rawText.trim().take(MAX_REPLY_LENGTH)
-        if (text.isEmpty()) return
-        val context = appContext ?: return
+        if (text.isEmpty()) return false
+        val context = appContext ?: return false
         val state = _state.value
         if (!state.relayEnabled) {
             _state.update { it.copy(error = "Relay is paused on the phone.") }
-            return
+            return false
         }
-        if (threadId in state.sendingThreads) return
+        if (threadId in state.sendingThreads) return false
+        if (state.queuedCount >= MAX_QUEUE) {
+            _state.update { it.copy(error = "The outbox is full. Reconnect the phone before sending more.") }
+            return false
+        }
         val thread = state.threads[threadId]
         val summary = state.conversations.firstOrNull { it.id == threadId }
         val canReply = (thread?.canReply ?: summary?.canReply) == true
@@ -533,7 +629,7 @@ object WatchRepository {
                     error = "This chat can't send right now. Enable automation in the bridge app or open the chat in OpenBubbles."
                 )
             }
-            return
+            return false
         }
         val title = thread?.title ?: summary?.title
         val address = thread?.address ?: summary?.address
@@ -546,9 +642,22 @@ object WatchRepository {
             text = text,
             timestamp = now,
             fromMe = true,
-            status = "sending"
+            status = "queued"
         )
-        val current = thread
+        val current = thread ?: summary?.let { item ->
+            WireThread(
+                id = item.id,
+                title = item.title,
+                isGroup = item.isGroup,
+                participants = item.participants,
+                unread = item.unread,
+                canReply = item.canReply,
+                canMarkRead = item.canMarkRead,
+                canSend = item.canSend,
+                address = item.address,
+                updatedAt = item.lastTimestamp
+            )
+        }
         if (current != null) {
             _state.update { it.copy(error = null, info = null) }
             val updated = current.copy(
@@ -556,69 +665,206 @@ object WatchRepository {
                 unread = false
             )
             replaceThread(updated)
-        }
-        _state.update { it.copy(sendingThreads = it.sendingThreads + threadId) }
-        markReadAt(threadId, now)
-        persist()
-        pendingSends[requestId] = threadId
-
-        val path: String
-        val payload: ByteArray
-        if (canReply) {
-            path = Protocol.PATH_REPLY
-            payload = Wire.encodeBytes(
-                ReplyRequest(requestId = requestId, threadId = threadId, text = text)
-            )
         } else {
-            path = Protocol.PATH_SEND
-            payload = Wire.encodeBytes(
-                SendRequest(
-                    requestId = requestId,
-                    threadId = threadId,
-                    address = address,
-                    title = title,
-                    text = text
-                )
+            _state.update { it.copy(error = null, info = null) }
+        }
+
+        markReadAt(threadId, now)
+        // Every send is journaled before it leaves the watch. Once the Data
+        // Layer accepts it the entry is removed; if transport fails it stays
+        // here and is replayed when the phone reconnects. The phone dedupes
+        // by requestId so a replay cannot create a second message.
+        enqueueSend(
+            QueuedSend(
+                requestId = requestId,
+                threadId = threadId,
+                text = text,
+                address = address,
+                title = title,
+                useReply = canReply,
+                createdAt = now
             )
-        }
-        PhoneLink.send(context, path, payload) { sent ->
-            if (!sent) {
-                pendingSends.remove(requestId)
-                updateLocalMessage(threadId, local.id, "failed")
-                _state.update {
-                    it.copy(
-                        sendingThreads = it.sendingThreads - threadId,
-                        connected = false,
-                        reachable = false,
-                        error = "Phone isn't reachable. The message was not sent."
-                    )
-                }
-            }
-        }
-        scope.launch {
-            delay(if (canReply) 15_000L else 100_000L)
-            if (canReply) {
-                pendingSends.remove(requestId)
-                val pending = _state.value.threads[threadId]
-                    ?.messages
-                    ?.firstOrNull { it.id == local.id }
-                    ?.status == "sending"
-                if (!pending) return@launch
-            } else if (pendingSends.remove(requestId) == null) {
-                return@launch
-            }
+        )
+        if (!persist(synchronous = true)) {
+            removeQueuedSend(requestId)
             updateLocalMessage(threadId, local.id, "failed")
             _state.update {
+                it.copy(sendingThreads = it.sendingThreads - threadId,
+                    error = "Could not save the message. Free some watch storage and try again.")
+            }
+            return false
+        }
+        WatchNotifications.cancel(context, threadId)
+        WatchNotifications.markNotified(context, threadId, now)
+
+        _state.update { it.copy(info = if (it.phoneOnline) "Message saved to the outbox." else "Phone offline. The message will send when it reconnects.") }
+        flushQueue()
+        return true
+    }
+
+    @Synchronized
+    internal fun onSendDispatched(requestId: String, threadId: String, localId: String, sent: Boolean) {
+        // The action result can arrive before the transport callback.
+        val target = pendingSends[requestId] ?: return
+        if (sent) {
+            removeQueuedSend(requestId)
+            updateLocalMessage(target, localId, "sending")
+            _state.update { it.copy(sendingThreads = it.sendingThreads + target) }
+            startSendTimeout(requestId, localId)
+        } else {
+            pendingSends.remove(requestId)
+            updateLocalMessage(target, localId, "queued")
+            _state.update {
                 it.copy(
-                    sendingThreads = it.sendingThreads - threadId,
-                    error = if (canReply) {
-                        "The phone did not confirm the reply."
-                    } else {
-                        "The phone did not confirm the automated message. Check that OpenBubbles is signed in and automation is on."
-                    }
+                    sendingThreads = it.sendingThreads - threadId - target,
+                    connected = false,
+                    reachable = false,
+                    error = null,
+                    info = "Phone offline. The message is queued and will send when it reconnects."
                 )
             }
+            persist()
         }
+    }
+
+    private fun startSendTimeout(
+        requestId: String,
+        localMessageId: String
+    ) {
+        scope.launch {
+            delay(100_000L)
+            synchronized(this@WatchRepository) {
+                val target = pendingSends.remove(requestId) ?: return@launch
+                updateLocalMessage(target, localMessageId, "failed")
+                _state.update {
+                    it.copy(
+                        sendingThreads = it.sendingThreads - target,
+                        error = "The phone did not confirm the message. Check OpenBubbles before trying again to avoid a duplicate."
+                    )
+                }
+                flushQueue()
+            }
+        }
+    }
+
+    /**
+     * Replays journaled sends after a reconnect. Entries are removed only when
+     * the Data Layer accepts them. Acceptance is not delivery confirmation:
+     * an unconfirmed accepted send fails rather than being retried blindly.
+     */
+    @Synchronized
+    fun flushQueue(manual: Boolean = false) {
+        if (!initialized) return
+        val context = appContext ?: return
+        val queued = _state.value.queuedSends
+        if (queued.isEmpty()) {
+            if (manual) _state.update { it.copy(info = "The outbox is empty.") }
+            return
+        }
+        if (!_state.value.phoneOnline && !manual) return
+        if (!_state.value.relayEnabled) return
+        if (queueFlushing) {
+            if (manual) _state.update { it.copy(info = "Already sending queued messages.") }
+            return
+        }
+        queueFlushing = true
+        scope.launch {
+            var sentAny = false
+            var lastError: String? = null
+            try {
+                for (item in _state.value.queuedSends.toList()) {
+                    val claimed = synchronized(this@WatchRepository) {
+                        if (!_state.value.relayEnabled ||
+                            _state.value.queuedSends.none { it.requestId == item.requestId } ||
+                            pendingSends.isNotEmpty()
+                        ) false else {
+                            pendingSends[item.requestId] = item.threadId
+                            true
+                        }
+                    }
+                    if (!claimed) continue
+                    val state = _state.value
+                    val thread = state.threads[item.threadId]
+                    val summary = state.conversations.firstOrNull { it.id == item.threadId }
+                    val canReply = thread?.canReply == true || summary?.canReply == true
+                    val canSend = thread?.canSend == true || summary?.canSend == true
+                    val canAddressDirectly =
+                        (item.address != null || thread?.address != null) &&
+                            state.automationAvailable
+                    if (!canReply && !canSend && !canAddressDirectly) {
+                        pendingSends.remove(item.requestId)
+                        lastError =
+                            "A queued message is waiting for its chat to become available on the phone."
+                        continue
+                    }
+                    val payload = Wire.encodeBytes(
+                        SendRequest(
+                            requestId = item.requestId,
+                            threadId = item.threadId,
+                            address = item.address ?: thread?.address ?: summary?.address,
+                            title = item.title ?: thread?.title ?: summary?.title,
+                            text = item.text
+                        )
+                    )
+                    val accepted = dispatchAwait(context, Protocol.PATH_SEND, payload)
+                    synchronized(this@WatchRepository) {
+                        val alreadyCompleted = !pendingSends.containsKey(item.requestId)
+                        onSendDispatched(item.requestId, item.threadId, LOCAL_PREFIX + item.requestId, accepted)
+                        if (accepted || alreadyCompleted) sentAny = true
+                        else lastError = "Phone still offline. Queued messages will send when it reconnects."
+                    }
+                    if (!accepted) break
+                }
+            } finally {
+                queueFlushing = false
+                persist()
+            }
+            if (sentAny) {
+                _state.update {
+                    it.copy(
+                        info = lastError ?: "Queued messages handed to the phone."
+                    )
+                }
+            } else if (lastError != null) {
+                _state.update {
+                    it.copy(
+                        error = if (manual) lastError else it.error,
+                        info = if (manual) null else it.info
+                    )
+                }
+            } else if (manual) {
+                _state.update { it.copy(info = "Nothing could be sent yet.") }
+            }
+            // A fast action result may have arrived while queueFlushing was
+            // still true. Give the next message in that chat a chance to run.
+            if (sentAny) flushQueue()
+        }
+    }
+
+    private suspend fun dispatchAwait(
+        context: Context,
+        path: String,
+        payload: ByteArray
+    ): Boolean {
+        val result = CompletableDeferred<Boolean>()
+        PhoneLink.send(context, path, payload) { sent -> result.complete(sent) }
+        return withTimeoutOrNull(QUEUE_DISPATCH_TIMEOUT_MS) { result.await() } ?: false
+    }
+
+    private fun enqueueSend(item: QueuedSend) {
+        _state.update { state ->
+            val without = state.queuedSends.filterNot { it.requestId == item.requestId }
+            state.copy(queuedSends = without + item)
+        }
+    }
+
+    private fun removeQueuedSend(requestId: String) {
+        val existing = _state.value.queuedSends
+        if (existing.none { it.requestId == requestId }) return
+        _state.update { state ->
+            state.copy(queuedSends = state.queuedSends.filterNot { it.requestId == requestId })
+        }
+        persist()
     }
 
     /**
@@ -989,6 +1235,7 @@ object WatchRepository {
             _state.update { it.copy(error = "Relay is paused on the phone.") }
             return
         }
+        markReadLocally(threadId)
         val request = MarkReadRequest(requestId = UUID.randomUUID().toString(), threadId = threadId)
         PhoneLink.send(context, Protocol.PATH_MARK_READ, Wire.encodeBytes(request)) { sent ->
             if (!sent) {
@@ -996,11 +1243,66 @@ object WatchRepository {
                     it.copy(
                         connected = false,
                         reachable = false,
-                        error = "Phone isn't reachable. Could not mark the chat as read."
+                        error = "Phone offline. The chat was marked read on the watch."
                     )
                 }
             }
         }
+    }
+
+    fun setVisibleThread(threadId: String?) {
+        if (!initialized) return
+        if (_state.value.visibleThreadId == threadId) return
+        _state.update { it.copy(visibleThreadId = threadId) }
+        val context = appContext ?: return
+        if (threadId != null) {
+            markReadLocally(threadId)
+            latestInboundTimestamp(threadId)?.let {
+                WatchNotifications.markNotified(context, threadId, it)
+            }
+        }
+    }
+
+    fun setAlertsEnabled(context: Context, enabled: Boolean) {
+        if (!initialized) return
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ALERTS_ENABLED, enabled)
+            .apply()
+        _state.update {
+            it.copy(
+                alertsEnabled = enabled,
+                info = if (enabled) "Watch notifications are on." else "Watch notifications are off."
+            )
+        }
+        if (!enabled) WatchNotifications.cancelAll(context)
+    }
+
+    fun onNotificationPermissionResult(granted: Boolean) {
+        _state.update {
+            it.copy(
+                notificationPermission = granted,
+                info = if (granted) {
+                    "Watch notifications are allowed."
+                } else {
+                    "Notifications are blocked. Allow them in watch Settings."
+                },
+                error = null
+            )
+        }
+        if (!granted) appContext?.let(WatchNotifications::cancelAll)
+    }
+
+    fun refreshNotificationState() {
+        val context = appContext ?: return
+        _state.update {
+            it.copy(notificationPermission = WatchNotifications.areSystemNotificationsAllowed(context))
+        }
+    }
+
+    private fun latestInboundTimestamp(threadId: String): Long? {
+        val thread = _state.value.threads[threadId] ?: return null
+        return thread.messages.lastOrNull { !it.fromMe }?.timestamp
     }
 
     fun openOnPhone(threadId: String?) {
@@ -1028,8 +1330,20 @@ object WatchRepository {
         if (threadId == null) return
         val now = System.currentTimeMillis()
         markReadAt(threadId, now)
-        val thread = _state.value.threads[threadId] ?: return
-        replaceThread(thread.copy(unread = false))
+        val context = appContext
+        if (context != null) {
+            WatchNotifications.cancel(context, threadId)
+            latestInboundTimestamp(threadId)?.let {
+                WatchNotifications.markNotified(context, threadId, it)
+            }
+        }
+        val thread = _state.value.threads[threadId]
+        if (thread != null) replaceThread(thread.copy(unread = false))
+        else _state.update { state ->
+            state.copy(conversations = state.conversations.map {
+                if (it.id == threadId) it.copy(unread = false) else it
+            })
+        }
         persist()
     }
 
@@ -1061,7 +1375,7 @@ object WatchRepository {
         old?.messages.orEmpty()
             .filterNot { it.id.startsWith(LOCAL_PREFIX) }
             .forEach { remote[it.id] = it }
-        incoming.messages.forEach { message ->
+        incoming.messages.filterNot { it.id.startsWith(LOCAL_PREFIX) }.forEach { message ->
             if (message.fromMe && !message.id.startsWith(AUTO_PREFIX)) {
                 // The phone records an optimistic "auto-" send until the real
                 // message appears. Drop that placeholder when the real one
@@ -1080,15 +1394,16 @@ object WatchRepository {
         }
         val mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
 
-        val locals = old?.messages.orEmpty()
+        val locals = (old?.messages.orEmpty() + incoming.messages)
             .filter { it.id.startsWith(LOCAL_PREFIX) }
-            .toMutableList()
+            .distinctBy { it.id }
         val unmatched = mergedRemote.filter { it.fromMe }.toMutableList()
         val keptLocals = mutableListOf<WireMessage>()
         locals.forEach { local ->
             val match = unmatched.firstOrNull { message ->
-                message.text == local.text &&
-                    abs(message.timestamp - local.timestamp) <= LOCAL_MATCH_WINDOW_MS
+                message.id == AUTO_PREFIX + local.id.removePrefix(LOCAL_PREFIX) ||
+                    (local.status != "queued" && message.text == local.text &&
+                        abs(message.timestamp - local.timestamp) <= LOCAL_MATCH_WINDOW_MS)
             }
             if (match != null) {
                 unmatched.remove(match)
@@ -1097,7 +1412,7 @@ object WatchRepository {
             }
         }
 
-        val allMessages = (mergedRemote + keptLocals)
+        val allMessages = (mergedRemote + keptLocals.map { it.copy(threadId = incoming.id) })
             .sortedBy { it.timestamp }
             .takeLast(MAX_MESSAGES)
         val readAt = readAt(incoming.id)
@@ -1215,10 +1530,114 @@ object WatchRepository {
         }.getOrNull()
     }
 
-    private fun persist() {
-        val context = appContext ?: return
+    private fun loadQueue(prefs: android.content.SharedPreferences): List<QueuedSend> {
+        val raw = prefs.getString(KEY_QUEUE, null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val requestId = item.optString("requestId").takeIf { it.isNotBlank() }
+                        ?: continue
+                    val threadId = item.optString("threadId").takeIf { it.isNotBlank() }
+                        ?: continue
+                    add(
+                        QueuedSend(
+                            requestId = requestId,
+                            threadId = threadId,
+                            text = item.optString("text"),
+                            address = item.optString("address").takeIf { it.isNotBlank() },
+                            title = item.optString("title").takeIf { it.isNotBlank() },
+                            useReply = item.optBoolean("useReply", false),
+                            createdAt = item.optLong("createdAt", 0L),
+                            attempts = item.optInt("attempts", 0)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList()).takeLast(MAX_QUEUE)
+    }
+
+    private fun encodeQueue(queue: List<QueuedSend>): String {
+        val array = JSONArray()
+        queue.forEach { item ->
+            array.put(
+                JSONObject().apply {
+                    put("requestId", item.requestId)
+                    put("threadId", item.threadId)
+                    put("text", item.text)
+                    put("address", item.address.orEmpty())
+                    put("title", item.title.orEmpty())
+                    put("useReply", item.useReply)
+                    put("createdAt", item.createdAt)
+                    put("attempts", item.attempts)
+                }
+            )
+        }
+        return array.toString()
+    }
+
+    /**
+     * A local message that is no longer present in the journal can never be
+     * delivered, so surface it as failed instead of showing "Sending…" forever.
+     */
+    private fun reconcileQueuedMessages(
+        threads: Map<String, WireThread>,
+        queue: List<QueuedSend>
+    ): Map<String, WireThread> {
+        val queuedIds = queue.map { it.requestId }.toSet()
+        return threads.mapValues { (_, thread) ->
+            thread.copy(
+                messages = thread.messages.map { message ->
+                    if (!message.id.startsWith(LOCAL_PREFIX)) {
+                        message
+                    } else {
+                        val requestId = message.id.removePrefix(LOCAL_PREFIX)
+                        when {
+                            requestId in queuedIds -> message.copy(status = "queued")
+                            message.status == "sending" || message.status == "queued" ->
+                                message.copy(status = "failed")
+
+                            else -> message
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * Do not replay every old chat as a watch notification the first time the
+     * 1.3.0 app starts. New messages after this baseline still notify.
+     */
+    private fun ensureNotificationBaseline(
+        prefs: android.content.SharedPreferences,
+        threads: Map<String, WireThread>,
+        conversations: List<ThreadSummary>
+    ) {
+        if (prefs.getBoolean(KEY_NOTIFY_BASELINE, false)) return
+        val editor = prefs.edit()
+        val summaryTimes = conversations.associate { it.id to it.lastTimestamp }
+        threads.values.forEach { thread ->
+            val latest = thread.messages.lastOrNull { !it.fromMe }?.timestamp
+                ?: summaryTimes[thread.id]
+                ?: 0L
+            if (latest > 0L) editor.putLong(KEY_NOTIFIED_AT + thread.id, latest)
+        }
+        conversations.forEach { summary ->
+            if (summary.lastTimestamp > 0L) {
+                val key = KEY_NOTIFIED_AT + summary.id
+                if (!prefs.contains(key)) editor.putLong(key, summary.lastTimestamp)
+            }
+        }
+        editor.putBoolean(KEY_NOTIFY_BASELINE, true).apply()
+    }
+
+    @Synchronized
+    private fun persist(synchronous: Boolean = false): Boolean {
+        val context = appContext ?: return false
         val state = _state.value
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_THREADS, Wire.encode(state.threads.values.toList()))
             .putString(KEY_CONVERSATIONS, Wire.encode(state.conversations))
@@ -1231,7 +1650,9 @@ object WatchRepository {
             .putBoolean(KEY_AUTOMATION_AVAILABLE, state.automationAvailable)
             .putLong(KEY_LAST_SYNC, state.lastSyncAt)
             .putLong(KEY_PHONE_GENERATED, state.phoneGeneratedAt)
-            .apply()
+            .putBoolean(KEY_ALERTS_ENABLED, state.alertsEnabled)
+            .putString(KEY_QUEUE, encodeQueue(state.queuedSends))
+        return if (synchronous) editor.commit() else { editor.apply(); true }
     }
 
     private fun restoreFromDataLayer(context: Context, prefs: android.content.SharedPreferences) {

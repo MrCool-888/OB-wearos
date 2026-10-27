@@ -32,7 +32,7 @@ actions, which are faster and do not require OpenBubbles to be visible.
 
 Application IDs:
 
-- Phone: `com.openbubbles.wear.bridge`
+- Phone: `com.openbubbles.wear` (source namespace `com.openbubbles.wear.bridge`)
 - Watch: `com.openbubbles.wear`
 - Fake test notifier: `com.openbubbles.messaging` (deliberately the official ID)
 
@@ -73,6 +73,11 @@ Application IDs:
 ```
 
 ## Phone side
+
+Phone and watch use the shared `companionApplicationId` from the root Gradle build, and must be
+signed with the same key. Google's Data Layer requires both identities to match across devices.
+The pre-1.3.0 phone ID `com.openbubbles.wear.bridge` was incompatible with watch transport; users
+must remove that old phone bridge, install the corrected package, and grant permissions anew.
 
 ### Notification listener
 
@@ -276,6 +281,33 @@ validation is required.
 - It does not construct OpenBubbles' internal intents or call non-exported components.
 - It does not use root or Shizuku.
 
+### Optional assisted setup and diagnostics
+
+`ShizukuSetup` uses Shizuku's shell process API only for user-requested setup. Notification access
+is granted through `cmd notification allow_listener`, not by editing Android's legacy settings
+mirror. Accessibility updates preserve the existing colon-separated list and target the bridge's
+Android user. Battery exemption uses `cmd deviceidle whitelist` with a `dumpsys` fallback. Commands
+are bounded by a ten-second shell timeout; root-mode Shizuku is rejected. All steps have manual
+Android Settings equivalents and OpenBubbles itself is never modified.
+
+The **Notification access blocked?** recovery dialog explains Android's sideload restrictions and
+links separately to this package's App info and the exact listener's special-access page. Its
+explicit **Unblock with Shizuku** action sets `ACCESS_RESTRICTED_SETTINGS` only for the bridge and
+current Android user before requesting the listener grant. It does not enable automation. Normal
+assisted setup does not change that app-op. `NotificationManager.isNotificationListenerAccessGranted`
+is checked for the exact component, with a short propagation wait: command exit code zero alone
+is not success. OEM enhanced-confirmation or administrator restrictions may still require manual
+approval and are not silently bypassed.
+
+The phone UI reports the actual notification-listener connected callback separately from service
+creation, the last observed OpenBubbles notification, installed OpenBubbles version, battery
+optimization, and Shizuku availability/permission. A reconnect control requests a listener rebind.
+
+`ActionDedupe` atomically claims request IDs and commits a journal entry before calling OpenBubbles.
+Completed results are persisted and replayed instead of repeating a send. A crash between the side
+effect and saving its result leaves an uncertain failure marker: a replay must not blindly send it
+again. The journal retains 200 IDs; it is duplicate protection, not an exactly-once delivery promise.
+
 ## Watch side
 
 `WearListenerService` receives live messages and data-item changes. It forwards them to
@@ -291,6 +323,7 @@ validation is required.
 - Connectivity (`connected`, `reachable`), sync timestamps, quick replies.
 - In-flight send/history/media requests and per-thread history exhaustion state.
 - Cached media metadata (file path, MIME type, dimensions, size) keyed by media ID.
+- A persisted outbox, alert preference, notification permission, and the currently visible thread.
 - Transient UI notices (`error`, `info`).
 
 The watch cache persists up to 40 threads and 220 messages per thread. It is designed for offline
@@ -324,17 +357,41 @@ a notification's `Person.uri` resolve to the same contact.
 ### Optimistic sends
 
 When the user sends, the watch immediately adds a local message with ID `local-<requestId>` and
-status `sending`.
+status `queued`, and synchronously journals it before transport. The outbox rejects additional
+messages at 100 entries instead of dropping old ones.
 
-- If the thread has a live reply action, the watch sends `/reply` and waits 15 seconds.
-- Otherwise it sends `/send` with the thread ID, address, title, and text, and waits 100 seconds for
-  automation.
+- All new sends use `/send` with thread ID, address, title, and text. The phone chooses its current
+  live reply action or optional automation, avoiding stale cached notification actions.
+- Queue replay is single-flight and stops while relay is paused. Entries remain queued on transport
+  failure. After transport acceptance the journal entry is removed and the bubble becomes `sending`.
+- Confirmation can arrive before transport acceptance; the callback must not overwrite a completed
+  result. Unconfirmed accepted requests fail after 100 seconds and are not blindly requeued.
 - The phone's notification refresh or action result later contains the real outgoing message. The
   watch merges it by matching text and timestamp within a five-minute window and removes the local
   placeholder.
 - A failed action marks the local message `failed`.
 - A send result is matched back to its thread through the request-ID map, so a temporary thread is
   updated even if the phone returns a different thread ID.
+- Temporary-thread migration also remaps queued requests and in-flight IDs. Summary syncs retain
+  local conversations that still have pending messages. An unsent identical-text bubble is not
+  removed just because an older matching message exists.
+
+### Notifications and glanceable surfaces
+
+`WatchNotifications` builds local-only `MessagingStyle` notifications on a high-importance channel,
+with mutable explicit RemoteInput reply intents, immutable mark-read/open intents, and private
+lock-screen visibility. Thread-specific URI identities and notification tags prevent hash
+collisions from redirecting a reply. Per-thread notification timestamps suppress repeat alerts;
+upgrade initializes a baseline from the existing cache.
+
+`WearApp` tracks visibility only while the activity is resumed, so backgrounding a chat does not
+keep suppressing alerts. Opening a thread marks it read locally. Extra alerts are opt-out in watch
+Settings because the system can independently mirror OpenBubbles' phone notifications.
+
+`WatchTileService` renders cached unread conversations with launch actions and supplies an empty
+versioned resource bundle. `UnreadComplicationService` supports SHORT_TEXT, LONG_TEXT, and
+RANGED_VALUE, with a tap intent into the newest unread chat. Counts represent unread conversations.
+`WatchSurfaces` requests refreshes when rendered summaries, connectivity, or outbox counts change.
 
 ### History loading
 
@@ -390,7 +447,7 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/update` | phone → watch | Live thread update after a notification or action. |
 | `/reply` | watch → phone | Reply through a live notification action. |
 | `/reply_result` | phone → watch | Reply outcome. |
-| `/send` | watch → phone | Send through OpenBubbles' composer when no live reply action exists. |
+| `/send` | watch → phone | Send through a live reply action, otherwise the optional composer automation. |
 | `/mark_read` | watch → phone | Mark-read request. |
 | `/action_result` | phone → watch | Action result (reply, send, open-on-phone, errors). |
 | `/open_phone` | watch → phone | Ask the phone to open OpenBubbles. |

@@ -18,11 +18,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.openbubbles.wear"
+        applicationId = rootProject.extra["companionApplicationId"] as String
         minSdk = 30
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
     }
 
     signingConfigs {
@@ -53,6 +53,8 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions { unitTests.isIncludeAndroidResources = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -86,6 +88,10 @@ dependencies {
     implementation("androidx.wear.compose:compose-material3:1.5.4")
     implementation("androidx.wear.compose:compose-foundation:1.5.4")
     implementation("androidx.wear:wear-input:1.2.0")
+    implementation("androidx.wear.tiles:tiles:1.4.1")
+    implementation("androidx.wear.protolayout:protolayout:1.2.1")
+    implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.2.1")
+    implementation("com.google.guava:guava:32.0.1-android")
 
     implementation("com.google.android.gms:play-services-wearable:19.0.0")
 
@@ -93,4 +99,6 @@ dependencies {
     implementation("io.coil-kt:coil-gif:2.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

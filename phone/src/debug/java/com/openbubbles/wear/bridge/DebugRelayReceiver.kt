@@ -10,7 +10,7 @@ import java.util.UUID
 /**
  * Debug-only command receiver for checking the relay without a watch.
  *
- * adb shell am broadcast -n com.openbubbles.wear.bridge/.DebugRelayReceiver \
+ * adb shell am broadcast -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
  *     -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op status
  * ... --es op reply --es thread fake-maya --es text "On my way"
  * ... --es op mark_read --es thread fake-maya

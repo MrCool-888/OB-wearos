@@ -24,6 +24,12 @@ class BridgePreferences(context: Context) {
             prefs.edit().putString(KEY_LAST_WATCH, value).apply()
         }
 
+    var lastNotificationAt: Long
+        get() = prefs.getLong(KEY_LAST_NOTIFICATION, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_NOTIFICATION, value).apply()
+        }
+
     fun readAt(threadId: String): Long =
         prefs.getLong(KEY_READ_AT + threadId, 0L)
 
@@ -43,6 +49,7 @@ class BridgePreferences(context: Context) {
         const val KEY_RELAY_ENABLED = "relay_enabled"
         const val KEY_LAST_PUBLISH = "last_publish"
         const val KEY_LAST_WATCH = "last_watch"
+        const val KEY_LAST_NOTIFICATION = "last_notification"
         const val KEY_READ_AT = "read_at:"
     }
 }

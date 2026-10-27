@@ -109,21 +109,25 @@ class WearBridgeService : WearableListenerService() {
 
     private fun handleReply(nodeId: String, data: ByteArray) {
         val request = Wire.decodeBytes<ReplyRequest>(data) ?: return
-        val error = NotificationCenter.reply(request.threadId, request.text)
-        WatchLink.sendToNode(
-            applicationContext,
-            nodeId,
-            Protocol.PATH_REPLY_RESULT,
-            Wire.encodeBytes(
-                ActionResult(
-                    requestId = request.requestId,
-                    action = Protocol.ACTION_REPLY,
-                    ok = error == null,
-                    threadId = request.threadId,
-                    error = error
-                )
+        val claim = ActionDedupe.claim(applicationContext, request.requestId, Protocol.ACTION_REPLY, request.threadId)
+        if (!claim.started) {
+            claim.result?.let { sendActionResult(nodeId, Protocol.PATH_REPLY_RESULT, it) }
+            return
+        }
+        try {
+            val error = NotificationCenter.reply(request.threadId, request.text)
+            val result = ActionResult(
+                requestId = request.requestId,
+                action = Protocol.ACTION_REPLY,
+                ok = error == null,
+                threadId = request.threadId,
+                error = error
             )
-        )
+            ActionDedupe.put(applicationContext, result)
+            sendActionResult(nodeId, Protocol.PATH_REPLY_RESULT, result)
+        } finally {
+            ActionDedupe.end(request.requestId)
+        }
     }
 
     private fun handleMarkRead(nodeId: String, data: ByteArray) {
@@ -147,18 +151,28 @@ class WearBridgeService : WearableListenerService() {
 
     private fun handleSend(nodeId: String, data: ByteArray) {
         val request = Wire.decodeBytes<SendRequest>(data) ?: return
-        NotificationCenter.send(
-            requestId = request.requestId,
-            threadId = request.threadId,
-            address = request.address,
-            title = request.title,
-            rawText = request.text
-        ) { result ->
-            WatchLink.sendToNode(
-                applicationContext,
-                nodeId,
-                Protocol.PATH_ACTION_RESULT,
-                Wire.encodeBytes(
+        val claim = ActionDedupe.claim(applicationContext, request.requestId, Protocol.ACTION_SEND, request.threadId)
+        if (!claim.started) {
+            claim.result?.let { sendActionResult(nodeId, Protocol.PATH_ACTION_RESULT, it) }
+            return
+        }
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        val complete: (ActionResult) -> Unit = { result ->
+            if (finished.compareAndSet(false, true)) {
+                ActionDedupe.put(applicationContext, result)
+                ActionDedupe.end(request.requestId)
+                sendActionResult(nodeId, Protocol.PATH_ACTION_RESULT, result)
+            }
+        }
+        try {
+            NotificationCenter.send(
+                requestId = request.requestId,
+                threadId = request.threadId,
+                address = request.address,
+                title = request.title,
+                rawText = request.text
+            ) { result ->
+                complete(
                     ActionResult(
                         requestId = request.requestId,
                         action = Protocol.ACTION_SEND,
@@ -168,8 +182,27 @@ class WearBridgeService : WearableListenerService() {
                         message = result.message
                     )
                 )
+            }
+        } catch (t: Throwable) {
+            complete(
+                ActionResult(
+                    requestId = request.requestId,
+                    action = Protocol.ACTION_SEND,
+                    ok = false,
+                    threadId = request.threadId,
+                    error = t.message ?: "The message could not be sent."
+                )
             )
         }
+    }
+
+    private fun sendActionResult(nodeId: String, path: String, result: ActionResult) {
+        WatchLink.sendToNode(
+            applicationContext,
+            nodeId,
+            path,
+            Wire.encodeBytes(result)
+        )
     }
 
     private fun handleHistory(nodeId: String, data: ByteArray) {

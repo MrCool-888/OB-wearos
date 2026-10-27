@@ -54,6 +54,11 @@ setup, or message transport.
 - Sync status, relay state, automation state, and cache information in the watch Settings screen.
 - **Photos and GIFs**: tap an attachment on the watch to fetch its cached copy from the phone, then
   tap again for a full-screen view. Animated GIFs play automatically; pinch to zoom or double-tap.
+- **Watch alerts** with inline text/voice reply, mark-read, and a tap straight into the chat.
+  Extra alerts can be disabled if you prefer Android's mirrored phone notifications.
+- **Offline outbox**: messages are saved on the watch and retried when the phone reconnects.
+- **Messages tile and unread complication** with shortcuts into cached conversations.
+- **Optional Shizuku setup** for bridge permissions and battery exemption, plus phone diagnostics.
 
 ## Requirements
 
@@ -69,17 +74,20 @@ No root access, Shizuku, custom OpenBubbles build, or OpenBubbles-side changes a
 
 ## Install
 
+Download the APKs from the [1.3.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.3.0).
+Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
+
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.2.0.apk`
-- `dist/OpenBubblesWear-Watch-1.2.0.apk`
+- `dist/OpenBubblesWear-Phone-1.3.0.apk`
+- `dist/OpenBubblesWear-Watch-1.3.0.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb install -r dist/OpenBubblesWear-Phone-1.2.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.2.0.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.3.0.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.3.0.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -87,16 +95,25 @@ from the official app:
 
 | App | Application ID |
 | --- | --- |
-| Phone bridge | `com.openbubbles.wear.bridge` |
+| Phone bridge | `com.openbubbles.wear` |
 | Watch app | `com.openbubbles.wear` |
 | Official OpenBubbles | `com.openbubbles.messaging` |
+
+Phone and watch intentionally share an application ID and signing certificate, as required by
+Google's Wear Data Layer. Their source-code namespaces remain different.
+
+**Upgrading the phone from 1.2.0 or earlier:** the old bridge used
+`com.openbubbles.wear.bridge`, which prevented Data Layer communication with the watch. Uninstall
+that old bridge (not the official OpenBubbles app), install the 1.3.0 phone APK, and grant its
+notification/accessibility permissions again. The bridge's old local cache is not migrated;
+OpenBubbles' messages and account are untouched. The watch APK updates normally.
 
 ### Phone setup
 
 1. Open **OpenBubbles Wear** on the phone.
 2. Tap **Notification access** and allow access. You can also do this with:
    ```bash
-   adb shell cmd notification allow_listener com.openbubbles.wear.bridge/.NotificationRelayService
+    adb shell cmd notification allow_listener com.openbubbles.wear/com.openbubbles.wear.bridge.NotificationRelayService
    ```
 3. Confirm the Setup card shows **OpenBubbles installed** and **Notification access**.
 4. Leave **Relay to watch** enabled.
@@ -104,7 +121,7 @@ from the official app:
    accessibility settings. From adb:
    ```bash
    adb shell settings put secure enabled_accessibility_services \
-     com.openbubbles.wear.bridge/com.openbubbles.wear.bridge.OpenBubblesAutomationService
+      com.openbubbles.wear/com.openbubbles.wear.bridge.OpenBubblesAutomationService
    adb shell settings put secure accessibility_enabled 1
    ```
    On Android 13 and newer, a sideloaded app may first need **Allow restricted settings** from
@@ -112,6 +129,48 @@ from the official app:
    automation runs. New chats, quiet-chat sends, and history loading are unavailable while
    automation is off.
 6. Keep the bridge app installed. Android may stop background work if the app is force-stopped.
+
+**Optional assisted setup:** install and start [Shizuku](https://shizuku.rikka.app/) using wireless
+debugging (shell mode, not root). In the phone bridge, tap **Grant Shizuku access**, approve the
+prompt, then **Finish setup**. Existing accessibility services are preserved. Check the status
+cards afterward: some Android builds may still require manual permission approval. The bridge
+works without Shizuku, and stopping Shizuku does not revoke grants that Android already accepted.
+
+**Status and diagnostics** shows listener connection, last OpenBubbles alert, installed app
+version, battery optimization, and watch connection. **Reconnect listener** asks Android to bind
+the notification listener again. Battery exemption is optional and does not override every OEM's
+background restrictions.
+
+### Notification access says "Blocked" or "Restricted setting"
+
+This is an Android security restriction on sideloaded APKs, not the ordinary **Allow notifications**
+permission. In the phone bridge tap **Notification access blocked?** for guided recovery:
+
+1. Open **Notification access** and try the bridge's switch once. Dismiss the restricted-settings
+   warning if it appears.
+2. Open **App info** for **OpenBubbles Wear**. Tap **⋮ → Allow restricted settings** and confirm.
+   Some phones only show this menu after step 1.
+3. Return to **Notification access** and enable the bridge. App info → Notifications is a different
+   permission and does not let the bridge read messages.
+
+Only approve access if you trust the bridge: Android grants notification listeners access to all
+notifications, including sensitive content, even though this bridge only relays OpenBubbles.
+
+If the menu is missing, optionally grant Shizuku access, return to **Notification access blocked?**,
+and explicitly choose **Unblock with Shizuku**. This approves restricted settings only for the bridge
+and grants its listener access; it does not enable accessibility automation or alter OpenBubbles.
+The app verifies the actual listener grant before reporting success. Newer Android/OEM restrictions
+may still require manual approval. Work-profile/administrator/parental-control restrictions cannot
+be overridden by this app. Do not disable Play Protect or device-wide security settings.
+
+ADB alternative for the phone's primary Android user (replace `0` if using another user):
+
+```bash
+adb shell cmd appops set --user 0 com.openbubbles.wear ACCESS_RESTRICTED_SETTINGS allow
+adb shell cmd notification allow_listener com.openbubbles.wear/com.openbubbles.wear.bridge.NotificationRelayService 0
+```
+
+These steps follow [Android's restricted-settings guidance](https://support.google.com/android/answer/12623953).
 
 ### Watch setup
 
@@ -121,6 +180,10 @@ from the official app:
    Wear OS phone app. Opening the phone bridge app also helps re-establish the connection.
 4. Conversations appear after OpenBubbles posts a notification for them. Use **New message** to
    start a chat that has never notified.
+5. In watch Settings, allow notifications for the companion's extra alerts. If these duplicate
+   mirrored OpenBubbles alerts, turn **Extra alerts** off.
+6. Add **OpenBubbles Wear** from the watch's tile picker or as an unread complication in a compatible
+   watch face. Supported complication types are short text, long text, and ranged value.
 
 ### First conversation
 
@@ -149,6 +212,10 @@ existing one by title when loading history.
 - Swipe right or use the back gesture to return.
 - Settings shows phone/bridge status, notification-access state, relay state, automation state,
   last sync, and cache counts.
+- Write while offline to save a message to the **Outbox**. It is sent automatically on reconnect;
+  Settings also has **Send queued now**. The phone still needs its normal permissions, and quiet
+  chats/new recipients still need an unlocked phone with automation enabled.
+- Tap a tile chat row, complication, or watch alert to open the matching saved conversation.
 
 ## Important limitations
 
@@ -182,6 +249,13 @@ existing one by title when loading history.
   cancelled by OpenBubbles, or lost after a reboot, mark-read is unavailable and reply falls back
   to automation if it is enabled.
 - **Long messages are capped.** Notification and automation text is capped at 800 characters.
+- **Queued does not mean delivered.** The outbox holds up to 100 unsent messages. Once the Data
+  Layer accepts a request, the watch waits up to 100 seconds for confirmation. An uncertain send
+  is marked failed, not automatically sent again: check OpenBubbles before manually retrying.
+  The phone journals request IDs to suppress duplicate replays, retaining the latest 200 results.
+  Force-stopping either app can delay reconnect processing until it is opened again.
+- **Unread counts are conversations**, not individual messages. Tile/complication data comes from
+  the local cache and can be stale while offline; watch-face support varies.
 - **Notification format dependency.** The parser relies on OpenBubbles' notification structure. A
   future OpenBubbles release may change it and require a bridge update.
 - **Unofficial.** Use at your own risk, and do not install the debug test notifier on a daily-driver
@@ -201,6 +275,8 @@ OpenBubbles account and chat UI.
 - The optional accessibility service is scoped to OpenBubbles packages. It reads the OpenBubbles
   screen only while a watch-requested send or history job is running, and it types the message you
   asked to send. It does not read OpenBubbles' database, credentials, or encryption keys.
+- Shizuku assistance only changes this bridge's notification/accessibility grants and battery
+  exemption. It does not access OpenBubbles' private files and rejects root-mode Shizuku.
 - Messages stay on the phone and watch. Nothing is sent to a third-party server by this project.
 - The Wear Data Layer is provided and encrypted in transit by Google Play services.
 - Reply text is passed to OpenBubbles' own notification `PendingIntent`; new-chat and quiet-chat
@@ -224,7 +300,8 @@ OpenBubbles account and chat UI.
 ### Debug builds
 
 ```bash
-./gradlew :protocol:test
+./gradlew :protocol:test :phone:testDebugUnitTest :wear:testDebugUnitTest
+./gradlew :phone:lintDebug :wear:lintDebug
 ./gradlew :phone:assembleDebug :wear:assembleDebug :testnotifier:assembleDebug
 ```
 
@@ -268,8 +345,8 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.2.0 and watch app 1.2.0, using protocol version 3. Update
-both APKs together for the media, send, and history features. A 1.2.0 watch paired with a 1.1.0
+The current release is phone bridge 1.3.0 and watch app 1.3.0, using protocol version 3. Update
+both APKs together for request deduplication and the latest features. A 1.2.0 watch paired with a 1.1.0
 phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
 cannot use the newer actions.
 

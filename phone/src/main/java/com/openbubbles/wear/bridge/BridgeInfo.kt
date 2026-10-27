@@ -7,10 +7,9 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.accessibility.AccessibilityManager
-import androidx.core.app.NotificationManagerCompat
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.2.0"
+    const val BRIDGE_VERSION = "1.3.0"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",
@@ -20,9 +19,11 @@ object BridgeInfo {
     fun isOpenBubblesPackage(packageName: String?): Boolean =
         packageName != null && packageName in OPENBUBBLES_PACKAGES
 
-    fun hasNotificationAccess(context: Context): Boolean =
-        NotificationManagerCompat.getEnabledListenerPackages(context)
-            .contains(context.packageName)
+    fun hasNotificationAccess(context: Context): Boolean = runCatching {
+        context.getSystemService(NotificationManager::class.java).isNotificationListenerAccessGranted(
+            ComponentName(context, NotificationRelayService::class.java)
+        )
+    }.getOrDefault(false)
 
     /**
      * Optional accessibility automation. It is only used for sending in chats
@@ -53,6 +54,14 @@ object BridgeInfo {
                 context.packageManager.getPackageInfo(pkg, 0)
             }.isSuccess
         }
+
+    fun openBubblesVersion(context: Context): String {
+        val packageName = openBubblesPackage(context) ?: return ""
+        return runCatching {
+            val info = context.packageManager.getPackageInfo(packageName, 0)
+            info.versionName.orEmpty()
+        }.getOrDefault("")
+    }
 
     fun phoneName(): String {
         val manufacturer = Build.MANUFACTURER.orEmpty().trim()

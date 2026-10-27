@@ -69,8 +69,13 @@ class WearListenerService : WearableListenerService() {
                 }
 
                 Protocol.PATH_REPLY_RESULT, Protocol.PATH_ACTION_RESULT -> {
-                    Wire.decodeBytes<com.openbubbles.wear.protocol.ActionResult>(data)
-                        ?.let { WatchRepository.onActionResult(it) }
+                    val result = Wire.decodeBytes<com.openbubbles.wear.protocol.ActionResult>(data)
+                    if (result != null) {
+                        WatchRepository.onActionResult(result)
+                    } else {
+                        Wire.decodeBytes<com.openbubbles.wear.protocol.BridgeError>(data)
+                            ?.let { WatchRepository.onBridgeError(it) }
+                    }
                 }
 
                 Protocol.PATH_HISTORY_RESULT -> {

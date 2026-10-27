@@ -4,6 +4,7 @@
     <queries>
         <package android:name="com.openbubbles.messaging" />
         <package android:name="com.bluebubbles.messaging" />
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <application
@@ -62,6 +63,14 @@
                 <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
             </intent-filter>
         </service>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 

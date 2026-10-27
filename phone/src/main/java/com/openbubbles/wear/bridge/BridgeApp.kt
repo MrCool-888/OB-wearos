@@ -6,5 +6,6 @@ class BridgeApp : Application() {
     override fun onCreate() {
         super.onCreate()
         NotificationCenter.init(this)
+        ActionDedupe.init(this)
     }
 }
