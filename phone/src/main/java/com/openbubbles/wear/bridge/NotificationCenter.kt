@@ -274,7 +274,8 @@ object NotificationCenter {
         relayEnabled = initialized && prefs.relayEnabled,
         automationAvailable = automationAvailable(),
         trackedConversations = if (initialized) store.snapshot().size else 0,
-        quickReplies = if (initialized) prefs.quickReplies() else Protocol.DEFAULT_QUICK_REPLIES
+        quickReplies = if (initialized) prefs.quickReplies() else Protocol.DEFAULT_QUICK_REPLIES,
+        contactsAccess = initialized && ContactDirectory.hasAccess(appContext)
     )
 
     fun reply(threadId: String, text: String): String? {
@@ -590,7 +591,8 @@ object NotificationCenter {
         notificationAccess = BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = prefs.relayEnabled,
         automationAvailable = automationAvailable(),
-        conversations = threads.map { it.toSummary() }
+        conversations = threads.map { it.toSummary() },
+        contactsAccess = ContactDirectory.hasAccess(appContext)
     )
 
     private fun decorate(thread: WireThread): WireThread {

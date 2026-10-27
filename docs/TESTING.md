@@ -445,6 +445,43 @@ Release action tests for reply and mark-read need the debug receiver, so those a
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
 
+## 1.4.0 contact-picker and group checks
+
+Local validation: **73 tests passed** (20 protocol, 33 phone, 20 watch), with zero failures/errors.
+Both apps' debug and R8 release builds succeeded; lint completed with warnings and no errors.
+Signed release APKs have matching certificates/application IDs, versionName `1.4.0`, versionCode
+`6`, and no debug receivers. The phone release declares optional runtime Contacts permission.
+
+New tests cover contact serialization/older metadata, optional permission denial and revocation,
+parameterized search, multi-address choices, normalization/deduplication, contact-based pagination,
+60 KB response trimming without skipped continuation entries, stale response rejection, and separate
+watch contact-cache persistence. Group notification tests preserve group IDs, titles, sender labels
+and null one-to-one address; watch tests include direct chats without addresses and verify contact
+selection itself does not enqueue/send a message.
+
+On the S25 / Galaxy Watch6 Classic (not directly tested on the build machine):
+
+1. Install both 1.4.0 APKs over 1.3.x. On the phone, allow Contacts under **Watch contact picker**.
+   Deny it first if you want to check that recent chats, groups and manual entry still work.
+2. Watch: **New message → Choose a contact**. Browse, search a name/number/email, load another page,
+   and choose a contact with multiple addresses. Confirm each number/email is offered separately
+   and that choosing a recipient only opens the composer. Then explicitly send a test message.
+3. With automation disabled, confirm cached notification chats still open/reply, while starting
+   a brand-new recipient reports the need for automation. With automation on/unlocked phone,
+   verify OpenBubbles performs the actual send to the address chosen, not a different number.
+4. Receive a real OpenBubbles group-message notification. Sync the watch; open **Groups** from
+   Messages and **Group chats** in New message. Confirm the same existing group opens, sender
+   labels remain visible, and a reply reaches the group once, not as separate direct messages.
+5. Check a known direct conversation with no exposed address: it should still appear under Recent
+   OpenBubbles chats. Groups that have never notified cannot be privately enumerated by this bridge.
+6. Browse a contact page, disconnect the phone and reopen the picker. Cached entries remain usable
+   offline, but searching beyond that cache and loading more need the phone. Reconnect and refresh.
+7. Revoke Contacts on the phone, then sync/reopen the bridge. The watch should clear cached contact
+   entries after receiving the revoked permission metadata/response. Offline copies cannot receive
+   revocation until reconnect. No contact photos, notes, or third-party uploads should be introduced.
+8. Try with an older phone bridge: contact loading should time out with an update/permission hint,
+   not spin indefinitely. The wire additions remain protocol v3; use matching 1.4.0 apps for contacts.
+
 ## 1.3.1 Samsung permission-status regression checks
 
 This update addresses a Galaxy S25 / Galaxy Watch6 Classic report: App info → Notifications said

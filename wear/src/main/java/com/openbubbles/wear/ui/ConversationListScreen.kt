@@ -24,6 +24,9 @@ import androidx.wear.compose.material3.TextButton
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -51,6 +54,8 @@ fun ConversationListScreen(
     val unreadCount = remember(state.conversations) {
         state.conversations.count { it.unread }
     }
+    var groupsOnly by remember { mutableStateOf(false) }
+    val visibleConversations = state.conversations.filter { !groupsOnly || it.isGroup }
 
     AppScaffold(timeText = { TimeText() }) {
         Box(Modifier.fillMaxSize()) {
@@ -97,7 +102,22 @@ fun ConversationListScreen(
                     }
                 }
 
-                if (state.conversations.isEmpty()) {
+                item {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        TextButton(onClick = { groupsOnly = false }) { Text(if (!groupsOnly) "All ✓" else "All") }
+                        TextButton(onClick = { groupsOnly = true }) { Text(if (groupsOnly) "Groups ✓" else "Groups") }
+                    }
+                }
+
+                if (groupsOnly && visibleConversations.isEmpty()) {
+                    item {
+                        Card(onClick = onSync, modifier = Modifier.fillMaxWidth()) {
+                            Text("No group chats yet", style = MaterialTheme.typography.titleSmall)
+                            Text("Receive a group message with OpenBubbles notifications enabled, then sync. Group chats use their existing conversation, not a new recipient list.",
+                                style = MaterialTheme.typography.bodyExtraSmall)
+                        }
+                    }
+                } else if (state.conversations.isEmpty()) {
                     item {
                         EmptyStateCard(
                             hasNotificationAccess = state.notificationAccess,
@@ -107,7 +127,7 @@ fun ConversationListScreen(
                     }
                 } else {
                     items(
-                        items = state.conversations,
+                        items = visibleConversations,
                         key = { it.id }
                     ) { summary ->
                         ConversationCard(
@@ -120,7 +140,7 @@ fun ConversationListScreen(
                 item {
                     Button(
                         onClick = onNewMessage,
-                        enabled = state.phoneOnline && state.relayEnabled,
+                        enabled = state.relayEnabled,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("New message")

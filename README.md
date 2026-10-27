@@ -42,6 +42,10 @@ setup, or message transport.
 - Scrollable conversation view with sender labels in group chats.
 - Quick replies, plus voice or keyboard input through Wear's remote input UI.
 - **New message**: start a chat from a phone number or email address, or pick a recent contact.
+- **Contact picker**: browse/search the phone address book used by OpenBubbles on Android; choose
+  a saved number or email instead of typing it. Contacts permission is optional and granted on the phone.
+- **Group chats**: an explicit Groups view plus a group section in New message. Existing group
+  identities and sender labels are preserved; groups are discovered from OpenBubbles notifications.
 - **Send in quiet chats**: send even after the notification has been dismissed, through
   OpenBubbles' composer.
 - **Load older messages**: scroll OpenBubbles' chat screen and prepend older history to the watch.
@@ -74,20 +78,20 @@ No root access, Shizuku, custom OpenBubbles build, or OpenBubbles-side changes a
 
 ## Install
 
-Download the APKs from the [1.3.1 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.3.1).
+Download the APKs from the [1.4.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.4.0).
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.3.1.apk`
-- `dist/OpenBubblesWear-Watch-1.3.1.apk`
+- `dist/OpenBubblesWear-Phone-1.4.0.apk`
+- `dist/OpenBubblesWear-Watch-1.4.0.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.3.1.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.3.1.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.4.0.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.4.0.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -129,6 +133,9 @@ OpenBubbles' messages and account are untouched. The watch APK updates normally.
    automation runs. New chats, quiet-chat sends, and history loading are unavailable while
    automation is off.
 6. Keep the bridge app installed. Android may stop background work if the app is force-stopped.
+7. Optional: under **Watch contact picker**, tap **Allow contact picker** and approve Contacts.
+   This lets the watch browse names and numbers/emails from the same Android address book used by
+   OpenBubbles. It does not grant the bridge access to OpenBubbles' private database.
 
 **Optional assisted setup:** install and start [Shizuku](https://shizuku.rikka.app/) using wireless
 debugging (shell mode, not root). In the phone bridge, tap **Grant Shizuku access**, approve the
@@ -215,11 +222,29 @@ chats that have never produced a notification on this phone cannot be discovered
 notification path, but with automation on you can start a new chat by address or search for an
 existing one by title when loading history.
 
+### Pick a contact or group on the watch
+
+1. Install both 1.4.0 APKs and allow Contacts in the phone bridge.
+2. On the watch, open **New message → Choose a contact**. Browse or **Search contacts** by name,
+   phone number, or email; **Load more contacts** fetches the next page. If someone has multiple
+   numbers/emails, choose one explicitly. Selecting a contact opens the composer—it does not send.
+3. Starting a brand-new chat still requires connected accessibility automation and an unlocked
+   phone. Existing notification replies work without automation. No root or OpenBubbles changes.
+4. Use **Groups** on the Messages screen or **Group chats** in New message to open an existing group.
+   Have OpenBubbles post a notification for that group at least once, then sync. This does not
+   create a new group or send separately to its members.
+
+The address book is not a directory of registered Apple/iMessage accounts, and OpenBubbles-only
+private/imported contacts may be absent. The last browsed contacts page/search is cached for offline
+use; it is not a complete offline phone-book mirror. Search/paging needs the phone. Groups that
+have never notified cannot be enumerated from OpenBubbles' private storage under the no-root,
+unmodified-app integration.
+
 ## Using the watch app
 
 - Tap a conversation to open it.
 - **New message** opens a recipient screen. Enter a phone number or email address, or choose a
-  recent one-to-one contact. The first send needs automation; afterwards OpenBubbles' notification
+  phone contact, recent chat, or existing group. The first send to a new recipient needs automation; afterwards OpenBubbles' notification
   and normal shortcut take over.
 - **Reply** opens the composer with quick replies and **Speak or type a reply**. For a quiet chat
   the button reads **Send message** and the phone performs the send through OpenBubbles' composer.
@@ -300,6 +325,11 @@ OpenBubbles account and chat UI.
 - Shizuku assistance only changes this bridge's notification/accessibility grants and battery
   exemption. It does not access OpenBubbles' private files and rejects root-mode Shizuku.
 - Messages stay on the phone and watch. Nothing is sent to a third-party server by this project.
+- Optional Contacts permission reads only names and phone/email addresses for watch-requested
+  browsing/search. No contact photos, notes, account credentials, or third-party upload. Cached
+  results are stored separately in the watch's private preferences. Revoking Contacts clears the
+  cached list at the next phone metadata sync/contact response; offline copies cannot be remotely
+  erased until the watch reconnects. Clearing watch app data/uninstalling removes its cache.
 - The Wear Data Layer is provided and encrypted in transit by Google Play services.
 - Reply text is passed to OpenBubbles' own notification `PendingIntent`; new-chat and quiet-chat
   sends are typed into OpenBubbles' own composer. The bridge does not handle account credentials
@@ -367,7 +397,7 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.3.1 and watch app 1.3.1, using protocol version 3. Update
+The current release is phone bridge 1.4.0 and watch app 1.4.0, using protocol version 3. Update
 both APKs together for request deduplication and the latest features. A 1.2.0 watch paired with a 1.1.0
 phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
 cannot use the newer actions.

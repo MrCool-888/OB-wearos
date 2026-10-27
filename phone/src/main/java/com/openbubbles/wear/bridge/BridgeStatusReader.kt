@@ -14,6 +14,7 @@ data class BridgeUiState(
     val openBubblesPackage: String = "",
     val automationAvailable: Boolean = false,
     val automationEnabled: Boolean = false,
+    val contactsAccess: Boolean = false,
     val legacyBridgeInstalled: Boolean = false,
     val relayEnabled: Boolean = true,
     val listenerConnected: Boolean = false,
@@ -47,6 +48,7 @@ fun readBridgeUiState(context: Context): BridgeUiState {
         openBubblesPackage = BridgeInfo.openBubblesPackage(context).orEmpty(),
         automationAvailable = BridgeInfo.isAutomationReady(context),
         automationEnabled = BridgeInfo.hasAutomationAccess(context),
+        contactsAccess = ContactDirectory.hasAccess(context),
         legacyBridgeInstalled = runCatching {
             context.packageManager.getPackageInfo("com.openbubbles.wear.bridge", 0)
         }.isSuccess,

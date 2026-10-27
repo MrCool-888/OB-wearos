@@ -10,6 +10,9 @@ import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.BridgeError
+import com.openbubbles.wear.protocol.ContactsPage
+import com.openbubbles.wear.protocol.ContactsRequest
+import com.openbubbles.wear.protocol.WatchContact
 import com.openbubbles.wear.protocol.HistoryPayload
 import com.openbubbles.wear.protocol.HistoryRequest
 import com.openbubbles.wear.protocol.MarkReadRequest
@@ -96,12 +99,22 @@ data class WatchState(
     val alertsEnabled: Boolean = true,
     val notificationPermission: Boolean = true,
     val visibleThreadId: String? = null,
+    val contacts: List<WatchContact> = emptyList(),
+    val contactsQuery: String = "",
+    val contactsAccess: Boolean? = null,
+    val contactsNextOffset: Int? = null,
+    val contactsRequestId: String? = null,
+    val contactsRequestOffset: Int = 0,
+    val contactsError: String? = null,
     val error: String? = null,
     val info: String? = null
 ) {
     val phoneOnline: Boolean get() = connected || reachable
     val queuedCount: Int get() = queuedSends.size
     val canPostNotifications: Boolean get() = alertsEnabled && notificationPermission
+    val contactsLoading: Boolean get() = contactsRequestId != null
+    val groups: List<ThreadSummary> get() = conversations.filter { it.isGroup }
+    val directChats: List<ThreadSummary> get() = conversations.filterNot { it.isGroup }
 
     fun queuedFor(threadId: String): Boolean = queuedSends.any { it.threadId == threadId }
 }
@@ -109,6 +122,7 @@ data class WatchState(
 object WatchRepository {
     private const val TAG = "OBWearRepo"
     private const val PREFS_NAME = "openbubbles_wear"
+    private const val CONTACTS_PREFS_NAME = "openbubbles_wear_contacts"
     private const val KEY_THREADS = "threads"
     private const val KEY_CONVERSATIONS = "conversations"
     private const val KEY_QUICK_REPLIES = "quick_replies"
@@ -126,6 +140,10 @@ object WatchRepository {
     private const val KEY_ALERTS_ENABLED = "alerts_enabled"
     private const val KEY_NOTIFY_BASELINE = "notify_baseline"
     private const val KEY_NOTIFIED_AT = "notified_at:"
+    private const val KEY_CONTACTS = "contacts"
+    private const val KEY_CONTACTS_QUERY = "contacts_query"
+    private const val KEY_CONTACTS_ACCESS = "contacts_access"
+    private const val KEY_CONTACTS_NEXT = "contacts_next"
     private const val LOCAL_PREFIX = "local-"
     private const val AUTO_PREFIX = "auto-"
     private const val NEW_THREAD_PREFIX = "new:"
@@ -161,6 +179,7 @@ object WatchRepository {
         val app = context.applicationContext
         appContext = app
         val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val contactPrefs = app.getSharedPreferences(CONTACTS_PREFS_NAME, Context.MODE_PRIVATE)
         val threads = prefs.getString(KEY_THREADS, null)
             ?.let { Wire.decode<List<WireThread>>(it) }
             ?.associateBy { it.id }
@@ -191,7 +210,11 @@ object WatchRepository {
             quickReplies = quickReplies,
             queuedSends = queued,
             alertsEnabled = prefs.getBoolean(KEY_ALERTS_ENABLED, true),
-            notificationPermission = WatchNotifications.areSystemNotificationsAllowed(app)
+            notificationPermission = WatchNotifications.areSystemNotificationsAllowed(app),
+            contacts = contactPrefs.getString(KEY_CONTACTS, null)?.let { Wire.decode<List<WatchContact>>(it) }.orEmpty(),
+            contactsQuery = contactPrefs.getString(KEY_CONTACTS_QUERY, "").orEmpty(),
+            contactsAccess = if (contactPrefs.contains(KEY_CONTACTS_ACCESS)) contactPrefs.getBoolean(KEY_CONTACTS_ACCESS, false) else null,
+            contactsNextOffset = contactPrefs.getInt(KEY_CONTACTS_NEXT, -1).takeIf { it >= 0 }
         )
         initialized = true
         scope.launch {
@@ -286,6 +309,10 @@ object WatchRepository {
                 notificationAccess = payload.notificationAccess,
                 relayEnabled = payload.relayEnabled,
                 automationAvailable = payload.automationAvailable,
+                contactsAccess = payload.contactsAccess ?: it.contactsAccess,
+                contacts = if (payload.contactsAccess == false) emptyList() else it.contacts,
+                contactsNextOffset = if (payload.contactsAccess == false) null else it.contactsNextOffset,
+                contactsRequestId = if (payload.contactsAccess == false) null else it.contactsRequestId,
                 connected = connected || it.connected,
                 reachable = connected || it.reachable,
                 lastSyncAt = if (connected) System.currentTimeMillis() else payload.generatedAt,
@@ -295,6 +322,7 @@ object WatchRepository {
             )
         }
         persist()
+        if (payload.contactsAccess == false) persistContacts()
         if (connected) {
             val context = appContext
             if (context != null) {
@@ -493,15 +521,69 @@ object WatchRepository {
                 notificationAccess = pong.notificationAccess,
                 relayEnabled = pong.relayEnabled,
                 automationAvailable = pong.automationAvailable,
+                contactsAccess = pong.contactsAccess ?: it.contactsAccess,
+                contacts = if (pong.contactsAccess == false) emptyList() else it.contacts,
+                contactsNextOffset = if (pong.contactsAccess == false) null else it.contactsNextOffset,
+                contactsRequestId = if (pong.contactsAccess == false) null else it.contactsRequestId,
                 quickReplies = pong.quickReplies.ifEmpty { Protocol.DEFAULT_QUICK_REPLIES }
             )
         }
         persist()
+        if (pong.contactsAccess == false) persistContacts()
         flushQueue()
     }
 
     fun onBridgeError(error: BridgeError) {
         _state.update { it.copy(error = error.error) }
+    }
+
+    @Synchronized
+    fun requestContacts(query: String = "", more: Boolean = false) {
+        if (!initialized) return
+        val context = appContext ?: return
+        val state = _state.value
+        if (!state.phoneOnline || !state.relayEnabled) {
+            _state.update { it.copy(contactsError = if (!state.relayEnabled) "Relay is paused on the phone." else "Phone offline. Showing saved contacts.") }
+            return
+        }
+        val search = query.trim().take(80)
+        val offset = if (more && search == state.contactsQuery) state.contactsNextOffset ?: return else 0
+        val id = UUID.randomUUID().toString()
+        _state.update { it.copy(contactsQuery = search, contactsRequestId = id, contactsRequestOffset = offset,
+            contacts = if (offset == 0 && search != it.contactsQuery) emptyList() else it.contacts,
+            contactsNextOffset = if (offset == 0) null else it.contactsNextOffset, contactsError = null) }
+        PhoneLink.send(context, Protocol.PATH_CONTACTS_REQUEST,
+            Wire.encodeBytes(ContactsRequest(requestId = id, query = search, offset = offset))) { sent ->
+            if (!sent) _state.update { if (it.contactsRequestId != id) it else it.copy(contactsRequestId = null,
+                contactsError = "Phone unreachable. Showing saved contacts.") }
+        }
+        scope.launch {
+            delay(20_000L)
+            _state.update { if (it.contactsRequestId != id) it else it.copy(contactsRequestId = null,
+                contactsError = "No contact list received. Install the matching phone bridge, allow Contacts there, then retry.") }
+        }
+    }
+
+    @Synchronized
+    fun onContactsPage(page: ContactsPage) {
+        val current = _state.value
+        if (page.requestId != current.contactsRequestId || page.query != current.contactsQuery ||
+            page.offset != current.contactsRequestOffset) return
+        _state.update { state ->
+            val contacts = when {
+                !page.contactsAccess -> emptyList()
+                page.error != null -> state.contacts
+                page.offset == 0 -> page.contacts
+                else -> (state.contacts + page.contacts).distinctBy { it.id }
+            }.take(5000)
+            state.copy(contacts = contacts, contactsAccess = page.contactsAccess, contactsRequestId = null,
+                contactsNextOffset = when {
+                    !page.contactsAccess -> null
+                    page.error != null -> state.contactsNextOffset
+                    else -> page.nextOffset?.takeIf { it > page.offset && it <= 5000 }
+                }, contactsError = page.error)
+        }
+        persistContacts()
     }
 
     fun onPeerConnected() {
@@ -1653,6 +1735,18 @@ object WatchRepository {
             .putBoolean(KEY_ALERTS_ENABLED, state.alertsEnabled)
             .putString(KEY_QUEUE, encodeQueue(state.queuedSends))
         return if (synchronous) editor.commit() else { editor.apply(); true }
+    }
+
+    @Synchronized
+    private fun persistContacts() {
+        val context = appContext ?: return
+        val state = _state.value
+        val editor = context.getSharedPreferences(CONTACTS_PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_CONTACTS, Wire.encode(state.contacts))
+            .putString(KEY_CONTACTS_QUERY, state.contactsQuery)
+            .putInt(KEY_CONTACTS_NEXT, state.contactsNextOffset ?: -1)
+        state.contactsAccess?.let { editor.putBoolean(KEY_CONTACTS_ACCESS, it) }
+        editor.apply()
     }
 
     private fun restoreFromDataLayer(context: Context, prefs: android.content.SharedPreferences) {

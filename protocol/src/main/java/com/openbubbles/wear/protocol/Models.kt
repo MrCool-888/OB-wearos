@@ -117,7 +117,8 @@ data class SyncPayload(
     val notificationAccess: Boolean,
     val relayEnabled: Boolean = true,
     val automationAvailable: Boolean = false,
-    val conversations: List<ThreadSummary> = emptyList()
+    val conversations: List<ThreadSummary> = emptyList(),
+    val contactsAccess: Boolean? = null
 )
 
 @Serializable
@@ -165,7 +166,8 @@ data class PongPayload(
     val relayEnabled: Boolean = true,
     val automationAvailable: Boolean = false,
     val trackedConversations: Int = 0,
-    val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES
+    val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES,
+    val contactsAccess: Boolean? = null
 )
 
 @Serializable
@@ -272,4 +274,34 @@ data class BridgeError(
     val version: Int = Protocol.VERSION,
     val requestId: String? = null,
     val error: String
+)
+
+@Serializable
+data class ContactAddress(val address: String, val label: String = "")
+
+@Serializable
+data class WatchContact(
+    val id: String,
+    val name: String,
+    val addresses: List<ContactAddress> = emptyList()
+)
+
+@Serializable
+data class ContactsRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val query: String = "",
+    val offset: Int = 0
+)
+
+@Serializable
+data class ContactsPage(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val query: String = "",
+    val offset: Int = 0,
+    val contacts: List<WatchContact> = emptyList(),
+    val nextOffset: Int? = null,
+    val contactsAccess: Boolean = false,
+    val error: String? = null
 )

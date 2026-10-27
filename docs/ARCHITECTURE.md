@@ -323,6 +323,31 @@ again. The journal retains 200 IDs; it is duplicate protection, not an exactly-o
 
 ## Watch side
 
+### Contact directory and group browsing (1.4)
+
+OpenBubbles on Android sources contacts from Android's address book. `ContactDirectory` reads that
+same public provider only after the bridge's optional runtime `READ_CONTACTS` grant; no private
+OpenBubbles files, SMS provider, root, or new OpenBubbles API is involved. Watch requests specify a
+bounded query and offset. Parameterized provider selection covers display name and address, and
+returns only names, stable local IDs, and normalized phone/email choices. Multiple choices are
+not silently reduced to one number. Non-address records, contact photos, notes, and account data
+are excluded. Reads happen on request, not through background address-book scraping.
+
+`ContactsPage` holds up to 40 contacts / 10 addresses per contact. JSON is trimmed to 60 KB; the
+continuation advances by the number actually transmitted so trimming does not skip contacts.
+Paging/cache is bounded at 5,000 contacts; users can search instead of loading a long list. The
+watch correlates request ID, query and offset, ignores stale responses, and times out after 20 s.
+Its contact cache uses separate private preferences, avoiding reserializing the address book
+during each journaled message send. Revocation is signaled by nullable `contactsAccess` on metadata
+or the contact response; explicit false clears the cache, while older metadata without the field
+does not pretend to revoke permission. Offline copies remain until a revocation signal arrives.
+
+The watch's new-message picker includes **Choose a contact**, recent direct chats even when no
+address was exposed, and **Group chats**. Group browsing filters the same cached summaries rather
+than fabricating one-to-one recipients. Group notification shortcut IDs and sender labels survive
+parsing/sync and are used for replies. Groups with no observed notification remain undiscoverable;
+this integration does not enumerate OpenBubbles' private group database or create new groups.
+
 `WearListenerService` receives live messages and data-item changes. It forwards them to
 `WatchRepository`, which owns all watch state and persistence.
 
@@ -468,6 +493,8 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/history_result` | phone → watch | Older messages, `hasMore`, or an error. |
 | `/media_request` | watch → phone | Ask the phone to publish one cached attachment. |
 | `/media_result` | phone → watch | Whether the media data item was published, or an error. |
+| `/contacts_request` | watch → phone | Request a name/address-filtered page from the permitted Android address book. |
+| `/contacts_result` | phone → watch | Correlated contact page, address choices, continuation, permission status, or error. |
 
 `SyncPayload` and `PongPayload` carry `automationAvailable`. `ThreadSummary` carries `address`,
 `canSend`, and the existing reply/mark-read flags. `SendRequest` carries an optional `threadId`,

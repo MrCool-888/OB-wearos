@@ -27,7 +27,7 @@ import com.openbubbles.wear.WatchNotifications
 import com.openbubbles.wear.WatchRepository
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "1.3.1"
+const val WATCH_APP_VERSION = "1.4.0"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
@@ -35,6 +35,7 @@ sealed interface WearScreen {
     data class Composer(val threadId: String) : WearScreen
     data class Media(val threadId: String, val mediaId: String) : WearScreen
     data object NewMessage : WearScreen
+    data object Contacts : WearScreen
     data object Settings : WearScreen
 }
 
@@ -178,8 +179,12 @@ fun WearApp() {
                 onBack = { pop() },
                 onOpenChat = { threadId -> push(WearScreen.Chat(threadId)) },
                 onStartChat = { threadId -> push(WearScreen.Composer(threadId)) },
+                onOpenContacts = { push(WearScreen.Contacts) },
                 onDismissNotice = { WatchRepository.clearNotices() }
             )
+
+            WearScreen.Contacts -> ContactPickerScreen(state = state, onBack = { pop() },
+                onStartChat = { threadId -> push(WearScreen.Composer(threadId)) })
 
             is WearScreen.Composer -> ComposerScreen(
                 state = state,

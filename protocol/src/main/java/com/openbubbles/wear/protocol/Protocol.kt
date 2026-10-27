@@ -37,6 +37,8 @@ object Protocol {
     const val PATH_HISTORY_RESULT = "$BASE_PATH/history_result"
     const val PATH_MEDIA_REQUEST = "$BASE_PATH/media_request"
     const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
+    const val PATH_CONTACTS_REQUEST = "$BASE_PATH/contacts_request"
+    const val PATH_CONTACTS_RESULT = "$BASE_PATH/contacts_result"
 
     // DataApi paths (durable snapshots for when the watch app is not running).
     const val DATA_SYNC = "$BASE_PATH/sync"
