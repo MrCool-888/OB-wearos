@@ -141,8 +141,9 @@ OpenBubbles' messages and account are untouched. The watch APK updates normally.
    ```
    On Android 13 and newer, a sideloaded app may first need **Allow restricted settings** from
    Android's App info screen. The phone must be unlocked with OpenBubbles able to open when
-   automation runs. New chats, quiet-chat sends, and history loading are unavailable while
-   automation is off.
+   automation runs. New chats and history loading are unavailable while automation is off.
+   Quiet chats reuse OpenBubbles' saved notification reply first, so automation is only needed
+   when that token is unavailable.
 6. Keep the bridge app installed. Android may stop background work if the app is force-stopped.
 7. Optional: under **Watch contact picker**, tap **Allow contact picker** and approve Contacts.
    This lets the watch browse names and numbers/emails from the same Android address book used by
@@ -312,10 +313,10 @@ OpenBubbles' private storage.
   one-minute steps before the oldest cached message. Very long conversations and messages with
   identical text can be ambiguous. Missing or ambiguous oldest-text anchors fail rather than
   relabel newer messages as older. Accessibility history has no reliable group sender labels.
-- **Automation is optional and selector-dependent.** New chats, quiet-chat sends, and history
-  loading rely on OpenBubbles' Flutter accessibility tree. The current selectors were written
-  against OpenBubbles 2.0 and still need validation against a real device. A future OpenBubbles
-  release can rename or restructure controls and require a bridge update.
+- **Automation is optional and selector-dependent.** New chats, chats without a usable saved
+  reply action, and history loading rely on OpenBubbles' Flutter accessibility tree. The current
+  selectors were written against OpenBubbles 2.0 and still need validation against a real device.
+  A future OpenBubbles release can rename or restructure controls and require a bridge update.
 - **Automation is not instant.** The phone may need to open OpenBubbles, navigate, type, and
   verify the send. A send can take up to about 90 seconds and history loading up to about two
   minutes. The phone should be unlocked and able to launch OpenBubbles.
@@ -368,9 +369,10 @@ OpenBubbles account and chat UI.
   cached list at the next phone metadata sync/contact response; offline copies cannot be remotely
   erased until the watch reconnects. Clearing watch app data/uninstalling removes its cache.
 - The Wear Data Layer is provided and encrypted in transit by Google Play services.
-- Reply text is passed to OpenBubbles' own notification `PendingIntent`; new-chat and quiet-chat
-  sends are typed into OpenBubbles' own composer. The bridge does not handle account credentials
-  or encryption keys.
+- Reply text is passed to OpenBubbles' own notification `PendingIntent`, including the most recent
+  saved reply action for a quiet chat. New-chat sends, and quiet chats whose saved token is no
+  longer valid, are typed into OpenBubbles' own composer. The bridge does not handle account
+  credentials or encryption keys.
 - Photo and GIF bytes are copied from OpenBubbles' notification attachment URIs into the bridge's
   app-private cache, then transferred to the watch over the Wear Data Layer. They are not uploaded
   anywhere else. Clearing the bridge cache or uninstalling the app removes the phone copy.
