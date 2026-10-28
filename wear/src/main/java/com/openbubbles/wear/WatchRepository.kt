@@ -170,7 +170,7 @@ object WatchRepository {
     private const val QUEUE_DISPATCH_TIMEOUT_MS = 20_000L
     private const val LOCKED_RETRY_DELAY_MS = 30_000L
     private const val LOCKED_SEND_INFO =
-        "Phone locked. The message is saved and will send after unlock."
+        "Phone locked. The message is queued and will retry automatically."
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(WatchState())
@@ -342,7 +342,7 @@ object WatchRepository {
                 error = null,
                 info = when {
                     !current.phoneLocked && payload.phoneLocked ->
-                        "Phone locked. Saved chats and notification replies work; older history and quiet-chat sends wait for unlock."
+                        "Phone locked. Saved chats and notification replies keep sending; older history waits for unlock."
 
                     unlocked -> "Phone unlocked. Sending queued messages."
                     else -> current.info
@@ -779,9 +779,6 @@ object WatchRepository {
         }
         val title = thread?.title ?: summary?.title
         val address = thread?.address ?: summary?.address
-        // A secure keyguard blocks composer automation. Notification replies
-        // still work while locked, so only quiet-chat sends are held back.
-        val waitingForUnlock = state.phoneLocked && !canReply
 
         val now = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
@@ -832,7 +829,7 @@ object WatchRepository {
                 title = title,
                 useReply = canReply,
                 createdAt = now,
-                nextAttemptAt = if (waitingForUnlock) now + LOCKED_RETRY_DELAY_MS else 0L
+                nextAttemptAt = 0L
             )
         )
         if (!persist(synchronous = true)) {
@@ -847,12 +844,6 @@ object WatchRepository {
         WatchNotifications.cancel(context, threadId)
         WatchNotifications.markNotified(context, threadId, now)
 
-        if (waitingForUnlock) {
-            // Keep the outbox entry untouched until the phone reports unlock;
-            // flushQueue would otherwise dispatch and fail on every sync.
-            _state.update { it.copy(info = LOCKED_SEND_INFO) }
-            return true
-        }
         _state.update { it.copy(info = if (it.phoneOnline) "Message saved to the outbox." else "Phone offline. The message will send when it reconnects.") }
         flushQueue()
         return true
@@ -927,21 +918,9 @@ object WatchRepository {
         scope.launch {
             var sentAny = false
             var lastError: String? = null
-            var deferredByLock = 0
             try {
                 for (item in _state.value.queuedSends.toList()) {
                     if (!manual && item.nextAttemptAt > System.currentTimeMillis()) continue
-                    val snapshot = _state.value
-                    val snapshotThread = snapshot.threads[item.threadId]
-                    val snapshotSummary = snapshot.conversations.firstOrNull { it.id == item.threadId }
-                    val snapshotCanReply =
-                        snapshotThread?.canReply == true || snapshotSummary?.canReply == true
-                    if (snapshot.phoneLocked && !snapshotCanReply) {
-                        // A secure keyguard blocks UI automation. Live
-                        // notification replies are still allowed.
-                        deferredByLock++
-                        continue
-                    }
                     val claimed = synchronized(this@WatchRepository) {
                         if (!_state.value.relayEnabled ||
                             _state.value.queuedSends.none { it.requestId == item.requestId } ||
@@ -999,16 +978,6 @@ object WatchRepository {
                     it.copy(
                         error = if (manual) lastError else it.error,
                         info = if (manual) null else it.info
-                    )
-                }
-            } else if (deferredByLock > 0) {
-                _state.update {
-                    it.copy(
-                        info = if (manual) {
-                            "Phone locked. $deferredByLock queued ${if (deferredByLock == 1) "message" else "messages"} will send after unlock."
-                        } else {
-                            it.info
-                        }
                     )
                 }
             } else if (manual) {

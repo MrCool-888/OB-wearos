@@ -279,7 +279,7 @@ private fun BridgeScreen() {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Chats without notifications", style = MaterialTheme.typography.titleMedium)
                         Text(PublishedChatDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
-                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. Saved chats and notification replies work while the phone is locked; older history and quiet-chat sends wait for unlock.",
+                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. Chats that have posted a notification keep sending through its saved reply action while the phone is locked; older history waits for unlock.",
                             style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !setupBusy, onClick = {
                             runSetup { ctx ->

@@ -48,16 +48,18 @@ setup, or message transport.
   identities and notification sender labels are preserved. Optional Shizuku discovery imports chats
   from OpenBubbles' published Android shortcuts **and notification channels** without needing a
   notification (partial list only).
-- **Send in quiet chats**: send even after the notification has been dismissed, through
-  OpenBubbles' composer.
+- **Send in quiet chats**: after the notification is dismissed, reuse OpenBubbles' saved reply
+  action. If that token is no longer valid, fall back to OpenBubbles' composer.
 - **History on open**: with automation ready and the phone online/unlocked, opening a contact or
   group automatically requests readable older text, including when the watch cache is empty.
   Load more with **Load older messages**; use **Latest messages** to leave the older viewing window.
-- **Locked-phone behavior**: cached chats, live notification replies, new incoming messages, and
-  Android-published chat discovery keep working while the phone is securely locked. Older history
-  and quiet-chat sends wait for unlock; sends typed on the watch are saved and retried automatically.
+- **Locked-phone behavior**: cached chats, notification replies (live or saved), incoming syncs,
+  and Android-published chat discovery keep working while the phone is securely locked. Older
+  history still waits for unlock. A chat that has posted a notification can send while locked
+  through its saved reply action; if no action is available, the message is queued and retried.
 - **Reply when live**: replies to active notifications use OpenBubbles' own reply action, so they
-  work even when automation is off or the phone is locked.
+  work even when automation is off or the phone is locked. The bridge also keeps the most recent
+  reply action per chat so sending still works after the notification is dismissed.
 - Mark as read and open on phone, using OpenBubbles' notification actions and saved content
   intents.
 - Optimistic send bubbles (`Sending…` / `Not sent`) that resolve when the phone confirms.
@@ -87,20 +89,20 @@ shortcuts and notification channels.
 
 ## Install
 
-Download the APKs from the [1.6.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.6.0).
+Download the APKs from the [1.7.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.7.0).
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.6.0.apk`
-- `dist/OpenBubblesWear-Watch-1.6.0.apk`
+- `dist/OpenBubblesWear-Phone-1.7.0.apk`
+- `dist/OpenBubblesWear-Watch-1.7.0.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.6.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.6.0.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.7.0.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.7.0.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -234,14 +236,14 @@ an existing one by title when loading history.
 
 ### Pick a contact or group on the watch
 
-1. Install both 1.6.0 APKs and optionally allow Contacts in the phone bridge.
+1. Install both 1.7.0 APKs and optionally allow Contacts in the phone bridge.
 2. On the watch, open **New message → Choose a contact**. Browse or **Search contacts** by name,
    phone number, or email; **Load more contacts** fetches the next page. If someone has multiple
    numbers/emails, choose one explicitly. Selecting a contact opens its chat/history screen—it
    does not send. Tap **Send message** or **Reply** when you want to compose.
 3. Starting a brand-new chat still requires connected accessibility automation and an unlocked
-   phone. Existing notification replies work without automation and while the phone is locked. No
-   root or OpenBubbles changes.
+   phone. Existing chats that have posted a notification keep sending while the phone is locked
+   through OpenBubbles' saved reply action. No root or OpenBubbles changes.
 4. Use **Groups** on the Messages screen or **Published chats** in New message to open an existing
    group. For chats without notifications: open OpenBubbles on the phone first, start Shizuku via
    wireless debugging, grant the bridge Shizuku access, then tap **Find chats (Shizuku)** on the
@@ -266,7 +268,8 @@ OpenBubbles' private storage.
   phone contact, recent chat, or existing group. The first send to a new recipient needs automation; afterwards OpenBubbles' notification
   and normal shortcut take over.
 - **Reply** opens the composer with quick replies and **Speak or type a reply**. For a quiet chat
-  the button reads **Send message** and the phone performs the send through OpenBubbles' composer.
+  the button reads **Send message**; the phone reuses OpenBubbles' saved reply action, then falls
+  back to its composer.
 - Opening a chat automatically requests history when automation and the phone are available.
   This opens/scrolls OpenBubbles on the phone. **Load older messages** reads another text page;
   **Latest messages** leaves the older viewing window. Empty-cache chats can load history too.
@@ -280,8 +283,8 @@ OpenBubbles' private storage.
 - Settings shows phone/bridge status, notification-access state, relay state, automation state,
   last sync, and cache counts.
 - Write while offline to save a message to the **Outbox**. It is sent automatically on reconnect;
-  Settings also has **Send queued now**. The phone still needs its normal permissions, and quiet
-  chats/new recipients still need an unlocked phone with automation enabled.
+  Settings also has **Send queued now**. The phone still needs its normal permissions. A chat with
+  no saved notification reply action and no automation needs an unlocked phone to send.
 - Tap a tile chat row, complication, or watch alert to open the matching saved conversation.
 
 ## Important limitations
@@ -294,9 +297,12 @@ OpenBubbles' private storage.
   chats or only chats that have appeared to Android before. Android/OEM restrictions can prevent the
   query. Notification discovery still works, and Shizuku is optional.
 - **Secure lock limits UI automation.** A locked phone cannot be unlocked by the bridge. Cached
-  chats, live notification replies, incoming syncs, and published chat discovery keep working.
-  Older history and quiet-chat sends require unlock; quiet-chat messages are saved in the watch
-  outbox and retried automatically after the phone reports it is unlocked.
+  chats, live and saved notification replies, incoming syncs, and published chat discovery keep
+  working. Chats that have posted a notification send through the saved reply action while locked.
+  Older history, brand-new chats, and chats with no saved reply action need unlock or automation;
+  those messages stay in the watch outbox and retry automatically. Reply tokens belong to
+  OpenBubbles and may be cancelled when it updates or dismisses a notification, so a saved-action
+  send is best effort rather than guaranteed.
 - **History is best effort.** The bridge sees only the messages OpenBubbles includes in the
   notification, plus the bubbles automation can scroll into view. Full message history is not
   guaranteed. Empty-cache chats can load readable text, but inaccessible UI text produces an error,
@@ -428,7 +434,7 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.6.0 and watch app 1.6.0, using protocol version 3. Update
+The current release is phone bridge 1.7.0 and watch app 1.7.0, using protocol version 3. Update
 both APKs together for request deduplication and the latest features. A 1.2.0 watch paired with a 1.1.0
 phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
 cannot use the newer actions.
@@ -450,5 +456,5 @@ cannot use the newer actions.
   action flow.
 - [Testing](docs/TESTING.md) — fake notifications, adb commands, automation checks, debug builds,
   and known emulator behavior.
-- [1.6.0 release notes](docs/RELEASE-1.6.0.md) — discovery without notifications and locked-phone
-  behavior.
+- [1.7.0 release notes](docs/RELEASE-1.7.0.md) — sending through OpenBubbles while the phone is
+  locked.

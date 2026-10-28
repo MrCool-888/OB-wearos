@@ -372,7 +372,7 @@ class WatchRepositoryTest {
         assertTrue(state.value.sendingThreads.isEmpty())
     }
 
-    @Test fun lockedQuietSendIsSavedWithoutAskingThePhone() {
+    @Test fun lockedQuietSendDispatchesWithoutWaitingForUnlock() {
         pending.clear()
         state.value = state.value.copy(
             connected = true,
@@ -388,14 +388,11 @@ class WatchRepositoryTest {
             queuedSends = emptyList(),
             sendingThreads = emptySet()
         )
-        assertTrue(WatchRepository.sendReply("chat", "Held until unlock"))
-        val queued = state.value.queuedSends.single()
-        assertFalse(queued.useReply)
-        assertTrue(queued.nextAttemptAt > System.currentTimeMillis())
-        assertTrue(state.value.info!!.contains("unlock", ignoreCase = true))
-        assertTrue(state.value.sendingThreads.isEmpty())
-        assertTrue(pending.isEmpty())
-        assertEquals("queued", state.value.threads.getValue("chat").messages.last().status)
+        assertTrue(WatchRepository.sendReply("chat", "Send now"))
+        val queued = state.value.queuedSends.singleOrNull()
+        assertFalse(queued?.useReply == true)
+        assertTrue(queued == null || queued.nextAttemptAt == 0L)
+        assertFalse(state.value.info.orEmpty().contains("after unlock", ignoreCase = true))
     }
 
     @Test fun lockedLiveReplyStillDispatchesThroughTheNotification() {

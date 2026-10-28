@@ -231,10 +231,10 @@ private fun PhoneStatusCard(
             "New messages stay on the phone until relay is resumed."
 
         state.phoneLocked && state.queuedCount > 0 ->
-            "Saved chats and notification replies work. ${state.queuedCount} ${if (state.queuedCount == 1) "message waits" else "messages wait"} for unlock; older history also waits."
+            "Replies send through OpenBubbles. ${state.queuedCount} ${if (state.queuedCount == 1) "message is" else "messages are"} retrying; older history waits for unlock."
 
         state.phoneLocked ->
-            "Saved chats and notification replies work. Older history and quiet-chat sends wait for unlock."
+            "Replies send through OpenBubbles while locked. Older history waits for unlock."
 
         unreadCount > 0 ->
             "$unreadCount unread ${if (unreadCount == 1) "chat" else "chats"} · Tap to refresh"

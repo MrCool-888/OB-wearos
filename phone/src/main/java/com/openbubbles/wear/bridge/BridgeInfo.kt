@@ -12,7 +12,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.6.0"
+    const val BRIDGE_VERSION = "1.7.0"
 
     const val LOCKED_HISTORY_MESSAGE =
         "The phone is securely locked. Unlock it to read older messages from OpenBubbles. Saved messages still work."

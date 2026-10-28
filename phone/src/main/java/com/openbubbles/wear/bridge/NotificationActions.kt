@@ -21,6 +21,18 @@ object NotificationActions {
             !action.remoteInputs.isNullOrEmpty()
         }
 
+    /**
+     * Extracts only what [sendReply] needs so the action can be persisted. A
+     * reply without a free-form input cannot carry typed text, so it is not
+     * saved.
+     */
+    fun savedReply(action: Notification.Action?): SavedReply? {
+        val input = action?.remoteInputs?.firstOrNull { it.allowFreeFormInput } ?: return null
+        val intent = action.actionIntent ?: return null
+        val resultKey = input.resultKey?.takeIf { it.isNotBlank() } ?: return null
+        return SavedReply(intent, resultKey)
+    }
+
     fun markReadAction(notification: Notification): Notification.Action? {
         val actions = notification.actions ?: return null
         return actions.firstOrNull { action ->
@@ -33,14 +45,30 @@ object NotificationActions {
     fun sendReply(context: Context, action: Notification.Action, text: String): Boolean {
         val inputs = action.remoteInputs
         if (inputs.isNullOrEmpty() || text.isBlank()) return false
+        val input = inputs.firstOrNull { it.allowFreeFormInput } ?: inputs.first()
+        return sendResults(context, action.actionIntent, input.resultKey, text)
+    }
+
+    fun sendReply(context: Context, reply: SavedReply, text: String): Boolean =
+        sendResults(context, reply.intent, reply.resultKey, text)
+
+    private fun sendResults(
+        context: Context,
+        intent: PendingIntent,
+        resultKey: String,
+        text: String
+    ): Boolean {
+        if (text.isBlank()) return false
         return try {
-            val input = inputs.firstOrNull { it.allowFreeFormInput } ?: inputs.first()
+            val input = RemoteInput.Builder(resultKey)
+                .setAllowFreeFormInput(true)
+                .build()
             val results = Bundle().apply {
-                putCharSequence(input.resultKey, text)
+                putCharSequence(resultKey, text)
             }
             val fillIn = Intent()
-            RemoteInput.addResultsToIntent(inputs, fillIn, results)
-            action.actionIntent.send(context, 0, fillIn)
+            RemoteInput.addResultsToIntent(arrayOf(input), fillIn, results)
+            intent.send(context, 0, fillIn)
             true
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to send notification reply", t)

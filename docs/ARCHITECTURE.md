@@ -18,7 +18,8 @@ There are two integration surfaces:
    composer, press Send, and scroll back through older bubbles. The official APK is never
    modified.
 
-The automation is deliberately a fallback. Live reply and mark-read still use notification
+The automation is deliberately a fallback. Live and saved notification replies, plus mark-read,
+still use notification `PendingIntent`s.
 actions, which are faster and do not require OpenBubbles to be visible.
 
 ## Modules
@@ -102,6 +103,13 @@ The content `PendingIntent` from each notification is persisted by `PendingInten
 thread ID, up to 40 entries. It is used to reopen the exact conversation later. OpenBubbles can
 cancel the token at any time, so callers fall back to UI navigation.
 
+The reply action's `PendingIntent` and free-form result key are persisted by `ReplyActionStore`,
+also keyed by thread ID and bounded to 40 entries. The action is saved on every notification post
+and is not removed when the notification disappears. This lets a quiet chat send through
+OpenBubbles' own receiver without waking or unlocking the phone. The token still belongs to
+OpenBubbles; it can be cancelled when OpenBubbles updates the notification, so the send path falls
+back to automation and the watch's durable outbox.
+
 ### Notification parsing
 
 `NotificationParser` uses `NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification`
@@ -123,7 +131,7 @@ and handles the following:
 - **Text**: trimmed and capped at 800 characters.
 - **Actions**: the first action with remote inputs is the reply action; an action containing
   "read" is mark-read. Availability is reflected in `canReply` / `canMarkRead`, and `canSend` is
-  true when either a reply action or automation is available.
+  true when a live reply action, a saved reply action, or automation is available.
 
 Message IDs are derived from `(threadId, timestamp, sender, text)` and hashed with SHA-1. Attachment
 state is deliberately excluded. The same message can be republished with or without image data,
@@ -203,10 +211,12 @@ sent to the watch is.
 OpenBubbles intents.
 
 - **Reply**: find the action with `RemoteInput`, write the reply into the remote-input bundle, and
-  send the action intent. OpenBubbles receives the text and does the real send.
+  send the action intent. OpenBubbles receives the text and does the real send. The same call works
+  with a `SavedReply` restored from `ReplyActionStore`, which is why replies do not need the
+  notification to still be visible.
 - **Mark read**: find the mark-read action and send it. OpenBubbles commonly cancels the
   notification after this, so the bridge records that the live action is gone but keeps the cached
-  history.
+  history and saved reply action.
 - **Open on phone**: use the live notification content intent, then the saved content intent, then
   launch the OpenBubbles package.
 
@@ -287,7 +297,7 @@ validation is required.
 - It uses the exported launcher/notification intents and does not call non-exported components.
 - It does not use root or Shizuku.
 - A secure lock cannot be bypassed. While locked, the bridge rejects UI automation with a retryable
-  result; live notification replies remain available.
+  result; live and saved notification replies remain available.
 
 ### Optional assisted setup and diagnostics
 
@@ -413,8 +423,9 @@ discovery placeholders. Media is persisted separately: the watch keeps the most 
   thread, the watch merges their messages into the real ID and removes the temporary entry. Sync
   summaries do the same cleanup without needing the full thread.
 - A send rejected with `retryable=true` (secure lock) stays in the durable outbox with a 30-second
-  backoff. Reconnect/pong/sync resets that backoff when the phone becomes unlocked. Live notification
-  replies are still attempted while locked because they do not use UI automation.
+  backoff. Reconnect/pong/sync resets that backoff when the phone becomes unlocked. A saved
+  notification reply is attempted before the lock guard, so a chat that has posted a notification
+  sends while locked without touching UI automation.
 
 ### Addresses and new chats
 
@@ -434,7 +445,7 @@ status `queued`, and synchronously journals it before transport. The outbox reje
 messages at 100 entries instead of dropping old ones.
 
 - All new sends use `/send` with thread ID, address, title, and text. The phone chooses its current
-  live reply action or optional automation, avoiding stale cached notification actions.
+  live reply action, then the saved reply action, then optional automation.
 - Queue replay is single-flight and stops while relay is paused. Entries remain queued on transport
   failure. After transport acceptance the journal entry is removed and the bubble becomes `sending`.
 - Confirmation can arrive before transport acceptance; the callback must not overwrite a completed
@@ -529,7 +540,7 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/update` | phone → watch | Live thread update after a notification or action. |
 | `/reply` | watch → phone | Reply through a live notification action. |
 | `/reply_result` | phone → watch | Reply outcome. |
-| `/send` | watch → phone | Send through a live reply action, otherwise the optional composer automation. |
+| `/send` | watch → phone | Send through a live or saved reply action, otherwise the optional composer automation. |
 | `/mark_read` | watch → phone | Mark-read request. |
 | `/action_result` | phone → watch | Action result (reply, send, open-on-phone, errors). |
 | `/open_phone` | watch → phone | Ask the phone to open OpenBubbles. |
@@ -599,12 +610,13 @@ No WearBubbles source code or Mac-server dependency was incorporated.
 - **OpenBubbles absent**: notifications cannot appear; the phone UI reports this.
 - **Data Layer unavailable**: parsing, caching, and automation still work, but the watch cannot
   sync. This is the behavior seen on the Google APIs phone emulator image.
-- **Notification removed**: cache remains; mark-read disappears, and reply/send require automation.
-- **Automation disabled**: new chats, quiet-chat sends, and history requests fail with a setup
-  message; live notification replies still work.
+- **Notification removed**: cache remains; mark-read disappears, but the saved reply action usually
+  still sends. If OpenBubbles cancelled it, sends fall back to automation.
+- **Automation disabled**: new chats, history requests, and chats without a reply action fail with
+  a setup message; live and saved notification replies still work.
 - **Phone securely locked**: UI automation is rejected with a retryable result. Cached chats,
-  notification replies, incoming syncs, and published discovery remain available. Older history and
-  quiet-chat sends wait; queued messages retry after the unlock is reported.
+  live and saved notification replies, incoming syncs, and published discovery remain available.
+  Older history waits; a queued message without a usable reply action retries after unlock.
 - **Media unavailable**: OpenBubbles may omit attachment URIs when **Hide text previews** is on, the
   bridge may have already pruned the file, or the notification URI grant may have expired before it
   could be copied. The watch shows **Load photo** with a phone-reported error and can retry while
