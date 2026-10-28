@@ -325,6 +325,40 @@ Required real-device checks (not performed on this build machine):
 9. On Samsung Android 17 / One UI 9, verify the keyguard lock state, saved-token lifetime, Data
    Layer delivery, and reply acceptance. No physical devices were connected for this build.
 
+## 2.0.1 discovery and contact checks
+
+Local validation: see the 2.0.1 release note for the exact test counts and build results. Automated
+coverage includes:
+
+- OpenBubbles 2.x shortcut IDs (`chat_<GUID>`, `chat_addr:<address>`, `chat_contact:<id>`) and
+  channels (`conv_chat_<key>`) import with their address, title, and group status.
+- Legacy bare GUID shortcuts and `com.bluebubbles.new_messages.<GUID>` channels still import.
+- Contact lookup prefers the latest phone-sync summary over a cached thread with an older ID.
+- Discovery accepts `chat_` IDs instead of rejecting everything that is not a bare chat GUID.
+
+Required real-device checks (not performed on this build machine):
+
+1. On the phone, confirm OpenBubbles is version 2.0.x and at least a few chats have posted
+   notifications or have visible conversation channels.
+2. Inspect the two sources directly (the phone must be unlocked for `adb`):
+   ```bash
+   adb shell cmd shortcut get-shortcuts --user 0 'com.openbubbles.messaging' \
+     | grep -E "ShortcutInfo|packageName=|shortLabel="
+   adb shell dumpsys notification --noredact --package 'com.openbubbles.messaging' \
+     | grep -E "NotificationChannel\{mId='(conv_|com.bluebubbles.new_messages)" | head -20
+   ```
+   The shortcut IDs should start with `chat_`, and conversation channels with `conv_chat_`.
+3. Start Shizuku in wireless-debugging (shell) mode, grant the bridge access, then tap
+   **Find chats (Shizuku)** on the watch or in the phone bridge. The note must report at least one
+   imported chat; "No published chats found" means both sources were unreadable or empty.
+4. Open every newly listed group and one-to-one chat. None may answer **Conversation not found**;
+   a chat with no notification shows as read-only and only sends after OpenBubbles posts a reply
+   action.
+5. From the watch, **Choose a contact** for a chat that was cached under an older bridge or
+   OpenBubbles version. It must open the current thread, not the old ID and not "not found".
+6. Import enough placeholders to exceed the phone store's 60-chat placeholder budget. Only the
+   retained chats may appear on the watch, and all of them must open.
+
 ## Release smoke test
 
 Release builds are minified and do not contain the debug receivers or seed commands.

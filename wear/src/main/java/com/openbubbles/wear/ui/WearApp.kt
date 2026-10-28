@@ -27,7 +27,7 @@ import com.openbubbles.wear.WatchNotifications
 import com.openbubbles.wear.WatchRepository
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "2.0.0"
+const val WATCH_APP_VERSION = "2.0.1"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen

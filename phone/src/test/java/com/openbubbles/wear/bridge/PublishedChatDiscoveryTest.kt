@@ -20,8 +20,10 @@ class PublishedChatDiscoveryTest {
     private val pkg = "com.openbubbles.messaging"
     private val groupGuid = "iMessage;+;chat1234"
     private val directGuid = "iMessage;-;+15551234567"
+    private val groupId = "chat_$groupGuid"
+    private val directId = "chat_addr:+15551234567"
 
-    private fun shortcut(id: String = groupGuid, title: String = "Family", owner: String = pkg,
+    private fun shortcut(id: String = groupId, title: String = "Family", owner: String = pkg,
         flags: String = "1", readable: String = "Dyn") = """
         ShortcutInfo {id=$id, flags=0x$flags [$readable]
           packageName=$owner
@@ -32,7 +34,7 @@ class PublishedChatDiscoveryTest {
     """.trimIndent()
 
     private fun channel(
-        id: String = "com.bluebubbles.new_messages.$groupGuid",
+        id: String = "conv_$groupId",
         name: String = "Family",
         deleted: Boolean = false
     ) = "    NotificationChannel{mId='$id', mName=$name, mDescription=null, " +
@@ -45,7 +47,7 @@ class PublishedChatDiscoveryTest {
     @Test fun aospMultilineShortcutImportsGroupWithoutNotification() {
         val chats = PublishedChatDiscovery.parseShortcuts(shortcut() + "\nSuccess\n", pkg)
         val group = chats.single()
-        assertEquals(groupGuid, group.id)
+        assertEquals(groupId, group.id)
         assertEquals("Family", group.title)
         assertTrue(group.isGroup)
         assertFalse(group.notificationActive)
@@ -53,15 +55,30 @@ class PublishedChatDiscoveryTest {
     }
 
     @Test fun directShortcutGetsNormalizedAddressAndIsNotTreatedAsAGroup() {
+        val chat = PublishedChatDiscovery.parseShortcuts(shortcut(id = directId, title = "Alex"), pkg).single()
+        assertEquals(directId, chat.id)
+        assertFalse(chat.isGroup)
+        assertEquals("+15551234567", chat.address)
+    }
+
+    @Test fun contactKeyedDirectChatIsListedWithoutAnAddress() {
+        val chat = PublishedChatDiscovery.parseShortcuts(shortcut(id = "chat_contact:42", title = "Alex"), pkg).single()
+        assertEquals("chat_contact:42", chat.id)
+        assertEquals("Alex", chat.title)
+        assertFalse(chat.isGroup)
+        assertNull(chat.address)
+    }
+
+    @Test fun legacyGuidShortcutStillImports() {
         val chat = PublishedChatDiscovery.parseShortcuts(shortcut(id = directGuid, title = "Alex"), pkg).single()
         assertEquals(directGuid, chat.id)
-        assertFalse(chat.isGroup)
         assertEquals("+15551234567", chat.address)
     }
 
     @Test fun foreignDisabledAndRedactedShortcutsAreIgnored() {
         val raw = listOf(shortcut(owner = "other.app"), shortcut(flags = "41", readable = "DynDis"),
-            shortcut(title = "***"), shortcut(id = "group-looking-name"), shortcut(title = "null"))
+            shortcut(title = "***"), shortcut(id = "chat_unknown"), shortcut(id = "chat_addr:"),
+            shortcut(id = "group-looking-name"), shortcut(title = "null"))
             .joinToString("\n")
         assertTrue(PublishedChatDiscovery.parseShortcuts(raw, pkg).isEmpty())
     }
@@ -78,20 +95,28 @@ class PublishedChatDiscoveryTest {
     @Test fun channelDumpFindsGroupsAndOneToOneChatsWithoutNotifications() {
         val raw = listOf(
             channel(),
-            channel(id = "com.bluebubbles.new_messages.$directGuid", name = "Alex"),
-            channel(id = "com.bluebubbles.new_messages.$directGuid.notify_anyways", name = "Notify Anyways: Alex")
+            channel(id = "conv_$directId", name = "Alex"),
+            channel(id = "conv_chat_contact:42", name = "Sam")
         ).joinToString("\n")
         val chats = PublishedChatDiscovery.parseChannels(raw)
-        assertEquals(setOf(groupGuid, directGuid), chats.map { it.id }.toSet())
-        assertEquals("Family", chats.first { it.id == groupGuid }.title)
-        assertEquals("Alex", chats.first { it.id == directGuid }.title)
-        assertTrue(chats.first { it.id == groupGuid }.isGroup)
-        assertFalse(chats.first { it.id == directGuid }.isGroup)
-        assertEquals("+15551234567", chats.first { it.id == directGuid }.address)
+        assertEquals(setOf(groupId, directId, "chat_contact:42"), chats.map { it.id }.toSet())
+        assertEquals("Family", chats.first { it.id == groupId }.title)
+        assertEquals("Alex", chats.first { it.id == directId }.title)
+        assertTrue(chats.first { it.id == groupId }.isGroup)
+        assertFalse(chats.first { it.id == directId }.isGroup)
+        assertEquals("+15551234567", chats.first { it.id == directId }.address)
+        assertNull(chats.first { it.id == "chat_contact:42" }.address)
+    }
+
+    @Test fun legacyChannelStillMapsToItsGuid() {
+        val raw = channel(id = "com.bluebubbles.new_messages.$directGuid", name = "Alex")
+        val chat = PublishedChatDiscovery.parseChannels(raw).single()
+        assertEquals(directGuid, chat.id)
+        assertEquals("+15551234567", chat.address)
     }
 
     @Test fun quotedChannelNamesFromOemDumpsAreUnwrapped() {
-        val raw = channel(id = "com.bluebubbles.new_messages.$directGuid", name = "'Notify Anyways: Alex'")
+        val raw = channel(id = "conv_$directId", name = "'Notify Anyways: Alex'")
         val chat = PublishedChatDiscovery.parseChannels(raw).single()
         assertEquals("Alex", chat.title)
     }
@@ -99,22 +124,24 @@ class PublishedChatDiscoveryTest {
     @Test fun deletedRedactedAndForeignChannelsAreIgnored() {
         val raw = listOf(
             channel(deleted = true),
-            channel(id = "com.bluebubbles.new_messages.$groupGuid", name = "***"),
+            channel(name = "***"),
             channel(id = "com.other.app.new_messages.$groupGuid"),
-            channel(id = "com.bluebubbles.new_messages.not-a-guid"),
+            channel(id = "conv_chat_unknown"),
             "NotificationChannel{mId='com.bluebubbles.foreground_service', mName=Service, mDescription=null}"
         ).joinToString("\n")
         assertTrue(PublishedChatDiscovery.parseChannels(raw).isEmpty())
     }
 
-    @Test fun channelIdsMapOnlyToExactOpenBubblesChatGuids() {
+    @Test fun channelIdsMapToTheSameIdANotificationUses() {
+        assertEquals(groupId, PublishedChatDiscovery.threadIdFromChannelId("conv_$groupId"))
+        assertEquals(directId, PublishedChatDiscovery.threadIdFromChannelId("conv_$directId"))
         assertEquals(groupGuid,
-            PublishedChatDiscovery.chatGuidFromChannelId("com.bluebubbles.new_messages.$groupGuid"))
+            PublishedChatDiscovery.threadIdFromChannelId("com.bluebubbles.new_messages.$groupGuid"))
         assertEquals(groupGuid,
-            PublishedChatDiscovery.chatGuidFromChannelId("com.bluebubbles.new_messages.$groupGuid.notify_anyways"))
-        assertNull(PublishedChatDiscovery.chatGuidFromChannelId("com.bluebubbles.foreground_service"))
-        assertNull(PublishedChatDiscovery.chatGuidFromChannelId("other.$groupGuid"))
-        assertNull(PublishedChatDiscovery.chatGuidFromChannelId("com.bluebubbles.new_messages.Family"))
+            PublishedChatDiscovery.threadIdFromChannelId("com.bluebubbles.new_messages.$groupGuid.notify_anyways"))
+        assertNull(PublishedChatDiscovery.threadIdFromChannelId("com.bluebubbles.foreground_service"))
+        assertNull(PublishedChatDiscovery.threadIdFromChannelId("other.$groupGuid"))
+        assertNull(PublishedChatDiscovery.threadIdFromChannelId("conv_chat_Family"))
     }
 
     @Test fun shortcutAndChannelDuplicatesKeepOneEntry() {
@@ -133,7 +160,7 @@ class PublishedChatDiscoveryTest {
     }
 
     @Test fun queryIsReadOnlyAndScopedToOurUserAndOpenBubblesPackage() {
-        assertEquals("cmd shortcut get-shortcuts --user 10 --flags 19 '$pkg'",
+        assertEquals("cmd shortcut get-shortcuts --user 10 '$pkg'",
             PublishedChatDiscovery.shortcutCommand(pkg, 10))
         assertEquals("dumpsys notification --noredact --package '$pkg'",
             PublishedChatDiscovery.channelCommand(pkg))
@@ -150,18 +177,30 @@ class PublishedChatDiscoveryTest {
 
     @Test fun importingExistingGroupPreservesMessagesUnreadAndParticipants() {
         val store = BridgeStore(RuntimeEnvironment.getApplication())
-        val old = WireThread(id = groupGuid, title = "Old", isGroup = true, unread = true,
-            participants = listOf("Alex"), messages = listOf(WireMessage(id = "m", threadId = groupGuid, text = "Hi", timestamp = 1000)))
+        val old = WireThread(id = groupId, title = "Old", isGroup = true, unread = true,
+            participants = listOf("Alex"), messages = listOf(WireMessage(id = "m", threadId = groupId, text = "Hi", timestamp = 1000)))
         store.update(old)
         val imported = store.importPublishedChat(PublishedChatDiscovery.parseShortcuts(shortcut(), pkg).single())
         assertEquals(old.messages, imported.messages)
         assertEquals(old.participants, imported.participants)
         assertTrue(imported.unread)
         assertEquals("Family", imported.title)
-        assertEquals(imported, BridgeStore(RuntimeEnvironment.getApplication()).get(groupGuid))
+        assertEquals(imported, BridgeStore(RuntimeEnvironment.getApplication()).get(groupId))
     }
 
-    @Test fun importingDirectGuidFoldsTemporaryNewAddressThread() {
+    @Test fun importingContactKeyedChatDoesNotRequireAGuid() {
+        val store = BridgeStore(RuntimeEnvironment.getApplication())
+        val imported = store.importPublishedChat(
+            PublishedChatDiscovery.parseShortcuts(shortcut(id = "chat_contact:42", title = "Alex"), pkg).single()
+        )
+        assertEquals("chat_contact:42", imported.id)
+        assertEquals("Alex", imported.title)
+        assertFalse(imported.isGroup)
+        assertNull(imported.address)
+        assertEquals(imported, BridgeStore(RuntimeEnvironment.getApplication()).get("chat_contact:42"))
+    }
+
+    @Test fun importingDirectAddressChatFoldsTemporaryNewAddressThread() {
         val store = BridgeStore(RuntimeEnvironment.getApplication())
         val temporary = WireThread(
             id = "new:+15551234567",
@@ -172,14 +211,32 @@ class PublishedChatDiscoveryTest {
         )
         store.update(temporary)
         val imported = store.importPublishedChat(
-            PublishedChatDiscovery.parseShortcuts(shortcut(id = directGuid, title = "Alex"), pkg).single()
+            PublishedChatDiscovery.parseShortcuts(shortcut(id = directId, title = "Alex"), pkg).single()
         )
-        assertEquals(directGuid, imported.id)
+        assertEquals(directId, imported.id)
         assertEquals(temporary.messages, imported.messages)
         assertEquals(temporary.address, imported.address)
         assertTrue(imported.canSend)
         assertNull(store.get(temporary.id))
-        assertEquals(imported, store.get(directGuid))
+        assertEquals(imported, store.get(directId))
+    }
+
+    @Test fun importingDirectAddressChatFoldsLegacyGuidThread() {
+        val store = BridgeStore(RuntimeEnvironment.getApplication())
+        val legacy = WireThread(
+            id = directGuid,
+            title = "Alex",
+            address = "+15551234567",
+            canSend = true,
+            messages = listOf(WireMessage(id = "m", threadId = directGuid, text = "Hi", timestamp = 1000))
+        )
+        store.update(legacy)
+        val imported = store.importPublishedChat(
+            PublishedChatDiscovery.parseShortcuts(shortcut(id = directId, title = "Alex"), pkg).single()
+        )
+        assertEquals(directId, imported.id)
+        assertEquals(legacy.messages, imported.messages)
+        assertNull(store.get(legacy.id))
     }
 
     @Test fun discoveryPlaceholdersCannotEvictConversationsWithMessages() {
@@ -200,7 +257,7 @@ class PublishedChatDiscoveryTest {
         }
         repeat(80) { index ->
             store.importPublishedChat(WireThread(
-                id = "iMessage;+;group$index",
+                id = "chat_iMessage;+;group$index",
                 title = "Group $index",
                 isGroup = true
             ))

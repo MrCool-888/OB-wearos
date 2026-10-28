@@ -502,12 +502,17 @@ object NotificationCenter {
             return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = result.error)
         }
         prefs.lastChatDiscoveryAt = System.currentTimeMillis()
-        val imported = result.chats.map { store.importPublishedChat(it) }.map(::decorate)
+        val imported = result.chats.map { store.importPublishedChat(it) }
+        // The store keeps a bounded number of history-free placeholders. Only
+        // report the ones it kept, or tapping a listed chat answers with
+        // "Conversation not found".
+        val retained = store.snapshot().map { it.id }.toSet()
+        val visible = imported.filter { it.id in retained }.map(::decorate)
         scheduleSync()
         return com.openbubbles.wear.protocol.GroupsResult(
             requestId = requestId,
-            groups = imported.filter { it.isGroup }.map { it.toSummary() },
-            chats = imported.filterNot { it.isGroup }.map { it.toSummary() },
+            groups = visible.filter { it.isGroup }.map { it.toSummary() },
+            chats = visible.filterNot { it.isGroup }.map { it.toSummary() },
             note = result.note
         )
     }
