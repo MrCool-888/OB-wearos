@@ -212,18 +212,24 @@ never modified.
 `PublishedChatDiscovery` reads two public Android surfaces for the installed OpenBubbles package and
 the bridge's current Android user:
 
-- `cmd shortcut get-shortcuts --user USER --flags 19 'PACKAGE'`: dynamic, pinned, and cached
-  shortcuts. A bounded parser accepts enabled `iMessage`, `SMS`, or `RCS` chat GUIDs with a
-  non-redacted title and matching owner. Disabled, foreign, and malformed entries are discarded.
-- `dumpsys notification --noredact --package 'PACKAGE'`: OpenBubbles creates one notification
-  channel per chat (`com.bluebubbles.new_messages.<GUID>`), named for the chat. Deleted/redacted
-  channels and non-chat channels are discarded; the `Notify Anyways: ` prefix is removed.
+- `cmd shortcut get-shortcuts --user USER 'PACKAGE'`: the platform default includes dynamic,
+  pinned, cached, and manifest shortcuts. OpenBubbles 2.x publishes each conversation as
+  `chat_<key>`, where the key is a chat GUID, `addr:<address>`, or `contact:<Android contact id>`.
+  A bounded parser accepts those keys plus legacy bare GUIDs, requires a non-redacted title and a
+  matching owner, and discards disabled, foreign, and malformed entries. Only GUID and `addr:`
+  keys carry an address; a `contact:`-keyed chat is listed by title until it posts a notification.
+- `dumpsys notification --noredact --package 'PACKAGE'`: OpenBubbles 2.x creates a conversation
+  channel `conv_chat_<key>` under its `messages` parent, named for the chat. Legacy
+  `com.bluebubbles.new_messages.<GUID>` channels and the `Notify Anyways: ` prefix remain
+  supported. Deleted/redacted channels and non-chat channels are discarded.
 
 Group status comes only from `;+;` GUIDs, never from a title. Neither surface is a complete chat
 directory and neither reads notification-history databases or private storage. Imports preserve
 existing cached messages, unread state, participants, and send ability. Newly discovered chats are
-stored as empty placeholders so they cannot evict a conversation with real history. Discovery runs
-automatically at most every ten minutes off the main thread and is also available manually.
+stored as empty placeholders so they cannot evict a conversation with real history. Because that
+placeholder budget is bounded, discovery reports only the chats the store actually kept; otherwise
+tapping an evicted entry would answer "Conversation not found". Discovery runs automatically at
+most every ten minutes off the main thread and is also available manually.
 
 The **Notification access blocked?** recovery dialog explains Android's sideload restrictions and
 links separately to this package's App info and the exact listener's special-access page. Its
@@ -322,7 +328,9 @@ discovery placeholders. Media is persisted separately: the watch keeps the most 
 Older watch builds could start a chat with the temporary ID `new:<normalized address>`. That
 migration path is kept so cached/queued items from those builds still resolve, but new chats are no
 longer created on the watch. `findChatByAddress` only looks up an existing thread or summary by
-normalized address and reports an error when none exists.
+normalized address and reports an error when none exists. The latest phone-sync summary wins over
+a cached thread, so an ID from an older OpenBubbles or bridge version cannot override the current
+one and produce "Conversation not found".
 
 `Protocol.normalizeAddress` lowercases emails, strips `tel:`/`mailto:`/`sms:` prefixes and iMessage
 `;-;` service prefixes, and reduces phone numbers to digits and `+`. This lets a typed address and

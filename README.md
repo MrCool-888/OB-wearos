@@ -70,20 +70,20 @@ OpenBubbles' published Android shortcuts and notification channels.
 
 ## Install
 
-Download the APKs from the [2.0.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/2.0.0).
+Download the APKs from the [2.0.1 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/2.0.1).
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-2.0.0.apk`
-- `dist/OpenBubblesWear-Watch-2.0.0.apk`
+- `dist/OpenBubblesWear-Phone-2.0.1.apk`
+- `dist/OpenBubblesWear-Watch-2.0.1.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-2.0.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-2.0.0.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-2.0.1.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-2.0.1.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -98,10 +98,10 @@ from the official app:
 Phone and watch intentionally share an application ID and signing certificate, as required by
 Google's Wear Data Layer. Their source-code namespaces remain different.
 
-**Upgrading:** install both 2.0.0 APKs over 1.7.0. The phone bridge no longer uses an accessibility
-service; if you enabled it for an older version, you can turn it off in Android's accessibility
-settings. The bridge's cached conversations are kept. Application IDs, signing certificate, and
-protocol v3 are unchanged, so matching 2.0.0 phone/watch apps are still recommended.
+**Upgrading:** install both 2.0.1 APKs over 2.0.0 (or 1.7.0). The phone bridge no longer uses an
+accessibility service; if you enabled it for an older version, you can turn it off in Android's
+accessibility settings. The bridge's cached conversations are kept. Application IDs, signing
+certificate, and protocol v3 are unchanged, so matching 2.0.1 phone/watch apps are recommended.
 
 ### Phone setup
 
@@ -190,7 +190,7 @@ discovered by the bridge and cannot be started from the watch.
 
 ### Pick a contact or group on the watch
 
-1. Install both 2.0.0 APKs and optionally allow Contacts in the phone bridge.
+1. Install both 2.0.1 APKs and optionally allow Contacts in the phone bridge.
 2. On the watch, open **Find a chat → Choose a contact**. Browse or **Search contacts** by name,
    phone number, or email; **Load more contacts** fetches the next page. If someone has multiple
    numbers/emails, choose one explicitly. Selecting a contact opens its existing chat. It does not
@@ -206,10 +206,11 @@ discovered by the bridge and cannot be started from the watch.
 The address book is not a directory of registered Apple/iMessage accounts, and OpenBubbles-only
 private/imported contacts may be absent. The last browsed contacts page/search is cached for offline
 use; it is not a complete offline phone-book mirror. Search/paging needs the phone. Shortcut/channel
-discovery is a partial chat list: the inspected OpenBubbles source publishes up to four recent named
-chats as shortcuts at startup and creates one Android notification channel per chat. Unpublished
-groups still need a notification or a future supported integration; the bridge does not enumerate
-OpenBubbles' private storage.
+discovery is a partial chat list: OpenBubbles publishes Android shortcuts for chats it has named
+and creates one Android notification channel per chat. Chats published only under an Android
+contact ID have no address, so the contact picker can match them after OpenBubbles posts a
+notification for them. Unpublished groups still need a notification or a future supported
+integration; the bridge does not enumerate OpenBubbles' private storage.
 
 ## Using the watch app
 
@@ -367,9 +368,10 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 2.0.0 and watch app 2.0.0, using protocol version 3. Update
-both APKs together. The wire format is backward-compatible with 1.7.0 for the remaining fields, but
-the watch still requires a reply action from the phone, so matching 2.0.0 apps are recommended.
+The current release is phone bridge 2.0.1 and watch app 2.0.1, using protocol version 3. Update
+both APKs together. The wire format is backward-compatible with 1.7.0 and 2.0.0 for the remaining
+fields, but the watch still requires a reply action from the phone, so matching 2.0.1 apps are
+recommended.
 
 ### Project layout
 
@@ -387,4 +389,5 @@ the watch still requires a reply action from the phone, so matching 2.0.0 apps a
 - [Architecture](docs/ARCHITECTURE.md) — notification parsing, caching, protocol, and action flow.
 - [Testing](docs/TESTING.md) — fake notifications, adb commands, debug builds, and known emulator
   behavior.
+- [2.0.1 release notes](docs/RELEASE-2.0.1.md) — OpenBubbles 2.x chat discovery and contact fixes.
 - [2.0.0 release notes](docs/RELEASE-2.0.0.md) — accessibility removed; notification-only sending.

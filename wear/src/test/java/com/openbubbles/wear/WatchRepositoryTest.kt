@@ -218,6 +218,27 @@ class WatchRepositoryTest {
         assertNull(state.value.error)
     }
 
+    @Test fun choosingContactPrefersLatestPhoneIdOverStaleCachedThread() {
+        val address = "+15551234567"
+        val stale = WireThread(id = "iMessage;-;+15551234567", title = "Alex", address = address)
+        val current = WireThread(id = "chat_addr:+15551234567", title = "Alex", address = address).toSummary()
+        state.value = state.value.copy(
+            threads = mapOf(stale.id to stale),
+            conversations = listOf(current)
+        )
+        assertEquals(current.id, WatchRepository.findChatByAddress(address))
+    }
+
+    @Test fun discoveryAcceptsOpenBubbles2ChatIds() {
+        val group = WireThread(id = "chat_iMessage;+;chat123", title = "Family", isGroup = true).toSummary()
+        val direct = WireThread(id = "chat_contact:42", title = "Alex").toSummary()
+        state.value = state.value.copy(conversations = emptyList(), discoveryRequestId = "r")
+        WatchRepository.onGroups(GroupsResult(requestId = "r", groups = listOf(group), chats = listOf(direct)))
+        assertEquals(setOf(group.id, direct.id), state.value.conversations.map { it.id }.toSet())
+        assertEquals(listOf(group.id), state.value.groups.map { it.id })
+        assertEquals(listOf(direct.id), state.value.directChats.map { it.id })
+    }
+
     @Test fun unknownContactDoesNotCreateAChat() {
         state.value = state.value.copy(threads = emptyMap(), conversations = emptyList())
         assertNull(WatchRepository.findChatByAddress("nobody@example.com"))

@@ -101,17 +101,16 @@ class BridgeStore(context: Context) {
      * history placeholder so it cannot displace a real recent conversation.
      */
     fun importPublishedChat(chat: WireThread): WireThread = synchronized(lock) {
-        require(Protocol.isChatGuid(chat.id))
+        require(chat.id.isNotBlank())
         val group = chat.isGroup || Protocol.isGroupGuid(chat.id)
         val normalizedAddress = if (group) null else Protocol.normalizeAddress(chat.address)
         val existing = threads[chat.id]
         // A chat started from the watch before its first notification uses a
-        // "new:<address>" ID. Fold that temporary thread into the published
-        // direct GUID instead of showing both.
+        // "new:<address>" ID, and 1.x used the bare chat GUID. Fold either into
+        // the same person's 2.x key instead of showing two conversations.
         val legacy = if (!group && existing == null && normalizedAddress != null) {
             threads.values.firstOrNull { candidate ->
                 candidate.id != chat.id &&
-                    !Protocol.isChatGuid(candidate.id) &&
                     Protocol.normalizeAddress(candidate.address)
                         ?.equals(normalizedAddress, ignoreCase = true) == true
             }

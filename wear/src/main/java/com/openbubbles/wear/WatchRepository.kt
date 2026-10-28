@@ -962,13 +962,15 @@ object WatchRepository {
             }
             return null
         }
-        val thread = _state.value.threads.values.firstOrNull { candidate ->
-            !candidate.isGroup && Protocol.normalizeAddress(candidate.address) == normalized
-        }
         val summary = _state.value.conversations.firstOrNull { candidate ->
             !candidate.isGroup && Protocol.normalizeAddress(candidate.address) == normalized
         }
-        val id = thread?.id ?: summary?.id
+        // The latest phone sync is authoritative. A cached thread can still
+        // carry the ID an older OpenBubbles version used and would 404.
+        val thread = _state.value.threads.values.firstOrNull { candidate ->
+            !candidate.isGroup && Protocol.normalizeAddress(candidate.address) == normalized
+        }
+        val id = summary?.id ?: thread?.id
         if (id == null) {
             _state.update {
                 it.copy(
@@ -1009,7 +1011,7 @@ object WatchRepository {
         if (result.requestId != _state.value.discoveryRequestId) return
         _state.update { state ->
             val discovered = (result.groups + result.chats)
-                .filter { Protocol.isChatGuid(it.id) }
+                .filter { it.id.isNotBlank() }
                 .distinctBy { it.id }
             val byAddress = state.conversations
                 .filterNot { it.isGroup }

@@ -9,7 +9,7 @@ import android.os.Build
 import android.os.PowerManager
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "2.0.0"
+    const val BRIDGE_VERSION = "2.0.1"
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",

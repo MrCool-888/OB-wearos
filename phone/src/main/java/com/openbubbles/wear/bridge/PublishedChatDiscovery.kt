@@ -14,12 +14,23 @@ import com.openbubbles.wear.protocol.WireThread
  *  - Android notification channels: OpenBubbles creates one channel per chat,
  *    named after the chat, and keeps it after the notification is dismissed.
  *
- * Both are partial directories. They never include a chat that OpenBubbles has
- * never shown to Android, and a title is never used to infer that a chat is a
- * group: group status comes only from the chat GUID.
+ * OpenBubbles 2.x names the shortcut chat_<key> and the channel
+ * conv_chat_<key>. The key is either the chat GUID, addr:<address> or
+ * contact:<Android contact id>. Only addr: keys carry an address, so a chat
+ * whose key is a contact id can be listed by title but not matched from the
+ * watch address book until it posts a notification.
+ *
+ * Both sources are partial directories. They never include a chat that
+ * OpenBubbles has never shown to Android, and a title is never used to infer
+ * that a chat is a group: group status comes only from the chat GUID.
  */
 object PublishedChatDiscovery {
+    const val CHAT_ID_PREFIX = "chat_"
+    const val CONVERSATION_CHANNEL_PREFIX = "conv_"
+    // Legacy BlueBubbles/OpenBubbles 1.x channel name.
     const val CHANNEL_PREFIX = "com.bluebubbles.new_messages."
+    private const val ADDRESS_KEY_PREFIX = "addr:"
+    private const val CONTACT_KEY_PREFIX = "contact:"
     private const val NOTIFY_ANYWAYS_SUFFIX = ".notify_anyways"
     private const val NOTIFY_ANYWAYS_TITLE = "Notify Anyways: "
     const val MAX_CHATS = 160
@@ -86,8 +97,9 @@ object PublishedChatDiscovery {
     internal fun shortcutCommand(packageName: String, user: Int): String {
         require(BridgeInfo.isOpenBubblesPackage(packageName))
         require(user >= 0)
-        // Dynamic (1), pinned (2), and cached conversation shortcuts (16).
-        return "cmd shortcut get-shortcuts --user $user --flags 19 '$packageName'"
+        // No --flags: the platform default includes dynamic, pinned and cached
+        // shortcuts, and OpenBubbles publishes dynamic ones.
+        return "cmd shortcut get-shortcuts --user $user '$packageName'"
     }
 
     internal fun channelCommand(packageName: String): String {
@@ -110,16 +122,16 @@ object PublishedChatDiscovery {
         return raw.split("ShortcutInfo {").drop(1).mapNotNull { block ->
             val id = Regex("^id=([^\\r\\n]+?), flags=0x([a-fA-F0-9]+)\\s*\\[([^\\]]*)]").find(block)
                 ?: return@mapNotNull null
-            val guid = id.groupValues[1].trim()
+            val threadId = id.groupValues[1].trim()
             val flags = id.groupValues[2].toLongOrNull(16) ?: return@mapNotNull null
-            if (!Protocol.isChatGuid(guid) || flags and 0x40L != 0L || id.groupValues[3].contains("Dis")) {
+            if (flags and 0x40L != 0L || id.groupValues[3].contains("Dis")) {
                 return@mapNotNull null
             }
             val pkg = Regex("(?m)^\\s*packageName=([^\\s,]+)").find(block)?.groupValues?.get(1)
             if (pkg != packageName) return@mapNotNull null
             val title = Regex("(?m)^\\s*shortLabel=([^\\r\\n]+?), resId=").find(block)?.groupValues?.get(1)?.trim()
                 ?.takeIf { it.isNotBlank() && it != "null" && it != "***" } ?: return@mapNotNull null
-            chatFromGuid(guid, title)
+            chatFromThreadId(threadId)?.copy(title = title.take(160))
         }.distinctBy { it.id }
     }
 
@@ -131,7 +143,7 @@ object PublishedChatDiscovery {
             val body = line.substring(marker)
             val channelId = Regex("mId='([^']+)'").find(body)?.groupValues?.get(1)
                 ?: return@mapNotNull null
-            val guid = chatGuidFromChannelId(channelId) ?: return@mapNotNull null
+            val threadId = threadIdFromChannelId(channelId) ?: return@mapNotNull null
             val deleted = Regex("mDeleted=(true|false)").find(body)?.groupValues?.get(1) == "true"
             if (deleted) return@mapNotNull null
             val rawName = Regex("mName=(.*?), mDescription=").find(body)?.groupValues?.get(1)
@@ -144,27 +156,41 @@ object PublishedChatDiscovery {
                 .trim()
                 .takeIf { it.isNotBlank() && it != "null" && it != "***" }
                 ?: return@mapNotNull null
-            chatFromGuid(guid, title)
+            chatFromThreadId(threadId)?.copy(title = title.take(160))
         }.distinctBy { it.id }.take(MAX_CHATS).toList()
         return chats
     }
 
-    internal fun chatGuidFromChannelId(channelId: String): String? {
-        if (!channelId.startsWith(CHANNEL_PREFIX)) return null
-        val guid = channelId.removePrefix(CHANNEL_PREFIX).removeSuffix(NOTIFY_ANYWAYS_SUFFIX)
-        return guid.takeIf { Protocol.isChatGuid(it) }
+    /**
+     * Maps a published channel ID back to the same shortcut ID a notification
+     * uses, so channel-only chats merge with their later notification.
+     */
+    internal fun threadIdFromChannelId(channelId: String): String? = when {
+        channelId.startsWith(CONVERSATION_CHANNEL_PREFIX) ->
+            channelId.removePrefix(CONVERSATION_CHANNEL_PREFIX)
+                .takeIf { chatFromThreadId(it) != null }
+
+        channelId.startsWith(CHANNEL_PREFIX) ->
+            channelId.removePrefix(CHANNEL_PREFIX).removeSuffix(NOTIFY_ANYWAYS_SUFFIX)
+                .takeIf { Protocol.isChatGuid(it) }
+
+        else -> null
     }
 
-    private fun chatFromGuid(guid: String, title: String): WireThread {
-        val isGroup = Protocol.isGroupGuid(guid)
-        val address = if (isGroup) {
-            null
-        } else {
-            Protocol.normalizeAddress(guid.substringAfterLast(";-;"))
+    private fun chatFromThreadId(threadId: String): WireThread? {
+        val key = threadId.removePrefix(CHAT_ID_PREFIX)
+        val guid = key.takeIf { Protocol.isChatGuid(it) }
+        val isGroup = guid != null && Protocol.isGroupGuid(guid)
+        val address = when {
+            guid != null -> if (isGroup) null else Protocol.normalizeAddress(guid.substringAfterLast(";-;"))
+            key.startsWith(ADDRESS_KEY_PREFIX) ->
+                Protocol.normalizeAddress(key.removePrefix(ADDRESS_KEY_PREFIX)) ?: return null
+            key.startsWith(CONTACT_KEY_PREFIX) && key.length > CONTACT_KEY_PREFIX.length -> null
+            else -> return null
         }
         return WireThread(
-            id = guid,
-            title = title.take(160),
+            id = threadId,
+            title = address ?: "Conversation",
             isGroup = isGroup,
             address = address,
             unread = false,
