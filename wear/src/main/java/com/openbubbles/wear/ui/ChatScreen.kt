@@ -295,14 +295,14 @@ private fun ChatStatus(
 
         state.phoneLocked && thread.canReply -> {
             color = scheme.primary
-            title = "Phone locked · live reply"
-            detail = "Notification replies still work. Older history and quiet-chat sends wait for unlock."
+            title = "Phone locked · reply ready"
+            detail = "Replies use OpenBubbles' saved notification action and send now. Older history waits for unlock."
         }
 
         state.phoneLocked && canSend -> {
             color = scheme.tertiary
             title = "Phone locked"
-            detail = "Messages you send now are saved on the watch and go after you unlock the phone."
+            detail = "Sends use OpenBubbles automation. If it can't run while locked, your message is queued and retried automatically."
         }
 
         state.phoneLocked && !thread.canReply -> {
@@ -570,7 +570,6 @@ private fun ChatActions(
                     sending -> "Sending…"
                     !state.phoneOnline && canReply -> "Queue reply"
                     !state.phoneOnline && canSend -> "Queue message"
-                    state.phoneLocked && !canReply -> "Save for unlock"
                     canReply -> "Reply"
                     canSend -> "Send message"
                     else -> "Reply unavailable"
@@ -580,7 +579,7 @@ private fun ChatActions(
 
         if (state.phoneLocked && !canReply && canSend) {
             Text(
-                text = "Phone locked. Your message is saved on the watch and sends after you unlock the phone.",
+                text = "Phone locked. This chat sends through automation; if it can't while locked, the message is queued and retried automatically.",
                 style = MaterialTheme.typography.bodyExtraSmall,
                 color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(horizontal = 8.dp)
@@ -605,12 +604,11 @@ private fun ChatActions(
             )
             FilledTonalButton(
                 onClick = onSendQueued,
-                enabled = state.phoneOnline && !(state.phoneLocked && !canReply),
+                enabled = state.phoneOnline,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     when {
-                        state.phoneLocked && !canReply -> "Waiting for unlock"
                         state.phoneOnline -> "Send queued now"
                         else -> "Queued until reconnect"
                     }

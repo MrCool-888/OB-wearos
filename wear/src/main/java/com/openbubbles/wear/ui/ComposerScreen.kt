@@ -180,9 +180,9 @@ fun ComposerScreen(
                     item {
                         NoticeCard(
                             message = if (canReply) {
-                                "Phone locked. Notification replies still work; older history waits for unlock."
+                                "Phone locked. Replies use OpenBubbles' saved notification action and send now; older history waits for unlock."
                             } else {
-                                "Phone locked. Your message is saved on the watch and sends after you unlock the phone."
+                                "Phone locked. This chat needs the phone unlocked to send; your message is queued and retried automatically."
                             },
                             isError = false
                         )

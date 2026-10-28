@@ -28,6 +28,7 @@ object NotificationCenter {
     private lateinit var prefs: BridgePreferences
     private lateinit var store: BridgeStore
     private lateinit var contentIntents: PendingIntentStore
+    private lateinit var replyActions: ReplyActionStore
     private lateinit var mediaCache: MediaCache
 
     private val liveByKey = ConcurrentHashMap<String, Live>()
@@ -69,6 +70,7 @@ object NotificationCenter {
             prefs = BridgePreferences(appContext)
             store = BridgeStore(appContext)
             contentIntents = PendingIntentStore(appContext)
+            replyActions = ReplyActionStore(appContext)
             mediaCache = MediaCache(appContext)
             initialized = true
         }
@@ -141,6 +143,12 @@ object NotificationCenter {
         liveByKey[sbn.key] = live
         liveByThread[live.threadId] = live
         contentIntents.put(live.threadId, sbn.notification?.contentIntent)
+        replyActions.put(
+            live.threadId,
+            NotificationActions.savedReply(
+                sbn.notification?.let(NotificationActions::replyAction)
+            )
+        )
 
         val latestTimestamp = parsed.thread.messages
             .lastOrNull { !it.fromMe }
@@ -322,9 +330,11 @@ object NotificationCenter {
     }
 
     /**
-     * Sends through OpenBubbles' notification action when a chat is live, or
-     * through the optional accessibility automation when its notification is
-     * gone. The callback runs on the caller's thread.
+     * Sends through OpenBubbles' notification action when a chat is live or has
+     * a saved reply action, or through the optional accessibility automation
+     * when neither is available. Saved actions keep replies working after the
+     * notification is dismissed, including while the phone is locked. The
+     * callback runs on the caller's thread.
      */
     fun send(
         requestId: String,
@@ -374,6 +384,18 @@ object NotificationCenter {
                 )
                 return
             }
+            prefs.markReadAt(targetId)
+            store.markRead(targetId)
+            recordSent(targetId, requestId, text)
+            publishAfterAction(targetId)
+            callback(SendResult(targetId, null))
+            return
+        }
+
+        // The notification may be gone but its PendingIntent usually still
+        // works. Try it before the lock guard so locked replies do not wait.
+        val saved = replyActions.get(targetId)
+        if (saved != null && NotificationActions.sendReply(appContext, saved, text)) {
             prefs.markReadAt(targetId)
             store.markRead(targetId)
             recordSent(targetId, requestId, text)
@@ -573,6 +595,7 @@ object NotificationCenter {
         init(context)
         store.clear()
         contentIntents.clear()
+        replyActions.clear()
         mediaCache.clear()
         WatchLink.clearMedia(appContext)
         liveByKey.clear()
@@ -694,7 +717,7 @@ object NotificationCenter {
 
     private fun decorate(thread: WireThread): WireThread {
         val live = liveByThread[thread.id]
-        val canReply = live?.parsed?.hasReply == true
+        val canReply = live?.parsed?.hasReply == true || replyActions.contains(thread.id)
         return thread.copy(
             notificationActive = live != null,
             canReply = canReply,

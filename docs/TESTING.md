@@ -445,6 +445,36 @@ Release action tests for reply and mark-read need the debug receiver, so those a
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
 
+## 1.7.0 locked send checks
+
+Local validation: **120 tests passed** (24 protocol, 61 phone, 35 watch), zero failures/errors.
+Both apps' debug and R8 release builds succeeded. Lint completed with no errors (45 phone / 38
+watch warnings). Signed APKs report versionName `1.7.0`, versionCode `9`, and contain no debug
+receivers. No ADB devices were connected.
+
+Automated coverage adds saved reply-action parcel round-trip, bounded reply storage, free-form
+action filtering, and immediate dispatch of a locked quiet-chat send. The previous locked-send
+short-circuit test now asserts that no unlock backoff is applied.
+
+Required real-device checks (not performed on this build machine):
+
+1. Update both devices to 1.7.0. Send a notification from OpenBubbles for a chat so the bridge
+   captures its reply action, then dismiss the notification on the phone.
+2. Relock the phone with a secure PIN/pattern. From the watch, send in that quiet chat. It must
+   appear on the phone's conversation without unlocking and without OpenBubbles opening to its
+   composer. Confirm exactly one message is sent.
+3. Repeat while the phone is unlocked but the notification is still dismissed. Confirm the saved
+   reply action is preferred over automation (no OpenBubbles UI takeover).
+4. Reboot the phone, relock it, and repeat. If OpenBubbles cancelled the saved token, confirm the
+   watch shows a retryable/queued result rather than losing the message, and that it sends after
+   unlock.
+5. Send twice in a row from the same quiet chat. Confirm a single-use action does not duplicate the
+   first message; the second must either send once or queue with a clear result.
+6. Confirm a chat that has never posted a notification still shows that it needs unlock/automation
+   and does not claim a reply action is available.
+7. While locked, tap **Load older messages**. It must still explain that history needs unlock; a
+   queued text message must not block the history retry.
+
 ## 1.6.0 discovery and locked-phone checks
 
 Local validation: **117 tests passed** (24 protocol, 58 phone, 35 watch), zero failures/errors.
