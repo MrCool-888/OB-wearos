@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 object NotificationCenter {
     private const val TAG = "OBWearCenter"
     private const val MAX_SEND_LENGTH = 800
+    private const val AUTO_DISCOVERY_INTERVAL_MS = 10 * 60_000L
 
     private var initialized = false
     private lateinit var appContext: Context
@@ -33,6 +34,8 @@ object NotificationCenter {
     private val liveByThread = ConcurrentHashMap<String, Live>()
     @Volatile private var service: NotificationRelayService? = null
     @Volatile private var listenerBound = false
+    private val discoveryLock = Any()
+    @Volatile private var discoveryRunning = false
 
     private val handler = Handler(Looper.getMainLooper())
     private val syncRunnable = Runnable { publishSync() }
@@ -46,14 +49,16 @@ object NotificationCenter {
     data class SendResult(
         val threadId: String?,
         val error: String?,
-        val message: WireMessage? = null
+        val message: WireMessage? = null,
+        val retryable: Boolean = false
     )
 
     data class HistoryResult(
         val threadId: String,
         val messages: List<WireMessage> = emptyList(),
         val hasMore: Boolean = false,
-        val error: String? = null
+        val error: String? = null,
+        val retryable: Boolean = false
     )
 
     fun init(context: Context) {
@@ -77,6 +82,7 @@ object NotificationCenter {
     fun onListenerConnected(listener: NotificationRelayService) {
         attachService(listener)
         listenerBound = true
+        maybeAutoDiscoverChats(appContext)
     }
 
     fun detachService(listener: NotificationRelayService) {
@@ -221,6 +227,7 @@ object NotificationCenter {
 
     fun syncNow(context: Context) {
         init(context)
+        maybeAutoDiscoverChats(context)
         service?.let { rescan(it) }
         val threads = store.snapshot().map(::decorate)
         val payload = buildSync(threads)
@@ -238,6 +245,7 @@ object NotificationCenter {
 
     fun sendSyncTo(nodeId: String) {
         if (!initialized) return
+        maybeAutoDiscoverChats(appContext)
         val threads = store.snapshot().map(::decorate)
         val payload = buildSync(threads)
         WatchLink.sendToNode(
@@ -273,6 +281,8 @@ object NotificationCenter {
         notificationAccess = initialized && BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = initialized && prefs.relayEnabled,
         automationAvailable = automationAvailable(),
+        phoneLocked = initialized && BridgeInfo.isPhoneLocked(appContext),
+        phoneAwake = initialized && BridgeInfo.isPhoneAwake(appContext),
         trackedConversations = if (initialized) store.snapshot().size else 0,
         quickReplies = if (initialized) prefs.quickReplies() else Protocol.DEFAULT_QUICK_REPLIES,
         contactsAccess = initialized && ContactDirectory.hasAccess(appContext)
@@ -381,6 +391,10 @@ object NotificationCenter {
             )
             return
         }
+        if (BridgeInfo.isPhoneLocked(appContext)) {
+            callback(SendResult(targetId, BridgeInfo.LOCKED_SEND_MESSAGE, retryable = true))
+            return
+        }
 
         OpenBubblesAutomation.send(
             threadId = targetId,
@@ -391,7 +405,13 @@ object NotificationCenter {
             isGroup = existing?.isGroup == true
         ) { error ->
             if (error != null) {
-                callback(SendResult(targetId, error))
+                callback(
+                    SendResult(
+                        targetId,
+                        error,
+                        retryable = BridgeInfo.isPhoneLocked(appContext)
+                    )
+                )
             } else {
                 prefs.markReadAt(targetId)
                 val message = recordSent(targetId, requestId, text)
@@ -458,6 +478,10 @@ object NotificationCenter {
             )
             return
         }
+        if (BridgeInfo.isPhoneLocked(appContext)) {
+            callback(HistoryResult(threadId, error = BridgeInfo.LOCKED_HISTORY_MESSAGE, retryable = true))
+            return
+        }
         val existing = store.get(threadId)
         val fallbackTitle = title?.trim()?.takeIf { it.isNotBlank() }
             ?: address?.trim()?.takeIf { it.isNotBlank() }
@@ -484,7 +508,8 @@ object NotificationCenter {
                     threadId = threadId,
                     messages = outcome.messages,
                     hasMore = outcome.hasMore,
-                    error = outcome.error
+                    error = outcome.error,
+                    retryable = outcome.error != null && BridgeInfo.isPhoneLocked(appContext)
                 )
             )
         }
@@ -558,17 +583,63 @@ object NotificationCenter {
     fun automationAvailable(): Boolean =
         initialized && BridgeInfo.isAutomationReady(appContext)
 
-    fun discoverGroups(context: Context, requestId: String): com.openbubbles.wear.protocol.GroupsResult {
+    /**
+     * Manual discovery from the watch or the phone app. Shortcuts and
+     * notification channels are both read, so groups and one-to-one chats are
+     * imported without waiting for a notification.
+     */
+    fun discoverChats(context: Context, requestId: String): com.openbubbles.wear.protocol.GroupsResult {
         init(context)
-        if (!prefs.relayEnabled) return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = "Relay is paused on the phone.")
-        val result = GroupShortcutDiscovery.discover(context)
-        if (result.error != null) return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = result.error)
-        val imported = result.groups.map { store.importPublishedGroup(it) }.map(::decorate)
+        if (!prefs.relayEnabled) {
+            return com.openbubbles.wear.protocol.GroupsResult(
+                requestId = requestId,
+                error = "Relay is paused on the phone."
+            )
+        }
+        val result = PublishedChatDiscovery.discover(context)
+        if (result.error != null) {
+            return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = result.error)
+        }
+        prefs.lastChatDiscoveryAt = System.currentTimeMillis()
+        val imported = result.chats.map { store.importPublishedChat(it) }.map(::decorate)
         scheduleSync()
-        return com.openbubbles.wear.protocol.GroupsResult(requestId = requestId,
-            groups = imported.map { it.toSummary() }, note = if (imported.isEmpty()) {
-                "No published groups found. Open OpenBubbles so it can publish its recent named chats, then retry. ${GroupShortcutDiscovery.NOTE}"
-            } else GroupShortcutDiscovery.NOTE)
+        return com.openbubbles.wear.protocol.GroupsResult(
+            requestId = requestId,
+            groups = imported.filter { it.isGroup }.map { it.toSummary() },
+            chats = imported.filterNot { it.isGroup }.map { it.toSummary() },
+            note = result.note
+        )
+    }
+
+    /**
+     * Refreshes the published chat directory in the background. Shizuku calls
+     * are slow, so this never runs on the caller's thread and is throttled.
+     */
+    fun maybeAutoDiscoverChats(context: Context) {
+        init(context)
+        if (!prefs.relayEnabled) return
+        if (!ShizukuSetup.hasPermission()) return
+        val now = System.currentTimeMillis()
+        if (now - prefs.lastChatDiscoveryAt < AUTO_DISCOVERY_INTERVAL_MS) return
+        synchronized(discoveryLock) {
+            if (discoveryRunning) return
+            if (now - prefs.lastChatDiscoveryAt < AUTO_DISCOVERY_INTERVAL_MS) return
+            discoveryRunning = true
+            prefs.lastChatDiscoveryAt = now
+        }
+        Thread({
+            try {
+                val result = PublishedChatDiscovery.discover(appContext)
+                if (result.chats.isNotEmpty()) {
+                    result.chats.forEach { store.importPublishedChat(it) }
+                    scheduleSync()
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Automatic chat discovery failed", t)
+            } finally {
+                synchronized(discoveryLock) { discoveryRunning = false }
+            }
+        }, "OBWearChatDiscovery").start()
     }
 
     fun onAutomationConnectionChanged(context: Context) {
@@ -615,6 +686,8 @@ object NotificationCenter {
         notificationAccess = BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = prefs.relayEnabled,
         automationAvailable = automationAvailable(),
+        phoneLocked = BridgeInfo.isPhoneLocked(appContext),
+        phoneAwake = BridgeInfo.isPhoneAwake(appContext),
         conversations = threads.map { it.toSummary() },
         contactsAccess = ContactDirectory.hasAccess(appContext)
     )

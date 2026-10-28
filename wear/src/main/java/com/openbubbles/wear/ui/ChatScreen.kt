@@ -87,15 +87,21 @@ fun ChatScreen(
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
-    LaunchedEffect(threadId, state.phoneOnline, state.automationAvailable, state.relayEnabled) {
-        if (!autoHistoryRequested && state.phoneOnline && state.automationAvailable && state.relayEnabled) {
+    LaunchedEffect(threadId, state.phoneOnline, state.automationAvailable, state.relayEnabled, state.phoneLocked) {
+        if (state.phoneLocked) {
+            // A secure lock blocks UI history. Allow the automatic request to
+            // run again once the phone reports unlock, including when the lock
+            // appeared after the request was already sent.
+            autoHistoryRequested = false
+        } else if (!autoHistoryRequested && state.phoneOnline && state.automationAvailable &&
+            state.relayEnabled
+        ) {
             // Let the cached-thread reply establish the oldest anchor first.
             kotlinx.coroutines.delay(250)
             kotlinx.coroutines.withTimeoutOrNull(13_000L) {
                 WatchRepository.state.first { threadId !in it.requestingThreads }
             }
-            autoHistoryRequested = true
-            WatchRepository.loadOlder(threadId)
+            autoHistoryRequested = WatchRepository.loadOlder(threadId)
         }
     }
     LaunchedEffect(historyWindow?.firstOrNull()?.id) {
@@ -206,7 +212,11 @@ fun ChatScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "No saved messages yet. Tap to read history from OpenBubbles on the unlocked phone.",
+                                text = if (state.phoneLocked) {
+                                    "No saved messages yet. Unlock the phone, then tap to read history from OpenBubbles."
+                                } else {
+                                    "No saved messages yet. Tap to read history from OpenBubbles on the unlocked phone."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -281,6 +291,24 @@ private fun ChatStatus(
             } else {
                 "Showing the last messages cached on the watch. Sends will be queued."
             }
+        }
+
+        state.phoneLocked && thread.canReply -> {
+            color = scheme.primary
+            title = "Phone locked · live reply"
+            detail = "Notification replies still work. Older history and quiet-chat sends wait for unlock."
+        }
+
+        state.phoneLocked && canSend -> {
+            color = scheme.tertiary
+            title = "Phone locked"
+            detail = "Messages you send now are saved on the watch and go after you unlock the phone."
+        }
+
+        state.phoneLocked && !thread.canReply -> {
+            color = scheme.tertiary
+            title = "Phone locked · history only"
+            detail = "Saved messages work. Unlock the phone and enable automation to send in this chat."
         }
 
         canSend && !thread.canReply -> {
@@ -523,7 +551,8 @@ private fun ChatActions(
     val queuedCount = state.queuedSends.count { it.threadId == threadId }
     val canLoadHistory = state.automationAvailable &&
         state.phoneOnline &&
-        state.relayEnabled
+        state.relayEnabled &&
+        !state.phoneLocked
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (state.historyWindows.containsKey(threadId)) {
             Text("Viewing older messages · approximate times", style = MaterialTheme.typography.bodyExtraSmall)
@@ -541,10 +570,20 @@ private fun ChatActions(
                     sending -> "Sending…"
                     !state.phoneOnline && canReply -> "Queue reply"
                     !state.phoneOnline && canSend -> "Queue message"
+                    state.phoneLocked && !canReply -> "Save for unlock"
                     canReply -> "Reply"
                     canSend -> "Send message"
                     else -> "Reply unavailable"
                 }
+            )
+        }
+
+        if (state.phoneLocked && !canReply && canSend) {
+            Text(
+                text = "Phone locked. Your message is saved on the watch and sends after you unlock the phone.",
+                style = MaterialTheme.typography.bodyExtraSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(horizontal = 8.dp)
             )
         }
 
@@ -566,10 +605,16 @@ private fun ChatActions(
             )
             FilledTonalButton(
                 onClick = onSendQueued,
-                enabled = state.phoneOnline,
+                enabled = state.phoneOnline && !(state.phoneLocked && !canReply),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (state.phoneOnline) "Send queued now" else "Queued until reconnect")
+                Text(
+                    when {
+                        state.phoneLocked && !canReply -> "Waiting for unlock"
+                        state.phoneOnline -> "Send queued now"
+                        else -> "Queued until reconnect"
+                    }
+                )
             }
         }
 
@@ -597,6 +642,14 @@ private fun ChatActions(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(if (loadingHistory) "Loading older…" else "Load older messages")
+                }
+                if (state.phoneLocked) {
+                    Text(
+                        text = "Unlock the phone to read older messages from OpenBubbles. Saved messages still work.",
+                        style = MaterialTheme.typography.bodyExtraSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
                 }
             }
         }

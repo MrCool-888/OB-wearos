@@ -1,6 +1,7 @@
 package com.openbubbles.wear.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -257,6 +258,43 @@ class ProtocolTest {
             hasMore = true
         )
         assertEquals(history, Wire.decode<HistoryPayload>(Wire.encode(history)))
+    }
+
+    @Test
+    fun optionalLockAndRetryFieldsRoundTripAndOlderPayloadsStillDecode() {
+        val sync = SyncPayload(
+            generatedAt = 1L,
+            phoneName = "Pixel",
+            bridgeVersion = "1.6.0",
+            notificationAccess = true,
+            phoneLocked = true,
+            phoneAwake = false
+        )
+        val decoded = Wire.decode<SyncPayload>(Wire.encode(sync))!!
+        assertTrue(decoded.phoneLocked)
+        assertFalse(decoded.phoneAwake)
+
+        val oldSync = Wire.decode<SyncPayload>(
+            """{"generatedAt":1,"phoneName":"Pixel","bridgeVersion":"1.5.0","notificationAccess":true}"""
+        )!!
+        assertFalse(oldSync.phoneLocked)
+        assertTrue(oldSync.phoneAwake)
+
+        val history = HistoryPayload(
+            requestId = "r",
+            threadId = "t",
+            error = "locked",
+            retryable = true
+        )
+        assertTrue(Wire.decode<HistoryPayload>(Wire.encode(history))!!.retryable)
+        val result = ActionResult(
+            requestId = "r",
+            action = Protocol.ACTION_SEND,
+            ok = false,
+            error = "locked",
+            retryable = true
+        )
+        assertTrue(Wire.decode<ActionResult>(Wire.encode(result))!!.retryable)
     }
 
     @Test

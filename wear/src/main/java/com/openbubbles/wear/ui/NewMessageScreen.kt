@@ -202,13 +202,13 @@ fun NewMessageScreen(
                     }
                 }
 
-                item { SectionHeader("Group chats") }
-                item { GroupDiscoveryControls(state) }
+                item { SectionHeader("Published chats") }
+                item { ChatDiscoveryControls(state) }
                 items(groups, key = { "group-${it.id}" }) { group ->
                     RecipientCard(group) { onOpenChat(group.id) }
                 }
                 if (groups.isEmpty()) item {
-                    Text("Find published group shortcuts using Shizuku on the phone, without a notification. Other groups can still appear from notifications; the private chat list is not read.",
+                    Text("Find groups and chats published as Android shortcuts or notification channels using Shizuku on the phone, without a notification. Other chats can still appear from notifications; the private chat list is not read.",
                         style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 

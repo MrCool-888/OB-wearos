@@ -30,6 +30,13 @@ class BridgePreferences(context: Context) {
             prefs.edit().putLong(KEY_LAST_NOTIFICATION, value).apply()
         }
 
+    /** Last automatic shortcut/channel refresh, used to avoid hammering dumpsys. */
+    var lastChatDiscoveryAt: Long
+        get() = prefs.getLong(KEY_LAST_CHAT_DISCOVERY, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_CHAT_DISCOVERY, value).apply()
+        }
+
     fun readAt(threadId: String): Long =
         prefs.getLong(KEY_READ_AT + threadId, 0L)
 
@@ -50,6 +57,7 @@ class BridgePreferences(context: Context) {
         const val KEY_LAST_PUBLISH = "last_publish"
         const val KEY_LAST_WATCH = "last_watch"
         const val KEY_LAST_NOTIFICATION = "last_notification"
+        const val KEY_LAST_CHAT_DISCOVERY = "last_chat_discovery"
         const val KEY_READ_AT = "read_at:"
     }
 }

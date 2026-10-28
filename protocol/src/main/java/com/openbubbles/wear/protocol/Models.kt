@@ -117,6 +117,9 @@ data class SyncPayload(
     val notificationAccess: Boolean,
     val relayEnabled: Boolean = true,
     val automationAvailable: Boolean = false,
+    /** True when Android is showing a secure keyguard; UI automation cannot run. */
+    val phoneLocked: Boolean = false,
+    val phoneAwake: Boolean = true,
     val conversations: List<ThreadSummary> = emptyList(),
     val contactsAccess: Boolean? = null
 )
@@ -165,6 +168,8 @@ data class PongPayload(
     val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
     val automationAvailable: Boolean = false,
+    val phoneLocked: Boolean = false,
+    val phoneAwake: Boolean = true,
     val trackedConversations: Int = 0,
     val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES,
     val contactsAccess: Boolean? = null
@@ -234,6 +239,8 @@ data class HistoryPayload(
     val messages: List<WireMessage> = emptyList(),
     val hasMore: Boolean = false,
     val error: String? = null,
+    /** The phone was locked, so the same request can succeed after unlock. */
+    val retryable: Boolean = false,
     val completedAt: Long = System.currentTimeMillis()
 )
 
@@ -268,6 +275,8 @@ data class ActionResult(
     val ok: Boolean,
     val threadId: String? = null,
     val error: String? = null,
+    /** The action did no work and should be retried after the phone unlocks. */
+    val retryable: Boolean = false,
     val completedAt: Long = System.currentTimeMillis(),
     val message: WireMessage? = null
 )
@@ -316,7 +325,10 @@ data class GroupsRequest(val version: Int = Protocol.VERSION, val requestId: Str
 data class GroupsResult(
     val version: Int = Protocol.VERSION,
     val requestId: String,
+    /** Groups only, kept for 1.5.0 watches. */
     val groups: List<ThreadSummary> = emptyList(),
+    /** One-to-one chats found without a notification. */
+    val chats: List<ThreadSummary> = emptyList(),
     val error: String? = null,
     val note: String? = null
 )

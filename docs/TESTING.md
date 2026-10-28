@@ -445,6 +445,48 @@ Release action tests for reply and mark-read need the debug receiver, so those a
 against debug builds. The notification action code path is identical apart from R8 shrinking.
 Automation should be smoke-tested from the watch on a release build with the real OpenBubbles app.
 
+## 1.6.0 discovery and locked-phone checks
+
+Local validation: **117 tests passed** (24 protocol, 58 phone, 35 watch), zero failures/errors.
+Both apps' debug and R8 release builds succeeded. Lint completed with no errors (41 phone / 38
+watch warnings). Signed APKs share the 1.5.0 application IDs/certificate, report versionName
+`1.6.0`, versionCode `8`, and contain no debug receivers. No ADB devices were connected.
+
+Automated coverage adds shortcut and channel parsing (including `Notify Anyways:`, deleted and
+redacted channels, disabled/foreign shortcuts), direct/group GUID classification, exact
+package/current-user query scoping, import preservation, two-tier placeholder trimming, legacy
+`new:<address>` folding, direct-chat discovery merge by address, retryable lock results, unlock
+backoff reset, locked send short-circuit, locked live replies, locked history rejection, protocol
+lock/retry fields, and older-payload decoding.
+
+Required real-device checks (not performed on this build machine):
+
+1. Update both devices to 1.6.0. Open OpenBubbles on the phone so it publishes recent chats.
+   Start Shizuku through wireless debugging (not root) and grant the bridge access.
+2. Run **Chats without notifications → Find chats with Shizuku** on the phone and **Published
+   chats → Find chats (Shizuku)** on the watch. Compare the result with
+   `adb shell dumpsys notification --noredact --package com.openbubbles.messaging` and
+   `adb shell cmd shortcut get-shortcuts --user 0 --flags 19 com.openbubbles.messaging`.
+   Confirm groups use `;+;` GUIDs, direct chats use `;-;` GUIDs, titles are not inverted, and a
+   deleted/redacted channel is skipped. Repeat after reboot and with Shizuku stopped.
+3. Open a discovered group that has never notified the bridge. Confirm it opens that exact group,
+   not a same-named group, and that importing it did not remove cached messages from any chat.
+   Discover 50+ chats and confirm message-bearing conversations are retained while placeholders
+   stay capped.
+4. Relock the phone with a secure PIN/pattern. While locked, confirm: cached chats open, live
+   notification replies send, incoming messages sync, and discovery still works. Confirm opening a
+   chat does not silently claim to load history.
+5. While still locked, type a quiet-chat send (notification dismissed) on the watch. It must stay
+   queued with a lock explanation and must not reach the phone. Unlock the phone and confirm the
+   queued message sends once, automatically, without duplicates.
+6. While locked, tap **Load older messages** and open a chat with no cache. Expect the lock
+   explanation, not a spinner or a fabricated history. Unlock and confirm history-on-open now
+   loads, including when the watch cache was empty.
+7. Check the watch status card and the phone **Status and diagnostics** card for lock/awake state.
+   Verify a swipe-only keyguard is not reported as securely locked.
+8. On Samsung Android 17 / One UI 9, verify that both `dumpsys notification` and `cmd shortcut`
+   output match the tested parsers. OEM formatting changes may require a follow-up.
+
 ## 1.5.0 published-group and history checks
 
 Local validation: **100 tests passed** (23 protocol, 49 phone, 28 watch), zero failures/errors.

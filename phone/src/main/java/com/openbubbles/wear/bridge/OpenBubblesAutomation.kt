@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -263,8 +264,11 @@ object OpenBubblesAutomation {
         readOnly: Boolean = false
     ) {
         val service = requireService()
-        val keyguard = service.getSystemService(android.app.KeyguardManager::class.java)
-        if (keyguard.isKeyguardLocked) throw AutomationException("Unlock the phone before loading history or sending through OpenBubbles automation.")
+        // Only a secure keyguard blocks us. A swipe-only keyguard is not
+        // treated as locked, and the screen is woken when the phone is merely
+        // asleep. Credentials are never read or bypassed.
+        if (BridgeInfo.isPhoneLocked(service)) throw AutomationException(BridgeInfo.LOCKED_HISTORY_MESSAGE)
+        wakeScreenIfNeeded()
         if (contentIntent != null) {
             val sent = runCatching { contentIntent.send() }.isSuccess
             if (sent && waitForMatchingComposer(title, 8_000) != null) return
@@ -316,6 +320,25 @@ object OpenBubblesAutomation {
                 .onFailure { Log.w(TAG, "New-chat fallback failed", it) }
         }
         throw AutomationException("Could not find an existing chat for \"$query\" in OpenBubbles. No new conversation was created to read history.")
+    }
+
+    /**
+     * Turns the screen on when the phone is unlocked but asleep. This uses a
+     * short, non-reference-counted wake lock and never affects a secure lock.
+     */
+    @Suppress("DEPRECATION")
+    private fun wakeScreenIfNeeded() {
+        val service = service ?: return
+        if (BridgeInfo.isPhoneAwake(service)) return
+        runCatching {
+            val power = service.getSystemService(PowerManager::class.java) ?: return
+            power.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "OpenBubblesWear:automation"
+            ).acquire(10_000L)
+        }.onFailure {
+            Log.w(TAG, "Could not wake the phone screen", it)
+        }
     }
 
     private suspend fun launchExistingGuid(guid: String) {
