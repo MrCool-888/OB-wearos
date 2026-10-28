@@ -240,7 +240,7 @@ private fun BridgeScreen() {
                 )
             }
             item {
-                ContactsCard(state.contactsAccess,
+                ContactsCard(state.contactsAccess, state.directBridge,
                     onAllow = { contactsPermission.launch(android.Manifest.permission.READ_CONTACTS) },
                     onSettings = { runCatching { context.startActivity(NotificationAccessSetup.appInfoIntent(context)) } })
             }
@@ -272,17 +272,27 @@ private fun BridgeScreen() {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Chats without notifications", style = MaterialTheme.typography.titleMedium)
-                        Text(PublishedChatDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
-                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. A chat can send while the phone is locked only after OpenBubbles has posted a notification for it, because that notification supplies the reply action.",
+                        Text(if (state.directBridge) "The Wear patch reads the chat directory and recent history directly from OpenBubbles. Shizuku is not needed."
+                            else PublishedChatDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
+                        Text(if (state.directBridge) "Open OpenBubbles once after installation, then find chats here or on the watch. Sends and mark-read use its backend, even without a notification."
+                            else "Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. A chat can send while the phone is locked only after OpenBubbles has posted a notification for it, because that notification supplies the reply action.",
                             style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !setupBusy, onClick = {
-                            runSetup { ctx ->
+                            if (state.directBridge) {
+                                setupBusy = true
+                                NotificationCenter.discoverChatsDirect(java.util.UUID.randomUUID().toString()) { result ->
+                                    setupNotice = result.error ?: "Imported ${result.groups.size + result.chats.size} chats. Sync the watch."
+                                    setupNoticeFailed = result.error != null
+                                    setupBusy = false
+                                    refreshState()
+                                }
+                            } else runSetup { ctx ->
                                 val result = NotificationCenter.discoverChats(ctx, java.util.UUID.randomUUID().toString())
                                 val found = result.groups.size + result.chats.size
                                 ShizukuSetup.StepResult(result.error == null, result.error
                                     ?: "Imported $found ${if (found == 1) "chat" else "chats"} (${result.groups.size} ${if (result.groups.size == 1) "group" else "groups"}). Sync the watch. ${result.note.orEmpty()}")
                             }
-                        }) { Text("Find chats with Shizuku") }
+                        }) { Text(if (state.directBridge) "Find chats in OpenBubbles" else "Find chats with Shizuku") }
                     }
                 }
             }
@@ -293,6 +303,21 @@ private fun BridgeScreen() {
                         scope.launch {
                             withContext(Dispatchers.IO) {
                                 NotificationCenter.setRelayEnabled(context, enabled)
+                            }
+                            state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
+                        }
+                    }
+                )
+            }
+            item {
+                PatchesCard(
+                    enabled = state.directBridgeEnabled,
+                    patchDetected = state.directBridge,
+                    backendState = state.backendState,
+                    onToggle = { enabled ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                BridgePreferences(context).directBridgeEnabled = enabled
                             }
                             state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
                         }
@@ -331,7 +356,7 @@ private fun BridgeScreen() {
                 )
             }
             item {
-                LimitationsCard()
+                LimitationsCard(state.directBridge)
             }
             item {
                 Footer(state)
@@ -341,7 +366,7 @@ private fun BridgeScreen() {
 }
 
 @Composable
-private fun ContactsCard(allowed: Boolean, onAllow: () -> Unit, onSettings: () -> Unit) {
+private fun ContactsCard(allowed: Boolean, directBridge: Boolean, onAllow: () -> Unit, onSettings: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Watch contact picker", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -349,7 +374,8 @@ private fun ContactsCard(allowed: Boolean, onAllow: () -> Unit, onSettings: () -
                 else "Optional. Allow access to the phone address book used by OpenBubbles on Android.")
             Text("When you browse or search on the watch, names and phone/email addresses are copied over the Wear Data Layer. No contact photos, notes, or third-party uploads. OpenBubbles-only private contacts may not be in this address book.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Watch: Find a chat → Choose a contact. Only chats OpenBubbles has already published or notified can be opened; contacts without one show an explanation.",
+            Text(if (directBridge) "Watch: Find a chat → Choose a contact. A new conversation is created only when you send your first message."
+                else "Watch: Find a chat → Choose a contact. Only chats OpenBubbles has already published or notified can be opened; contacts without one show an explanation.",
                 style = MaterialTheme.typography.bodySmall)
             if (!allowed) Button(onClick = onAllow) { Text("Allow contact picker") }
             TextButton(onClick = onSettings) { Text("Contacts permission settings") }
@@ -381,14 +407,16 @@ private fun HeroCard(state: BridgeUiState) {
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "A notification companion for OpenBubbles",
+                        if (state.directBridge) "Direct companion for patched OpenBubbles" else "A notification companion for OpenBubbles",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
             Spacer(Modifier.height(16.dp))
             Text(
-                if (state.notificationAccess) {
+                if (state.directBridge) {
+                    "The Wear patch is connected. Chats, history, sending and mark-read work without notification actions. Notification access is still needed for live alerts and photos."
+                } else if (state.notificationAccess) {
                     "The bridge can read OpenBubbles notifications and relay them to your watch."
                 } else {
                     "Grant notification access to let this bridge see OpenBubbles messages."
@@ -425,10 +453,12 @@ private fun SetupCard(
             )
             Spacer(Modifier.height(10.dp))
             StatusRow(
-                ok = state.notificationAccess,
+                ok = state.notificationAccess || state.directBridge,
                 title = "Read OpenBubbles notifications",
                 detail = if (state.notificationAccess) {
                     "Granted. The bridge can read chat notifications."
+                } else if (state.directBridge) {
+                    "Optional for direct chats and sending; needed for live alerts and notification photos."
                 } else {
                     "Required. Use Notification access below, not the ordinary app-notification permission. If Android blocks it, open the help steps."
                 }
@@ -793,6 +823,7 @@ private fun SyncCard(
                     else -> "Notification access off"
                 }
             )
+            InfoRow("Wear patch", if (state.directBridge) "Connected · ${state.backendState}" else "Not detected (notification mode)")
             InfoRow(
                 "Last OpenBubbles alert",
                 if (state.lastNotificationAt > 0L) {
@@ -853,7 +884,7 @@ private fun SyncCard(
 }
 
 @Composable
-private fun LimitationsCard() {
+private fun LimitationsCard(directBridge: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -876,10 +907,16 @@ private fun LimitationsCard() {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Bullet("Conversations appear after OpenBubbles posts a notification for them.")
-            Bullet("Muted chats and hidden alerts may not appear until you send or receive in them.")
+            if (directBridge) {
+                Bullet("The Wear patch loads a bounded chat directory and recent history directly from OpenBubbles. It can start a one-to-one chat on the first send.")
+                Bullet("Direct history can include text hidden by notification preview settings. Live incoming alerts still depend on notifications; refresh a chat to read quiet-chat updates.")
+            } else {
+                Bullet("Conversations appear after OpenBubbles posts a notification for them.")
+                Bullet("Muted chats and hidden alerts may not appear until you send or receive in them.")
+            }
             Bullet("Photos and GIFs are copied into bridge storage from notifications, then sent to the watch when you tap them. Hide text previews in OpenBubbles prevents images from reaching the bridge.")
-            Bullet("Replies and mark-read go through OpenBubbles' own notification actions, so your normal account and encryption are preserved. The phone can stay locked; the chat must have notified at least once so the bridge has a reply action.")
+            Bullet(if (directBridge) "Sends and mark-read use OpenBubbles' backend. Your account and encryption stay in OpenBubbles; the phone can stay locked."
+                else "Replies and mark-read go through OpenBubbles' own notification actions, so your normal account and encryption are preserved. The phone can stay locked; the chat must have notified at least once so the bridge has a reply action.")
         }
     }
 }
@@ -895,12 +932,68 @@ private fun Footer(state: BridgeUiState) {
         Text(
             when {
                 !state.openBubblesInstalled -> "OpenBubbles not detected"
+                state.directBridge -> "Wear patch connected"
                 !state.notificationAccess -> "Enable notification-listener access above"
                 else -> "Ready for OpenBubbles notifications"
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun PatchesCard(
+    enabled: Boolean,
+    patchDetected: Boolean,
+    backendState: String,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "Wear patches",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Use the injected Wear bridge inside patched OpenBubbles for direct chat directory, recent history, sending, and mark-read. Turn off to fall back to notification actions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (enabled) "Direct bridge enabled" else "Direct bridge disabled",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onToggle
+                )
+            }
+            if (!patchDetected && enabled) {
+                Text(
+                    "Patched OpenBubbles not detected. Install the Morphe-patched OpenBubbles APK and open it once.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (patchDetected && !enabled) {
+                Text(
+                    "Patched OpenBubbles detected ($backendState). Direct bridge is turned off.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

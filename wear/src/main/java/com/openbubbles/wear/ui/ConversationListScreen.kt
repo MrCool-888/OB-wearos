@@ -113,7 +113,8 @@ fun ConversationListScreen(
                     item {
                         Card(onClick = onSync, modifier = Modifier.fillMaxWidth()) {
                             Text("No group chats yet", style = MaterialTheme.typography.titleSmall)
-                            Text("Use Find chats (Shizuku) below, or receive a group notification. Published shortcuts and channels are a partial list, not every group.",
+                            Text(if (state.directBridge) "Use Find chats in OpenBubbles below to load existing groups."
+                                else "Use Find chats (Shizuku) below, or receive a group notification. Published shortcuts and channels are a partial list, not every group.",
                                 style = MaterialTheme.typography.bodyExtraSmall)
                         }
                     }
@@ -121,6 +122,7 @@ fun ConversationListScreen(
                     item {
                         EmptyStateCard(
                             hasNotificationAccess = state.notificationAccess,
+                            directBridge = state.directBridge,
                             phoneOnline = state.phoneOnline,
                             onSync = onSync
                         )
@@ -203,7 +205,7 @@ private fun PhoneStatusCard(
     val scheme = MaterialTheme.colorScheme
     val statusColor = when {
         !state.phoneOnline -> scheme.error
-        !state.notificationAccess -> scheme.error
+        !state.notificationAccess && !state.directBridge -> scheme.error
         !state.relayEnabled -> scheme.tertiary
         state.phoneLocked -> scheme.tertiary
         else -> scheme.primary
@@ -211,7 +213,7 @@ private fun PhoneStatusCard(
     val title = when {
         state.syncing -> "Syncing…"
         !state.phoneOnline -> "Phone offline"
-        !state.notificationAccess -> "Notification access off"
+        !state.notificationAccess && !state.directBridge -> "Notification access off"
         !state.relayEnabled -> "Relay paused on phone"
         state.phoneLocked -> "Phone locked"
         else -> "Connected to phone"
@@ -223,7 +225,7 @@ private fun PhoneStatusCard(
         !state.phoneOnline ->
             "Open the bridge app on your phone."
 
-        !state.notificationAccess ->
+        !state.notificationAccess && !state.directBridge ->
             "Open the bridge app and grant notification access."
 
         !state.relayEnabled ->
@@ -259,6 +261,7 @@ private fun PhoneStatusCard(
 @Composable
 private fun EmptyStateCard(
     hasNotificationAccess: Boolean,
+    directBridge: Boolean,
     phoneOnline: Boolean,
     onSync: () -> Unit
 ) {
@@ -277,6 +280,9 @@ private fun EmptyStateCard(
                 text = when {
                     !phoneOnline ->
                         "Open the bridge app on your phone, then sync again."
+
+                    directBridge ->
+                        "Use Find chats in OpenBubbles, or choose a contact to start a conversation."
 
                     !hasNotificationAccess ->
                         "The bridge needs notification access before it can see OpenBubbles messages."

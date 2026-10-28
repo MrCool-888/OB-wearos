@@ -18,7 +18,9 @@ data class WireMessage(
     val mediaWidth: Int = 0,
     val mediaHeight: Int = 0,
     val mediaSize: Long = 0L,
-    val status: String? = null
+    val status: String? = null,
+    /** Authenticated phone-side media provider URI; the watch fetches bytes through the Data Layer. */
+    val sourceUri: String? = null
 ) {
     val displayText: String
         get() = when {
@@ -41,10 +43,13 @@ data class WireMessage(
                 mediaMime = previous.mediaMime,
                 mediaWidth = previous.mediaWidth,
                 mediaHeight = previous.mediaHeight,
-                mediaSize = previous.mediaSize
+                mediaSize = previous.mediaSize,
+                sourceUri = sourceUri ?: previous.sourceUri
             )
         }
         if (!attachment && previous.attachment) return copy(attachment = true)
+        if (sourceUri == null && mediaId == previous.mediaId && previous.sourceUri != null)
+            return copy(sourceUri = previous.sourceUri)
         return this
     }
 }
@@ -63,11 +68,15 @@ data class WireThread(
     val canSend: Boolean = false,
     /** Phone number or email address for a one-to-one chat, when available. */
     val address: String? = null,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    /** Backend directory preview, available before the message history is loaded. */
+    val lastPreview: String = "",
+    /** Message IDs/history are authoritative backend data, not notification-derived hashes. */
+    val directHistory: Boolean = false
 ) {
     fun latestMessage(): WireMessage? = messages.maxByOrNull { it.timestamp }
 
-    fun lastActivity(): Long = latestMessage()?.timestamp ?: updatedAt
+    fun lastActivity(): Long = maxOf(latestMessage()?.timestamp ?: 0L, updatedAt)
 
     fun preview(): String = latestMessage()?.displayText ?: "No messages"
 
@@ -82,8 +91,9 @@ data class WireThread(
             canReply = canReply,
             canMarkRead = canMarkRead,
             canSend = canSend,
-            lastTimestamp = latest?.timestamp ?: updatedAt,
-            lastPreview = latest?.displayText ?: "",
+            lastTimestamp = lastActivity(),
+            lastPreview = if (lastPreview.isNotBlank() && updatedAt > (latest?.timestamp ?: 0L))
+                lastPreview else latest?.displayText ?: lastPreview,
             messageCount = messages.size,
             participants = participants,
             address = address
@@ -120,14 +130,17 @@ data class SyncPayload(
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
     val conversations: List<ThreadSummary> = emptyList(),
-    val contactsAccess: Boolean? = null
+    val contactsAccess: Boolean? = null,
+    /** True when the patched OpenBubbles IPC service answered on the phone. */
+    val directBridge: Boolean = false
 )
 
 @Serializable
 data class ThreadPayload(
     val version: Int = Protocol.VERSION,
     val thread: WireThread? = null,
-    val error: String? = null
+    val error: String? = null,
+    val requestedThreadId: String? = null
 )
 
 @Serializable
@@ -170,7 +183,9 @@ data class PongPayload(
     val phoneAwake: Boolean = true,
     val trackedConversations: Int = 0,
     val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES,
-    val contactsAccess: Boolean? = null
+    val contactsAccess: Boolean? = null,
+    /** True when the patched OpenBubbles IPC service answered on the phone. */
+    val directBridge: Boolean = false
 )
 
 @Serializable
@@ -198,13 +213,15 @@ data class OpenPhoneRequest(
     val sentAt: Long = System.currentTimeMillis()
 )
 
-/** Sends text through the chat's OpenBubbles notification reply action. */
+/** Sends text through the chat's OpenBubbles notification reply action, or the Wear patch bridge. */
 @Serializable
 data class SendRequest(
     val version: Int = Protocol.VERSION,
     val requestId: String,
     val threadId: String,
     val text: String,
+    /** Address for a chat the watch started from Contacts, before it has a GUID. */
+    val address: String? = null,
     val sentAt: Long = System.currentTimeMillis()
 )
 

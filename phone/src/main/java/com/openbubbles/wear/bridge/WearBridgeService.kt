@@ -57,8 +57,19 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
                 Protocol.PATH_GROUPS_REQUEST -> {
                     val request = Wire.decodeBytes<com.openbubbles.wear.protocol.GroupsRequest>(data) ?: return
-                    val result = NotificationCenter.discoverChats(applicationContext, request.requestId)
-                    WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT, Wire.encodeBytes(result))
+                    if (PatchBridgeClient.isAvailable(applicationContext)) {
+                        NotificationCenter.discoverChatsDirect(request.requestId) { result ->
+                            WatchLink.sendToNode(
+                                applicationContext,
+                                nodeId,
+                                Protocol.PATH_GROUPS_RESULT,
+                                Wire.encodeBytes(Wire.groupsForTransport(result))
+                            )
+                        }
+                    } else {
+                        val result = NotificationCenter.discoverChats(applicationContext, request.requestId)
+                        WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT, Wire.encodeBytes(Wire.groupsForTransport(result)))
+                    }
                 }
             }
         } catch (t: Throwable) {
@@ -111,12 +122,24 @@ class WearBridgeService : WearableListenerService() {
 
     private fun handleThreadRequest(nodeId: String, data: ByteArray) {
         val request = Wire.decodeBytes<ThreadRequest>(data) ?: return
-        WatchLink.sendToNode(
-            applicationContext,
-            nodeId,
-            Protocol.PATH_THREAD,
-            Wire.encodeBytes(NotificationCenter.threadPayload(request.threadId))
-        )
+        if (PatchBridgeClient.isAvailable(applicationContext)) {
+            NotificationCenter.threadPayload(request.threadId) { payload ->
+                WatchLink.sendToNode(
+                    applicationContext,
+                    nodeId,
+                    Protocol.PATH_THREAD,
+                    Wire.encodeBytes(payload.copy(thread = payload.thread?.let(Wire::threadForTransport),
+                        requestedThreadId = request.threadId))
+                )
+            }
+        } else {
+            WatchLink.sendToNode(
+                applicationContext,
+                nodeId,
+                Protocol.PATH_THREAD,
+                Wire.encodeBytes(NotificationCenter.threadPayload(request.threadId).copy(requestedThreadId = request.threadId))
+            )
+        }
     }
 
     private fun handleReply(nodeId: String, data: ByteArray) {
@@ -124,6 +147,40 @@ class WearBridgeService : WearableListenerService() {
         val claim = ActionDedupe.claim(applicationContext, request.requestId, Protocol.ACTION_REPLY, request.threadId)
         if (!claim.started) {
             claim.result?.let { sendActionResult(nodeId, Protocol.PATH_REPLY_RESULT, it) }
+            return
+        }
+        if (PatchBridgeClient.isAvailable(applicationContext)) {
+            try {
+                NotificationCenter.send(
+                    requestId = request.requestId,
+                    threadId = request.threadId,
+                    rawText = request.text
+                ) { result ->
+                    val reply = ActionResult(
+                        requestId = request.requestId,
+                        action = Protocol.ACTION_REPLY,
+                        ok = result.error == null,
+                        threadId = result.threadId ?: request.threadId,
+                        error = result.error,
+                        retryable = result.retryable,
+                        message = result.message
+                    )
+                    ActionDedupe.put(applicationContext, reply)
+                    ActionDedupe.end(request.requestId)
+                    sendActionResult(nodeId, Protocol.PATH_REPLY_RESULT, reply)
+                }
+            } catch (t: Throwable) {
+                val reply = ActionResult(
+                    requestId = request.requestId,
+                    action = Protocol.ACTION_REPLY,
+                    ok = false,
+                    threadId = request.threadId,
+                    error = t.message ?: "The reply could not be sent."
+                )
+                ActionDedupe.put(applicationContext, reply)
+                ActionDedupe.end(request.requestId)
+                sendActionResult(nodeId, Protocol.PATH_REPLY_RESULT, reply)
+            }
             return
         }
         try {
@@ -144,21 +201,27 @@ class WearBridgeService : WearableListenerService() {
 
     private fun handleMarkRead(nodeId: String, data: ByteArray) {
         val request = Wire.decodeBytes<MarkReadRequest>(data) ?: return
-        val error = NotificationCenter.markRead(request.threadId)
-        WatchLink.sendToNode(
-            applicationContext,
-            nodeId,
-            Protocol.PATH_ACTION_RESULT,
-            Wire.encodeBytes(
-                ActionResult(
-                    requestId = request.requestId,
-                    action = Protocol.ACTION_MARK_READ,
-                    ok = error == null,
-                    threadId = request.threadId,
-                    error = error
+        val finish: (String?) -> Unit = { error ->
+            WatchLink.sendToNode(
+                applicationContext,
+                nodeId,
+                Protocol.PATH_ACTION_RESULT,
+                Wire.encodeBytes(
+                    ActionResult(
+                        requestId = request.requestId,
+                        action = Protocol.ACTION_MARK_READ,
+                        ok = error == null,
+                        threadId = request.threadId,
+                        error = error
+                    )
                 )
             )
-        )
+        }
+        if (PatchBridgeClient.isAvailable(applicationContext)) {
+            NotificationCenter.markReadDirect(request.threadId, finish)
+        } else {
+            finish(NotificationCenter.markRead(request.threadId))
+        }
     }
 
     private fun handleSend(nodeId: String, data: ByteArray) {
@@ -180,7 +243,8 @@ class WearBridgeService : WearableListenerService() {
             NotificationCenter.send(
                 requestId = request.requestId,
                 threadId = request.threadId,
-                rawText = request.text
+                rawText = request.text,
+                address = request.address
             ) { result ->
                 complete(
                     ActionResult(

@@ -21,7 +21,11 @@ Build everything:
 ./gradlew :protocol:test :phone:assembleDebug :wear:assembleDebug :testnotifier:assembleDebug
 ```
 
-There is no accessibility service to enable. Sends use the notification reply action only.
+There is no accessibility service to enable. These harness instructions test notification replies.
+The separate [Morphe preview checklist](MORPHE.md#verification-and-remaining-checks) covers the direct
+backend path, which requires release-signed companions and must not be tested by replacing a
+daily-driver OpenBubbles installation. `PatchBridgeIntegrationTest` uses a fake bound Messenger
+service; it does not require or install the real OpenBubbles APK.
 
 ## Install the test harness
 
@@ -292,6 +296,9 @@ corresponding capability.
 
 ## 2.0.0 locked-send and accessibility-removal checks
 
+These historical unit tests mocked reply capabilities; they did not catch Android rejecting token
+serialization. Use the 2.0.2 runtime checks below for retained-action behavior.
+
 Local validation: see the 2.0.0 release note for the exact test counts and build results. Automated
 coverage includes:
 
@@ -358,6 +365,53 @@ Required real-device checks (not performed on this build machine):
    OpenBubbles version. It must open the current thread, not the old ID and not "not found".
 6. Import enough placeholders to exceed the phone store's 60-chat placeholder budget. Only the
    retained chats may appear on the watch, and all of them must open.
+
+## 2.0.2 retained replies on a securely locked emulator
+
+Use only a disposable emulator/spare test device with `testnotifier`, never a daily-driver phone.
+Build/install the debug harness above, grant the bridge notification access, and post `maya` once.
+
+Set a test PIN, enable the lock screen, and turn the screen off. **Check that bridge status reports
+`locked=true` before continuing**; screen-off alone does not prove secure lock. Then:
+
+```bash
+adb -s <test-phone> shell am broadcast \
+  -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op mark_read --es thread fake-maya
+adb -s <test-phone> shell am broadcast \
+  -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op status
+```
+
+Require `locked=true` and `thread fake-maya ... live=false reply=true`. This confirms the live
+notification is gone but the bridge retains its actual reply token. Without unlocking:
+
+```bash
+adb -s <test-phone> shell am broadcast \
+  -n com.openbubbles.wear/com.openbubbles.wear.bridge.DebugRelayReceiver \
+  -a com.openbubbles.wear.bridge.DEBUG_RELAY --es op send --es thread fake-maya --es text LockedQuietReply
+adb -s <test-phone> logcat -d -s OBWearDebug:I OBWearFake:I
+```
+
+Require both `send fake-maya: ok` and exactly one
+`Fake reply received for fake-maya: LockedQuietReply`; checking only the bridge's dispatch result
+does not prove receiver delivery. Verify status still reports `locked=true`. The fake receiver
+reposts a notification after replies, so remove it again before repeating with another unique text.
+
+Native Android 15 smoke test passed for 2.0.2 with the PIN-locked screen off. Automated phone tests
+also cover two sends without a repost, canceling live/retained actions, replacement tokens,
+and discovery preserving the current action key. Existing watch tests cover immediate queuing
+without an unlock deadline; the outbox is a transport journal, not an unlock queue.
+
+Process-death check: remove the notification, stop/restart the bridge, and try sending again.
+Expect an explicit missing-action error, not successful sending or retry-on-unlock. A new active
+notification must restore capability. Tokens cannot be serialized to disk or restored after reboot.
+
+Still required on the S25 / Watch6: install both 2.0.2 APKs, capture a real OpenBubbles notification,
+dismiss it, securely lock the phone, send twice from the watch, and confirm each message reaches
+the recipient exactly once without unlocking. Repeat after mark-read and after Shizuku discovery.
+No physical devices were connected for this build; fake receiver success does not establish real
+OpenBubbles backend delivery or Samsung Data Layer behavior.
 
 ## Release smoke test
 

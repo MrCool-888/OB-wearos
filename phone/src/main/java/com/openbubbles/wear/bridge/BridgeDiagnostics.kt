@@ -22,6 +22,8 @@ internal object BridgeDiagnostics {
             appendLine("Listener access granted: ${state.notificationAccess}")
             appendLine("Listener listed in secure settings: ${PermissionComponents.contains(configuredListener, listener)}")
             appendLine("Listener connected: ${state.listenerConnected}")
+            appendLine("Wear patch bridge: ${state.directBridge}")
+            appendLine("OpenBubbles backend: ${state.backendState}")
             appendLine("Phone notification posting: not used; App info → Notifications is not listener access")
             appendLine("Shizuku running: ${state.shizukuAvailable}")
             appendLine("Shizuku permission: ${state.shizukuPermission}")

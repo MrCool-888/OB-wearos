@@ -54,7 +54,7 @@ fun ComposerScreen(
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val title = thread?.title ?: summary?.title ?: "Conversation"
-    val canReply = (thread?.canReply ?: summary?.canReply) == true
+    val canReply = state.canReplyTo(threadId)
     val enabled = canReply && state.relayEnabled
     val sending = threadId in state.sendingThreads
     val listState = rememberScalingLazyListState()

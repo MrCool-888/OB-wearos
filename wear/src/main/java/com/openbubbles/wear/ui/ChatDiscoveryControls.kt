@@ -18,11 +18,16 @@ fun ChatDiscoveryControls(state: WatchState) {
             enabled = state.discoveryRequestId == null && state.phoneOnline && state.relayEnabled,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (state.discoveryRequestId != null) "Finding chats." else "Find chats (Shizuku)")
+            Text(when {
+                state.discoveryRequestId != null -> "Finding chats…"
+                state.directBridge -> "Find chats in OpenBubbles"
+                else -> "Find chats (Shizuku)"
+            })
         }
         Text(
             state.discoveryNotice
-                ?: "Start Shizuku and grant the phone bridge access. Reads OpenBubbles' published Android shortcuts and notification channels without needing a notification.",
+                ?: if (state.directBridge) "Reads chats directly with the Wear patch. Open a chat to load recent history."
+                else "Start Shizuku and grant the phone bridge access. Reads OpenBubbles' published Android shortcuts and notification channels without needing a notification.",
             style = MaterialTheme.typography.bodyExtraSmall
         )
     }

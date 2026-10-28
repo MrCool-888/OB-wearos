@@ -3,15 +3,22 @@
 ## Goals
 
 The project is a **companion**, not a second OpenBubbles client. It does not store Apple
-credentials, does not implement iMessage encryption, does not read OpenBubbles' private database,
+credentials, does not implement iMessage encryption,
 and does not open a network connection to Apple. The official OpenBubbles phone app remains
 responsible for accounts, encryption, delivery, and read receipts.
 
-There is one integration surface: **notifications**. OpenBubbles emits a `MessagingStyle`
+The default integration surface is **notifications**. OpenBubbles emits a `MessagingStyle`
 notification per active conversation, including a reply `RemoteInput`, a mark-read action, recent
 history, and the other person's handle. The bridge reads that notification, copies its data to the
 watch, and invokes the notification's own `PendingIntent`s when the user acts. There is no
 accessibility service and no screen scraping.
+
+The optional **Morphe Wear patch** adds a second integration surface: an injected Messenger
+service inside native OpenBubbles 2.0.0. It reads that app's chat/message database and invokes its
+backend, returning only conversation data to the companion. Every request is authenticated by
+Binder `Message.sendingUid`, companion package name and a pinned companion signing certificate.
+See [Morphe notes](MORPHE.md) for the privacy change, exact supported APK, build and test limitations.
+The notification-path descriptions below apply when the patch is absent unless noted otherwise.
 
 ## Modules
 
@@ -21,6 +28,23 @@ accessibility service and no screen scraping.
 | `phone` | Android app | Notification listener, parser, durable cache, Data Layer server, setup UI. |
 | `wear` | Wear OS app | Data Layer client, watch cache, Compose UI, reply/find-chat/media requests. |
 | `testnotifier` | Debug Android app | Fake `MessagingStyle` notifications with the real OpenBubbles package name. |
+| `morphe/` | Separate JVM/DEX patch build | Version/backend validation, manifest injection, authenticated in-app backend service. |
+
+### Direct patch path
+
+`PatchBridgeClient` binds explicitly for each request and unbinds after a reply, disconnect or
+timeout. It rejects malformed or unsupported API responses. A cached status probe advertises
+`directBridge` in sync/pong metadata; startup also imports the backend directory. The directory
+keeps its previews, activity timestamps, participants and unread state without inventing messages.
+History uses real backend message IDs and canonical `chat_<GUID>` conversation IDs. Migrating a
+legacy address/contact ID keeps existing messages and in-memory notification actions. The watch
+adopts the canonical ID and replaces the exact local bubble from a successful backend send result.
+
+`NotificationCenter` chooses the direct send path when the patch is available and never retries a
+failed/uncertain send through notification actions. The existing phone request-ID journal remains
+responsible for suppressing watch replays. Relay pause prevents querying new private history.
+Notifications still supply live incoming updates and actual media bytes; the patch has no media
+download operation or continuous database subscription.
 
 Application IDs:
 
@@ -78,16 +102,21 @@ If the listener disconnects, live state is cleared and a sync is scheduled. The 
 so the watch can still read history. Sending remains possible only while a live or saved reply
 action is available.
 
-The content `PendingIntent` from each notification is persisted by `PendingIntentStore`, keyed by
-thread ID, up to 40 entries. It is used to reopen the exact conversation later. OpenBubbles can
-cancel the token at any time, so callers fall back to launching OpenBubbles normally.
+The content `PendingIntent` from each notification is retained in memory by `PendingIntentStore`,
+keyed by thread ID, up to 40 entries. It is used to reopen the exact conversation later.
 
-The reply action's `PendingIntent` and free-form result key are persisted by `ReplyActionStore`,
-also keyed by thread ID and bounded to 40 entries. The action is saved on every notification post
-and is not removed when the notification disappears. This lets a quiet chat send through
-OpenBubbles' own receiver without waking or unlocking the phone. The token still belongs to
-OpenBubbles; it can be cancelled when OpenBubbles updates the notification, in which case the send
-reports that the chat has no reply action and the watch keeps the message in the outbox.
+The reply action's `PendingIntent` and free-form result key are retained in memory by
+`ReplyActionStore`, also keyed by thread ID and bounded to 40 entries. Synchronized operations
+protect these caches from concurrent listener and watch requests. Android rejects marshalling a
+Parcel containing Binder tokens, so neither store attempts disk serialization. Active notifications
+repopulate them after a process restart; quiet-chat tokens cannot survive process death or reboot.
+
+Notification removal and mark-read do not discard the reply token. A quiet chat can send through
+OpenBubbles' receiver without waking or unlocking the phone while that token remains valid. Both
+send entry points use `dispatchReply`; a rejected action is invalidated without removing a newer
+replacement token. The phone reports an error and the watch fails that message rather than waiting
+for unlock. OpenBubbles may cancel tokens at any time; successful dispatch is not backend delivery
+confirmation.
 
 ### Notification parsing
 
@@ -108,7 +137,7 @@ and handles the following:
   URI grant. OpenBubbles may send a caption and an image as separate messages with the same
   timestamp; they are merged into one `WireMessage` with the caption text and image metadata.
 - **Text**: trimmed and capped at 800 characters.
-- **Actions**: the first action with remote inputs is the reply action; an action containing
+- **Actions**: the first action with a free-form remote input and PendingIntent is the reply action; an action containing
   "read" is mark-read. Availability is reflected in `canReply` / `canMarkRead`. `canSend` remains in
   the protocol as a capability field but is set equal to `canReply`, because notification actions
   are the only supported send path.
@@ -225,7 +254,10 @@ the bridge's current Android user:
 
 Group status comes only from `;+;` GUIDs, never from a title. Neither surface is a complete chat
 directory and neither reads notification-history databases or private storage. Imports preserve
-existing cached messages, unread state, participants, and send ability. Newly discovered chats are
+existing cached messages, unread state, participants, and send ability. A same-address import keeps
+the existing thread ID so stale channel metadata cannot strand notification actions under another
+ID. Only a new notification may migrate the ID. Discovery results deduplicate these retained IDs,
+and the watch uses the phone's current reply capability rather than stale cached flags. Newly discovered chats are
 stored as empty placeholders so they cannot evict a conversation with real history. Because that
 placeholder budget is bounded, discovery reports only the chats the store actually kept; otherwise
 tapping an evicted entry would answer "Conversation not found". Discovery runs automatically at
@@ -490,9 +522,11 @@ source code or Mac-server dependency was incorporated.
 - **OpenBubbles absent**: notifications cannot appear; the phone UI reports this.
 - **Data Layer unavailable**: parsing and caching still work, but the watch cannot sync. This is the
   behavior seen on the Google APIs phone emulator image.
-- **Notification removed**: cache remains; mark-read disappears, but the saved reply action usually
-  still sends. If OpenBubbles cancelled it, the send reports no reply action and the message stays
-  in the watch outbox.
+- **Notification removed**: cache remains; mark-read disappears, but the in-memory reply action can
+  still send. If OpenBubbles cancelled it, the send fails with an explicit error instead of waiting
+  for unlock.
+- **Bridge process restarted**: history remains on disk, but reply/content tokens are lost. Active
+  notifications rebuild them; a quiet chat needs a new notification before sending again.
 - **Phone securely locked**: cached chats, live and saved notification replies, incoming syncs, and
   published discovery remain available. The keyguard is not bypassed; notification reply actions
   are the only send path.

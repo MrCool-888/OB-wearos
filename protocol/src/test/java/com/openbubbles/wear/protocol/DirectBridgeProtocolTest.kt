@@ -1,0 +1,91 @@
+package com.openbubbles.wear.protocol
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class DirectBridgeProtocolTest {
+    @Test fun largeDirectoriesFitWearTransportWithoutChangingTheCachedModels() {
+        val summaries = List(100) { index -> ThreadSummary("chat-$index", "😀".repeat(160),
+            isGroup = index % 2 == 0, lastTimestamp = 100L - index,
+            lastPreview = "😀".repeat(800), participants = List(100) { "a".repeat(160) }) }
+        val sync = SyncPayload(generatedAt = 1, phoneName = "Phone", bridgeVersion = "2.1.1",
+            notificationAccess = true, conversations = summaries)
+        assertTrue(Wire.encodeBytes(Wire.syncForTransport(sync)).size <= 90_000)
+        val result = GroupsResult(
+            version = Protocol.VERSION, requestId = "r",
+            groups = summaries.filter { it.isGroup }, chats = summaries.filterNot { it.isGroup })
+        val transported = Wire.groupsForTransport(result)
+        assertTrue(Wire.encodeBytes(transported).size <= 90_000)
+        assertTrue(transported.groups.any { it.id == "chat-0" })
+        assertEquals(100, sync.conversations.size)
+        assertEquals(1600, summaries.first().lastPreview.length)
+    }
+
+    @Test fun directHistoryAndMediaSourceRoundTripWithoutBreakingOlderThreads() {
+        val thread = WireThread("chat", "Alex", directHistory = true, messages = listOf(
+            WireMessage("real", "chat", "", 1, attachment = true,
+                sourceUri = "content://com.openbubbles.messaging.wear.media/guid")))
+        val decoded = Wire.decode<WireThread>(Wire.encode(thread))!!
+        assertTrue(decoded.directHistory)
+        assertEquals(thread.messages.single().sourceUri, decoded.messages.single().sourceUri)
+        assertFalse(Wire.decode<WireThread>("""{"id":"chat","title":"Alex"}""")!!.directHistory)
+        assertTrue(Protocol.isNotificationMessageId(Protocol.messageId("chat", 1, "Alex", "Hi")))
+        assertFalse(Protocol.isNotificationMessageId("backend-guid"))
+    }
+
+    @Test fun directoryPreviewSurvivesSerializationAndOlderCachedHistory() {
+        val thread = WireThread(id = "chat", title = "Alex", updatedAt = 2000,
+            lastPreview = "Latest message", messages = listOf(WireMessage("old", "chat", "Old message", 1000)))
+        val decoded = Wire.decode<WireThread>(Wire.encode(thread))!!
+        assertEquals(2000L, decoded.toSummary().lastTimestamp)
+        assertEquals("Latest message", decoded.toSummary().lastPreview)
+        assertEquals("Old message", decoded.copy(updatedAt = 1000).toSummary().lastPreview)
+        assertEquals("", Wire.decode<WireThread>("""{"id":"chat","title":"Alex"}""")!!.lastPreview)
+    }
+
+    @Test
+    fun sendRequestCarriesAddressForANewChat() {
+        val request = SendRequest(
+            requestId = "request",
+            threadId = "new:+15551234567",
+            text = "Hello",
+            address = "+15551234567"
+        )
+        val decoded = Wire.decode<SendRequest>(Wire.encode(request))!!
+        assertEquals("new:+15551234567", decoded.threadId)
+        assertEquals("+15551234567", decoded.address)
+    }
+
+    @Test
+    fun sendRequestFromAnOlderWatchHasNoAddress() {
+        val decoded = Wire.decode<SendRequest>(
+            """{"requestId":"r","threadId":"chat_x","text":"Hi"}"""
+        )!!
+        assertNull(decoded.address)
+    }
+
+    @Test
+    fun directBridgeIsAnnouncedInSyncAndPong() {
+        val sync = SyncPayload(
+            generatedAt = 1L,
+            phoneName = "Phone",
+            bridgeVersion = "2.1.0",
+            notificationAccess = false,
+            directBridge = true
+        )
+        val pong = PongPayload(directBridge = true)
+        assertTrue(Wire.decode<SyncPayload>(Wire.encode(sync))!!.directBridge)
+        assertTrue(Wire.decode<PongPayload>(Wire.encode(pong))!!.directBridge)
+        assertFalse(
+            SyncPayload(
+                generatedAt = 0L,
+                phoneName = "Phone",
+                bridgeVersion = "2.1.0",
+                notificationAccess = false
+            ).directBridge
+        )
+    }
+}

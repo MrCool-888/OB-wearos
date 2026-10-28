@@ -184,7 +184,8 @@ fun FindChatScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "Use Choose a contact or enter a number/email to open a chat OpenBubbles has already published or notified. Brand-new chats aren't supported.",
+                                    text = if (state.directBridge) "Choose a contact or enter a number/email. OpenBubbles creates the conversation when you send your first message."
+                                        else "Use Choose a contact or enter a number/email to open a chat OpenBubbles has already published or notified. Brand-new chats aren't supported.",
                                     style = MaterialTheme.typography.bodyExtraSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -193,13 +194,14 @@ fun FindChatScreen(
                     }
                 }
 
-                item { SectionHeader("Published chats") }
+                item { SectionHeader(if (state.directBridge) "OpenBubbles chats" else "Published chats") }
                 item { ChatDiscoveryControls(state) }
                 items(groups, key = { "group-${it.id}" }) { group ->
                     RecipientCard(group) { onOpenChat(group.id) }
                 }
                 if (groups.isEmpty()) item {
-                    Text("Find groups and chats published as Android shortcuts or notification channels using Shizuku on the phone, without a notification. Other chats can still appear from notifications; the private chat list is not read.",
+                    Text(if (state.directBridge) "Find existing groups directly in OpenBubbles. Creating new groups is not supported."
+                        else "Find groups and chats published as Android shortcuts or notification channels using Shizuku on the phone, without a notification. Other chats can still appear from notifications; the private chat list is not read.",
                         style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 

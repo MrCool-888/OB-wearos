@@ -11,12 +11,13 @@ internal object ConversationLaunch {
     }
 
     fun existingGuid(launcher: Intent, guid: String): Intent {
-        require(Protocol.isChatGuid(guid))
+        val rawGuid = guid.removePrefix("chat_")
+        require(Protocol.isChatGuid(rawGuid))
         require(BridgeInfo.isOpenBubblesPackage(launcher.component?.packageName ?: launcher.`package`.orEmpty()))
         return Intent(launcher).apply {
             action = Intent.ACTION_VIEW
-            putExtra("chatGuid", guid)
-            putExtra("android.intent.extra.shortcut.ID", guid)
+            putExtra("chatGuid", rawGuid)
+            putExtra("android.intent.extra.shortcut.ID", rawGuid)
             putExtra("bubble", false)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }

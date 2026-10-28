@@ -1,0 +1,223 @@
+package com.openbubbles.wear.bridge
+
+import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Message
+import android.os.Messenger
+import com.openbubbles.wear.protocol.GroupsResult
+import com.openbubbles.wear.protocol.ThreadPayload
+import com.openbubbles.wear.protocol.WireMessage
+import com.openbubbles.wear.protocol.WireThread
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
+import java.time.Duration
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [32], application = Application::class)
+class PatchBridgeIntegrationTest {
+    private lateinit var context: Context
+    private val requests = mutableListOf<JSONObject>()
+    private var respond: (JSONObject) -> String? = { """{"apiVersion":1,"ok":true}""" }
+    private val id = "chat_iMessage;-;+15551234567"
+
+    @Before fun reset() {
+        context = RuntimeEnvironment.getApplication()
+        val messenger = Messenger(Handler(Looper.getMainLooper()) { request ->
+            val body = JSONObject(request.data.getString("json")!!)
+            requests += body
+            respond(body)?.let { json ->
+                request.replyTo.send(Message.obtain(null, 2).apply {
+                    data = Bundle().apply { putString("json", json) }
+                })
+            }
+            true
+        })
+        shadowOf(context as Application).setComponentNameAndServiceForBindService(
+            ComponentName("com.openbubbles.messaging", "com.openbubbles.wear.patch.CompanionService"),
+            messenger.binder
+        )
+        PatchBridgeClient::class.java.getDeclaredField("available").apply { isAccessible = true }
+            .setBoolean(null, true)
+        PatchBridgeClient::class.java.getDeclaredField("checkedAt").apply { isAccessible = true }
+            .setLong(null, System.currentTimeMillis())
+        NotificationCenter::class.java.getDeclaredField("initialized").apply { isAccessible = true }
+            .setBoolean(null, false)
+        NotificationCenter.init(context)
+        NotificationCenter.clearCache(context)
+        BridgePreferences(context).relayEnabled = true
+        ShadowLooper.idleMainLooper()
+        requests.clear()
+    }
+
+    private fun store(): BridgeStore = NotificationCenter::class.java.getDeclaredField("store")
+        .apply { isAccessible = true }.get(NotificationCenter) as BridgeStore
+
+    @After fun cleanup() {
+        PatchBridgeClient::class.java.getDeclaredField("available").apply { isAccessible = true }
+            .setBoolean(null, false)
+        BridgePreferences(context).relayEnabled = true
+        NotificationCenter.clearCache(context)
+        NotificationCenter::class.java.getDeclaredField("initialized").apply { isAccessible = true }
+            .setBoolean(null, false)
+    }
+
+    @Test fun incompatibleAndMalformedRepliesFailClosed() {
+        for (json in listOf("not json", """{"apiVersion":2,"ok":true}""", """{"ok":true}""")) {
+            respond = { json }
+            var reply: PatchBridgeClient.Reply? = null
+            PatchBridgeClient.request(context, "status") { reply = it }
+            ShadowLooper.idleMainLooper()
+            assertFalse(reply!!.ok)
+            assertNull(reply!!.json)
+            assertNotNull(reply!!.error)
+        }
+    }
+
+    @Test fun requestFieldsCannotOverrideOperationOrApiVersion() {
+        PatchBridgeClient.request(context, "status", JSONObject().put("op", "send").put("apiVersion", 99)) {}
+        ShadowLooper.idleMainLooper()
+        assertEquals("status", requests.single().getString("op"))
+        assertEquals(1, requests.single().getInt("apiVersion"))
+    }
+
+    @Test fun timeoutCompletesOnceAndDoesNotReplayTheSend() {
+        respond = { null }
+        val replies = mutableListOf<PatchBridgeClient.Reply>()
+        PatchBridgeClient.request(context, "send", timeoutMs = 100) { replies += it }
+        ShadowLooper.idleMainLooper()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
+        assertEquals(1, replies.size)
+        assertTrue(replies.single().timedOut)
+        assertEquals(listOf("send"), requests.map { it.getString("op") })
+    }
+
+    @Test fun discoveryKeepsBackendMetadataAndNewestChatsWithinTheCacheBudget() {
+        val chats = JSONArray()
+        repeat(100) { index ->
+            chats.put(JSONObject().put("id", "iMessage;-;person$index@example.com")
+                .put("title", "Person $index").put("address", "person$index@example.com")
+                .put("lastTimestamp", 10_000L - index).put("lastPreview", "Preview $index")
+                .put("participants", JSONArray().put("person$index@example.com")).put("unread", true))
+        }
+        respond = { JSONObject().put("apiVersion", 1).put("ok", true).put("chats", chats).toString() }
+        var result: GroupsResult? = null
+        NotificationCenter.discoverChatsDirect("directory") { result = it }
+        ShadowLooper.idleMainLooper()
+        assertNull(result!!.error)
+        assertEquals(BridgeStore.MAX_PLACEHOLDERS, result!!.chats.size)
+        assertEquals("Person 0", result!!.chats.first().title)
+        assertFalse(result!!.chats.any { it.title == "Person 99" })
+        val summary = NotificationCenter.threadFor(result!!.chats.first().id)!!.toSummary()
+        assertTrue(summary.unread)
+        assertTrue(summary.canReply)
+        assertEquals(10_000L, summary.lastTimestamp)
+        assertEquals("Preview 0", summary.lastPreview)
+        assertEquals(listOf("person0@example.com"), summary.participants)
+    }
+
+    @Test fun historyMigratesTheAliasAndRewritesEveryMessageThreadId() {
+        val alias = "chat_contact:42"
+        store().upsertIncoming(WireThread(id = alias, title = "Alex", address = "+15551234567",
+            messages = listOf(WireMessage("old", alias, "Older", 1))))
+        respond = { """{"apiVersion":1,"ok":true,"thread":{"id":"iMessage;-;+15551234567",
+            "address":"+15551234567","messages":[{"id":"new","text":"Recent","timestamp":2}]}}""" }
+        var payload: ThreadPayload? = null
+        NotificationCenter.threadPayload(alias) { payload = it }
+        ShadowLooper.idleMainLooper()
+        assertEquals(id, payload!!.thread!!.id)
+        assertEquals(listOf("old", "new"), payload!!.thread!!.messages.map { it.id })
+        assertTrue(payload!!.thread!!.messages.all { it.threadId == id })
+        assertNull(NotificationCenter.threadFor(alias))
+    }
+
+    @Test fun directSendIncludesRequestIdAndCachedRecipientAndReturnsTheBackendMessage() {
+        store().upsertIncoming(WireThread(id = "new:+15551234567", title = "Alex", address = "+15551234567"))
+        respond = { """{"apiVersion":1,"ok":true,"threadId":"iMessage;-;+15551234567",
+            "thread":{"id":"iMessage;-;+15551234567","address":"+15551234567",
+            "messages":[{"id":"real","text":"Hello","timestamp":5,"fromMe":true}]},
+            "message":{"id":"real","text":"Hello","timestamp":5,"fromMe":true}}""" }
+        var result: NotificationCenter.SendResult? = null
+        NotificationCenter.send("request-id", "new:+15551234567", "Hello") { result = it }
+        ShadowLooper.idleMainLooper()
+        assertNull(result!!.error)
+        assertEquals(id, result!!.threadId)
+        assertEquals("real", result!!.message!!.id)
+        assertEquals("request-id", requests.single().getString("requestId"))
+        assertEquals("+15551234567", requests.single().getString("address"))
+        assertNull(NotificationCenter.threadFor("new:+15551234567"))
+    }
+
+    @Test fun failedSendIsNotRetriedAndDoesNotRecordASentMessage() {
+        respond = { """{"apiVersion":1,"ok":false,"error":"Backend unavailable"}""" }
+        var result: NotificationCenter.SendResult? = null
+        NotificationCenter.send("request-id", id, "Hello") { result = it }
+        ShadowLooper.idleMainLooper()
+        assertEquals("Backend unavailable", result!!.error)
+        assertFalse(result!!.retryable)
+        assertEquals(1, requests.size)
+        assertNull(NotificationCenter.threadFor(id))
+    }
+
+    @Test fun pausedRelayDoesNotQueryPrivateHistory() {
+        BridgePreferences(context).relayEnabled = false
+        var payload: ThreadPayload? = null
+        NotificationCenter.threadPayload(id) { payload = it }
+        ShadowLooper.idleMainLooper()
+        assertEquals("Relay is paused on the phone.", payload!!.error)
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test fun directBridgeDisabledStopsProbingAndFallsBack() {
+        BridgePreferences(context).directBridgeEnabled = false
+        assertFalse(PatchBridgeClient.isAvailable(context))
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test fun directBridgeDefaultsToEnabled() {
+        assertTrue(BridgePreferences(context).directBridgeEnabled)
+    }
+
+    @Test fun backendHistoryIsMarkedAuthoritativeAndSendIsNotRetriedAfterTimeout() {
+        respond = { """{"apiVersion":1,"ok":true,"thread":{"id":"iMessage;-;+15551234567",
+            "messages":[{"id":"real","text":"History","timestamp":10}]}}""" }
+        var payload: ThreadPayload? = null
+        NotificationCenter.threadPayload(id) { payload = it }
+        ShadowLooper.idleMainLooper()
+        assertTrue(payload!!.thread!!.directHistory)
+        requests.clear()
+        respond = { null }
+        var sent: NotificationCenter.SendResult? = null
+        NotificationCenter.send("timeout-request", id, "Hello") { sent = it }
+        ShadowLooper.idleMainLooper()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(25))
+        assertNotNull(sent!!.error)
+        assertFalse(sent!!.retryable)
+        assertEquals(1, requests.count { it.getString("op") == "send" })
+    }
+
+    @Test fun compactJournalReplayStillCreatesACanonicalCachedConversation() {
+        respond = { """{"apiVersion":1,"ok":true,"threadId":"iMessage;-;+15551234567",
+            "message":{"id":"real","text":"Hello","timestamp":5,"fromMe":true}}""" }
+        var result: NotificationCenter.SendResult? = null
+        NotificationCenter.send("replay", "new:+15551234567", "Hello", "+15551234567") { result = it }
+        ShadowLooper.idleMainLooper()
+        assertNull(result!!.error)
+        assertEquals("real", NotificationCenter.threadFor(id)!!.messages.single().id)
+        assertEquals("+15551234567", NotificationCenter.threadFor(id)!!.address)
+    }
+}

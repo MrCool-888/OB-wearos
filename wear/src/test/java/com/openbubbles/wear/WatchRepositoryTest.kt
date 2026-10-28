@@ -2,7 +2,10 @@ package com.openbubbles.wear
 
 import android.app.Application
 import android.app.NotificationManager
+import android.app.RemoteInput
 import android.content.Context
+import android.content.Intent
+import android.os.Bundle
 import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.SyncPayload
@@ -13,6 +16,7 @@ import com.openbubbles.wear.protocol.ContactAddress
 import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.GroupsResult
+import com.openbubbles.wear.protocol.ThreadPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Before
@@ -29,6 +33,7 @@ class WatchRepositoryTest {
     private lateinit var context: Context
     private lateinit var state: MutableStateFlow<WatchState>
     private lateinit var pending: MutableMap<String, String>
+    private lateinit var threadRequests: MutableMap<String, String>
     private val local = WireMessage(id = "local-request", threadId = "chat", text = "Hello",
         timestamp = 1000, fromMe = true, status = "sending")
 
@@ -38,12 +43,17 @@ class WatchRepositoryTest {
         fun field(name: String) = WatchRepository::class.java.getDeclaredField(name).apply { isAccessible = true }
         field("initialized").setBoolean(null, true)
         field("appContext").set(null, context)
-        field("queueFlushing").setBoolean(null, false)
+        // Drive transport results explicitly instead of racing real Play Services callbacks.
+        field("queueFlushing").setBoolean(null, true)
         @Suppress("UNCHECKED_CAST")
         state = field("_state").get(null) as MutableStateFlow<WatchState>
         @Suppress("UNCHECKED_CAST")
         pending = field("pendingSends").get(null) as MutableMap<String, String>
         pending.clear()
+        @Suppress("UNCHECKED_CAST")
+        threadRequests = field("pendingThreadRequests").get(null) as MutableMap<String, String>
+        threadRequests.clear()
+        WatchNavigation.consume()
         state.value = WatchState(loading = false, relayEnabled = false,
             threads = mapOf("chat" to WireThread(id = "chat", title = "Alex", messages = listOf(local))),
             queuedSends = listOf(QueuedSend("request", "chat", "Hello")), sendingThreads = setOf("chat"))
@@ -52,6 +62,7 @@ class WatchRepositoryTest {
     }
 
     private fun status() = state.value.threads.getValue("chat").messages.single().status
+    private fun message(id: String, time: Long = 1000, text: String = "Hello") = WireMessage(id, "chat", text, time)
     private fun confirm() = WatchRepository.onActionResult(ActionResult(
         requestId = "request", action = Protocol.ACTION_SEND, ok = true, threadId = "chat"))
 
@@ -87,6 +98,7 @@ class WatchRepositoryTest {
     }
 
     @Test fun pausedRelayDoesNotFlushOutbox() {
+        WatchRepository::class.java.getDeclaredField("queueFlushing").apply { isAccessible = true }.setBoolean(null, false)
         pending.clear()
         WatchRepository.flushQueue(manual = true)
         assertEquals(1, state.value.queuedCount)
@@ -293,7 +305,7 @@ class WatchRepositoryTest {
         assertTrue(merged.unread)
         assertEquals("Hi", merged.lastPreview)
         assertEquals(900L, merged.lastTimestamp)
-        assertTrue(merged.canSend)
+        assertFalse(merged.canSend)
         assertTrue(state.value.directChats.any { it.id == found.id })
         assertFalse(state.value.groups.any { it.id == found.id })
     }
@@ -305,6 +317,18 @@ class WatchRepositoryTest {
         assertEquals(old, state.value.conversations)
         assertEquals("Start Shizuku", state.value.discoveryNotice)
         assertNull(state.value.discoveryRequestId)
+    }
+
+    @Test fun discoveryUsesPhoneReplyAvailabilityInsteadOfStaleCachedFlags() {
+        val old = WireThread(id = "chat_contact:42", title = "Alex", canReply = false).toSummary()
+        val ready = old.copy(canReply = true, canSend = true)
+        state.value = state.value.copy(conversations = listOf(old), discoveryRequestId = "ready")
+        WatchRepository.onGroups(GroupsResult(requestId = "ready", chats = listOf(ready)))
+        assertTrue(state.value.conversations.single().canReply)
+        state.value = state.value.copy(discoveryRequestId = "expired")
+        WatchRepository.onGroups(GroupsResult(requestId = "expired", chats = listOf(old)))
+        assertFalse(state.value.conversations.single().canReply)
+        assertFalse(state.value.conversations.single().canSend)
     }
 
     @Test fun failedSendIsMarkedFailedAndLeavesTheOutbox() {
@@ -401,5 +425,497 @@ class WatchRepositoryTest {
         assertFalse(state.value.phoneLocked)
         assertEquals(retryAt, state.value.queuedSends.single().nextAttemptAt)
         assertTrue(state.value.info!!.contains("unlocked", ignoreCase = true))
+    }
+
+    @Test fun directBridgeCreatesAConversationForANewAddress() {
+        state.value = state.value.copy(directBridge = true)
+        val id = WatchRepository.findChatByAddress("+1 (555) 123-4567")
+        assertEquals("new:+15551234567", id)
+        assertTrue(state.value.canReplyTo(id!!))
+        assertFalse(state.value.threads.getValue(id).canReply)
+        assertTrue(state.value.conversations.any { it.id == id })
+        WatchRepository.requestThread(id)
+        assertFalse(state.value.requestingThreads.contains(id))
+    }
+
+    @Test fun directBridgeSendsWithoutAReplyAction() {
+        state.value = state.value.copy(
+            directBridge = true,
+            relayEnabled = true,
+            sendingThreads = emptySet(),
+            queuedSends = emptyList(),
+            threads = mapOf("chat" to WireThread(
+                id = "chat",
+                title = "Alex",
+                address = "+15551234567"
+            )),
+            conversations = emptyList()
+        )
+        pending.clear()
+        assertTrue(WatchRepository.sendReply("chat", "New message"))
+        assertEquals(1, state.value.queuedCount)
+    }
+
+    @Test fun backendConfirmationReplacesTheExactLocalBubbleAndMigratesTheOpenChat() {
+        val oldId = "new:+15551234567"
+        val canonical = "chat_iMessage;-;+15551234567"
+        val thread = WireThread(id = oldId, title = "Alex", address = "+15551234567",
+            messages = listOf(local.copy(threadId = oldId, status = "queued")))
+        state.value = state.value.copy(threads = mapOf(oldId to thread),
+            visibleThreadId = oldId, requestingThreads = setOf(oldId),
+            sendingThreads = setOf(oldId), queuedSends = listOf(QueuedSend("request", oldId, "Hello")))
+        pending["request"] = oldId
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND,
+            ok = true, threadId = canonical,
+            message = local.copy(id = "backend-id", threadId = canonical, timestamp = 9_000_000)))
+        assertFalse(state.value.threads.containsKey(oldId))
+        assertEquals(listOf("backend-id"), state.value.threads.getValue(canonical).messages.map { it.id })
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(state.value.requestingThreads.isEmpty())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertEquals(canonical, state.value.visibleThreadId)
+        assertEquals(canonical, WatchNavigation.openThread.value)
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test fun directDiscoveryReplacesStalePreviewAndUnreadState() {
+        val old = WireThread(id = "chat", title = "Alex", unread = true,
+            messages = listOf(local)).toSummary()
+        val found = old.copy(unread = false, lastTimestamp = 2000, lastPreview = "New preview")
+        state.value = state.value.copy(directBridge = true, conversations = listOf(old), discoveryRequestId = "r")
+        WatchRepository.onGroups(GroupsResult(requestId = "r", chats = listOf(found)))
+        assertEquals(found, state.value.conversations.single())
+    }
+
+    @Test fun canonicalThreadAdoptsASummaryOnlyAliasAndAllPendingState() {
+        val old = WireThread(id = "chat_addr:+15551234567", title = "Alex", address = "+15551234567").toSummary()
+        state.value = state.value.copy(threads = emptyMap(), conversations = listOf(old),
+            visibleThreadId = old.id, requestingThreads = setOf(old.id), sendingThreads = setOf(old.id),
+            queuedSends = listOf(QueuedSend("request", old.id, "Hello")))
+        pending["request"] = old.id
+        threadRequests[old.id] = "load"
+        WatchRepository.onThread(WireThread(id = "canonical", title = "Alex", address = old.address), connected = false)
+        assertEquals(listOf("canonical"), state.value.conversations.map { it.id })
+        assertEquals("canonical", state.value.visibleThreadId)
+        assertEquals("canonical", WatchNavigation.openThread.value)
+        assertEquals("canonical", state.value.queuedSends.single().threadId)
+        assertEquals(setOf("canonical"), state.value.sendingThreads)
+        assertEquals("canonical", pending["request"])
+        assertTrue(state.value.requestingThreads.isEmpty())
+        assertTrue(threadRequests.isEmpty())
+    }
+
+    @Test fun syncMigratesSummaryOnlyAliasesBeforeReplacingTheDirectory() {
+        val old = WireThread(id = "old", title = "Alex", address = "alex@example.com").toSummary()
+        state.value = state.value.copy(threads = emptyMap(), conversations = listOf(old),
+            visibleThreadId = old.id, queuedSends = listOf(QueuedSend("request", old.id, "Hello")))
+        pending["request"] = old.id
+        WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = true, relayEnabled = false, conversations = listOf(old.copy(id = "canonical"))), fromCache = true)
+        assertEquals(listOf("canonical"), state.value.conversations.map { it.id })
+        assertEquals("canonical", state.value.visibleThreadId)
+        assertEquals("canonical", state.value.queuedSends.single().threadId)
+        assertEquals("canonical", pending["request"])
+    }
+
+    @Test fun discoveryMigratesCachedHistoryAndQueuedSends() {
+        val old = WireThread(id = "old", title = "Alex", address = "alex@example.com", messages = listOf(local.copy(threadId = "old")))
+        state.value = state.value.copy(threads = mapOf(old.id to old), conversations = listOf(old.toSummary()),
+            discoveryRequestId = "discover", queuedSends = listOf(QueuedSend("request", old.id, "Hello")))
+        pending["request"] = old.id
+        WatchRepository.onGroups(GroupsResult(requestId = "discover", chats = listOf(old.toSummary().copy(id = "canonical"))))
+        assertEquals(setOf("canonical"), state.value.threads.keys)
+        assertEquals("canonical", state.value.threads.getValue("canonical").messages.single().threadId)
+        assertEquals("canonical", state.value.queuedSends.single().threadId)
+        assertEquals("canonical", pending["request"])
+    }
+
+    @Test fun aliasMigrationPreservesReadAndNotificationWatermarksWithoutMergingGroups() {
+        val old = WireThread(id = "old", title = "Alex", address = "alex@example.com", messages = listOf(local.copy(id = "history")))
+        val summaryOnly = old.toSummary().copy(id = "other-old")
+        val group = old.toSummary().copy(id = "group", isGroup = true)
+        state.value = state.value.copy(threads = mapOf(old.id to old), conversations = listOf(old.toSummary(), summaryOnly, group))
+        WatchRepository.markReadLocally(summaryOnly.id)
+        WatchNotifications.markNotified(context, summaryOnly.id, 5000)
+        WatchRepository.onThread(WireThread(id = "canonical", title = "Alex", address = old.address, unread = true,
+            messages = listOf(local.copy(id = "incoming", threadId = "canonical", fromMe = false, timestamp = 2000))), connected = false)
+        assertEquals(setOf("canonical", "group"), state.value.conversations.map { it.id }.toSet())
+        val canonical = state.value.threads.getValue("canonical")
+        assertEquals(setOf("history", "incoming"), canonical.messages.map { it.id }.toSet())
+        assertTrue(canonical.messages.all { it.threadId == "canonical" })
+        assertFalse(canonical.unread)
+        assertEquals(5000L, WatchNotifications.lastNotified(context, "canonical"))
+    }
+
+    @Test fun confirmationWithoutABackendMessageStillMigratesTheNewChatId() {
+        val oldId = "new:alex@example.com"
+        val thread = WireThread(id = oldId, title = "Alex", address = "alex@example.com", messages = listOf(local.copy(threadId = oldId)))
+        state.value = state.value.copy(threads = mapOf(oldId to thread), conversations = listOf(thread.toSummary()),
+            visibleThreadId = oldId, sendingThreads = setOf(oldId), queuedSends = emptyList())
+        pending["request"] = oldId
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND,
+            ok = true, threadId = "canonical"))
+        assertEquals(setOf("canonical"), state.value.threads.keys)
+        assertEquals("sent", state.value.threads.getValue("canonical").messages.single().status)
+        assertEquals("canonical", state.value.visibleThreadId)
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test fun replyConfirmationMigratesAndReplacesOnlyItsExactLocalBubble() {
+        val oldId = "old"
+        val other = local.copy(id = "local-other", threadId = oldId, status = "queued")
+        val thread = WireThread(id = oldId, title = "Alex", address = "alex@example.com",
+            messages = listOf(local.copy(threadId = oldId), other))
+        state.value = state.value.copy(threads = mapOf(oldId to thread), conversations = listOf(thread.toSummary()),
+            sendingThreads = setOf(oldId), queuedSends = listOf(QueuedSend("other", oldId, "Hello")))
+        pending["request"] = oldId
+        val confirmation = ActionResult(requestId = "request", action = Protocol.ACTION_REPLY, ok = true,
+            threadId = "canonical", message = local.copy(id = "backend", threadId = "canonical"))
+        WatchRepository.onActionResult(confirmation)
+        WatchRepository.onActionResult(confirmation)
+        assertEquals(setOf("local-other", "backend"), state.value.threads.getValue("canonical").messages.map { it.id }.toSet())
+        assertEquals(2, state.value.threads.getValue("canonical").messages.size)
+        assertEquals("canonical", state.value.queuedSends.single().threadId)
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test fun failedReplyResultUsesItsPendingTargetEvenWhenThePhoneReturnsAnotherId() {
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_REPLY,
+            ok = false, threadId = "canonical", error = "Not confirmed", retryable = true))
+        assertEquals("failed", status())
+        assertEquals("Not confirmed", state.value.error)
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test fun missingTransportCallbackIsNotRequeued() {
+        assertTrue(WatchRepository.prepareSendDispatch("request"))
+        WatchRepository.onSendDispatched("request", "chat", local.id, null)
+        assertEquals("sending", status())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertEquals("chat", pending["request"])
+        confirm()
+        assertEquals("sent", status())
+        assertTrue(state.value.queuedSends.isEmpty())
+    }
+
+    @Test fun definiteTransportFailureMakesTheDurableDispatchReplayableAgain() {
+        assertTrue(WatchRepository.prepareSendDispatch("request"))
+        assertTrue(state.value.queuedSends.single().dispatching)
+        WatchRepository.onSendDispatched("request", "chat", local.id, false)
+        assertFalse(state.value.queuedSends.single().dispatching)
+        assertEquals("queued", status())
+    }
+
+    private fun restartRepository() {
+        WatchRepository::class.java.getDeclaredField("initialized").apply { isAccessible = true }.setBoolean(null, false)
+        pending.clear()
+        WatchRepository.attach(context)
+    }
+
+    @Test fun restartNeverReplaysAnUncertainDispatchOrRestoresPatchCapability() {
+        state.value = state.value.copy(conversations = listOf(state.value.threads.getValue("chat").toSummary()), directBridge = true)
+        assertTrue(WatchRepository.prepareSendDispatch("request"))
+        context.getSharedPreferences("openbubbles_wear", Context.MODE_PRIVATE).edit().putBoolean("direct_bridge", true).commit()
+        restartRepository()
+        assertFalse(state.value.directBridge)
+        assertEquals("unconfirmed", status())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertTrue(state.value.error!!.contains("avoid a duplicate"))
+    }
+
+    @Test fun disconnectAndCachedSyncCannotReenableThePatch() {
+        state.value = state.value.copy(directBridge = true, connected = true, reachable = true)
+        WatchRepository.onPeerDisconnected()
+        assertFalse(state.value.directBridge)
+        WatchRepository.onPeerConnected()
+        assertFalse(state.value.directBridge)
+        WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = false, relayEnabled = false, directBridge = true), fromCache = true)
+        assertFalse(state.value.directBridge)
+        WatchRepository.onPong(PongPayload(relayEnabled = false, directBridge = true))
+        assertTrue(state.value.directBridge)
+        WatchRepository.onSync(SyncPayload(generatedAt = 3000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = false, relayEnabled = false), fromCache = true)
+        assertTrue(state.value.directBridge)
+    }
+
+    @Test fun newChatPlaceholderDoesNotPretendToHaveANotificationReplyAction() {
+        state.value = state.value.copy(directBridge = true, relayEnabled = true, sendingThreads = emptySet(), queuedSends = emptyList())
+        val id = WatchRepository.findChatByAddress("new@example.com")!!
+        WatchRepository.onPeerDisconnected()
+        assertFalse(state.value.canReplyTo(id))
+        assertFalse(WatchRepository.sendReply(id, "Hello"))
+        assertTrue(state.value.queuedSends.isEmpty())
+    }
+
+    @Test fun freshSummaryReplyAvailabilityOverridesStaleCachedFlags() {
+        val cached = WireThread(id = "chat", title = "Alex", canReply = false)
+        state.value = state.value.copy(threads = mapOf("chat" to cached), conversations = listOf(cached.toSummary().copy(canReply = true)),
+            relayEnabled = true, queuedSends = emptyList(), sendingThreads = emptySet())
+        assertTrue(state.value.canReplyTo("chat"))
+        assertTrue(WatchRepository.sendReply("chat", "Saved reply"))
+        state.value = state.value.copy(threads = mapOf("chat" to cached.copy(canReply = true)),
+            conversations = listOf(cached.toSummary()))
+        assertFalse(state.value.canReplyTo("chat"))
+    }
+
+    @Test fun threadTimeoutClearsLoadingEvenWhenCachedHistoryExists() {
+        threadRequests["chat"] = "load"
+        state.value = state.value.copy(requestingThreads = setOf("chat"))
+        WatchRepository.failThreadRequest("chat", "load", "Timed out")
+        assertTrue(state.value.requestingThreads.isEmpty())
+        assertTrue(threadRequests.isEmpty())
+        assertEquals("Timed out", state.value.error)
+        assertTrue(state.value.threads.containsKey("chat"))
+    }
+
+    @Test fun completedOrOlderRequestTimeoutCannotClearANewerRequestOrOverwriteItsNotice() {
+        threadRequests["chat"] = "old"
+        state.value = state.value.copy(requestingThreads = setOf("chat"))
+        WatchRepository.onThread(state.value.threads.getValue("chat"), connected = false)
+        threadRequests["chat"] = "new"
+        state.value = state.value.copy(requestingThreads = setOf("chat"), error = "Keep this")
+        WatchRepository.failThreadRequest("chat", "old", "Stale timeout", unreachable = true)
+        assertEquals(setOf("chat"), state.value.requestingThreads)
+        assertEquals("new", threadRequests["chat"])
+        assertEquals("Keep this", state.value.error)
+    }
+
+    @Test fun threadErrorClearsPendingRequestsAndTheirLaterTimeoutsAreIgnored() {
+        threadRequests["chat"] = "load"
+        threadRequests["other"] = "other-load"
+        state.value = state.value.copy(requestingThreads = setOf("chat", "other"))
+        WatchRepository.onThreadPayload(ThreadPayload(error = "Backend unavailable"))
+        WatchRepository.failThreadRequest("chat", "load", "Stale timeout")
+        assertTrue(state.value.requestingThreads.isEmpty())
+        assertTrue(threadRequests.isEmpty())
+        assertEquals("Backend unavailable", state.value.error)
+    }
+
+    @Test fun notificationRemoteInputUsesTheSameDirectSendOutbox() {
+        pending.clear()
+        state.value = state.value.copy(directBridge = true, relayEnabled = true, threads = emptyMap(),
+            conversations = listOf(WireThread(id = "summary", title = "Alex", address = "alex@example.com").toSummary()),
+            queuedSends = emptyList(), sendingThreads = emptySet())
+        val intent = Intent(context, WatchNotificationReceiver::class.java)
+            .setAction(WatchNotificationReceiver.ACTION_REPLY)
+            .putExtra(WatchNotificationReceiver.EXTRA_THREAD_ID, "summary")
+        RemoteInput.addResultsToIntent(arrayOf(RemoteInput.Builder(WatchNotificationReceiver.KEY_REPLY).build()), intent,
+            Bundle().apply { putCharSequence(WatchNotificationReceiver.KEY_REPLY, "  From notification  ") })
+        WatchNotificationReceiver().onReceive(context, intent)
+        assertEquals("From notification", state.value.queuedSends.single().text)
+        assertEquals("summary", state.value.queuedSends.single().threadId)
+        assertEquals("From notification", state.value.threads.getValue("summary").messages.single().text)
+    }
+
+    @Test fun syncAndDiscoveryDoNotRestoreUnreadBadgesForALocallyReadChat() {
+        val summary = WireThread(id = "chat", title = "Alex", unread = true,
+            messages = listOf(local.copy(id = "inbound", fromMe = false))).toSummary()
+        state.value = state.value.copy(conversations = listOf(summary))
+        WatchRepository.markReadLocally("chat")
+        WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = true, relayEnabled = false, conversations = listOf(summary)), fromCache = true)
+        assertFalse(state.value.conversations.single().unread)
+        state.value = state.value.copy(discoveryRequestId = "discover", directBridge = true)
+        WatchRepository.onGroups(GroupsResult(requestId = "discover", chats = listOf(summary)))
+        assertFalse(state.value.conversations.single().unread)
+    }
+
+    @Test fun transportFailureClearsTheLivePatchCapabilityAndPendingLoads() {
+        state.value = state.value.copy(directBridge = true, connected = true, reachable = true, requestingThreads = setOf("chat"))
+        threadRequests["chat"] = "load"
+        WatchRepository.failThreadRequest("chat", "load", "Phone unreachable", unreachable = true)
+        assertFalse(state.value.directBridge)
+        assertFalse(state.value.phoneOnline)
+        assertTrue(state.value.requestingThreads.isEmpty())
+        assertEquals("Phone unreachable", state.value.error)
+    }
+
+    @Test fun unconfirmedSendTimeoutNeverReplaysAndALateResultCanStillConfirmIt() {
+        WatchRepository.onSendDispatched("request", "chat", local.id, null)
+        WatchRepository.onSendTimedOut("request", local.id)
+        assertEquals("unconfirmed", status())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(pending.isEmpty())
+        assertTrue(state.value.error!!.contains("avoid a duplicate"))
+        confirm()
+        assertEquals("sent", status())
+        WatchRepository.onSendTimedOut("request", local.id)
+        assertEquals("sent", status())
+        assertNull(state.value.error)
+    }
+
+    @Test fun migrationDuringTransportKeepsThePendingSendOnItsCanonicalId() {
+        val oldId = "new:alex@example.com"
+        val thread = WireThread(id = oldId, title = "Alex", address = "alex@example.com", messages = listOf(local.copy(threadId = oldId)))
+        state.value = state.value.copy(threads = mapOf(oldId to thread), conversations = listOf(thread.toSummary()),
+            queuedSends = listOf(QueuedSend("request", oldId, "Hello")), sendingThreads = setOf(oldId))
+        pending["request"] = oldId
+        assertTrue(WatchRepository.prepareSendDispatch("request"))
+        WatchRepository.onThread(WireThread(id = "canonical", title = "Alex", address = thread.address), connected = false)
+        WatchRepository.onSendDispatched("request", oldId, local.id, null)
+        assertEquals("canonical", pending["request"])
+        assertEquals("sending", state.value.threads.getValue("canonical").messages.single().status)
+        assertEquals(setOf("canonical"), state.value.sendingThreads)
+        assertTrue(state.value.queuedSends.isEmpty())
+    }
+
+    @Test fun directHistoryReplacesAllOldNotificationIdsWithoutCollapsingRepeatedBackendMessages() {
+        val derived = Protocol.messageId("chat", 1000, "Alex", "Hello")
+        val old = WireThread("chat", "Alex", messages = listOf(message(derived, 1), message("$derived-1")))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        val actual = listOf(message("guid-1"), message("guid-2"))
+        WatchRepository.onThread(old.copy(messages = actual, directHistory = true), connected = false)
+        assertEquals(actual, state.value.threads.getValue("chat").messages)
+        assertTrue(state.value.threads.getValue("chat").directHistory)
+    }
+
+    @Test fun directHistoryRemovesDeletionsAndEditsItsWindowWhilePreservingOlderBackendGuids() {
+        val old = WireThread("chat", "Alex", directHistory = true, messages = listOf(
+            message("older", 1), message("m-not-a-notification-hash", 2),
+            message("edited", text = "Original"), message("deleted", 1001)))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(messages = listOf(message("edited", text = "Corrected"))), connected = false)
+        val merged = state.value.threads.getValue("chat").messages
+        assertEquals(listOf("older", "m-not-a-notification-hash", "edited"), merged.map { it.id })
+        assertEquals("Corrected", merged.last().text)
+    }
+
+    @Test fun eightyMessageSnapshotDoesNotDiscardOlderGuidHistory() {
+        val old = WireThread("chat", "Alex", directHistory = true, messages = listOf(message("older", 1)))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        val recent = List(80) { message("guid-$it", 1000L + it) }
+        WatchRepository.onThread(old.copy(messages = recent), connected = false)
+        assertEquals(listOf(message("older", 1)) + recent, state.value.threads.getValue("chat").messages)
+    }
+
+    @Test fun authoritativeCachedDeletionCanMoveLastActivityBackward() {
+        val old = WireThread("chat", "Alex", directHistory = true, updatedAt = 2000,
+            messages = listOf(message("kept"), message("deleted-latest", 2000)))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(updatedAt = 1000, messages = listOf(message("kept"))), connected = false)
+        assertEquals(listOf("kept"), state.value.threads.getValue("chat").messages.map { it.id })
+        WatchRepository.onThread(old.copy(updatedAt = 0, messages = emptyList()), connected = false)
+        assertTrue(state.value.threads.getValue("chat").messages.isEmpty())
+    }
+
+    @Test fun authoritativeEmptyHistoryRemovesRemoteMessagesButKeepsUnmatchedOptimisticSends() {
+        val queued = local.copy(status = "queued")
+        val sending = local.copy(id = "local-other", text = "Other")
+        val optimistic = local.copy(id = "auto-pending", status = "sent")
+        val old = WireThread("chat", "Alex", messages = listOf(message("real"),
+            message(Protocol.messageId("chat", 1000, "Alex", "Hello")), queued, sending, optimistic))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(messages = emptyList(), directHistory = true), connected = false)
+        assertEquals(setOf(queued.id, sending.id, optimistic.id), state.value.threads.getValue("chat").messages.map { it.id }.toSet())
+    }
+
+    @Test fun authoritativeHistoryPreservesMediaForTheSameRealIdInsideTheReplacementWindow() {
+        val photo = message("guid-photo").copy(attachment = true, mediaId = "cached-photo", mediaMime = "image/jpeg",
+            mediaWidth = 300, mediaHeight = 200, mediaSize = 1024,
+            sourceUri = "content://com.openbubbles.messaging.wear.media/photo")
+        val old = WireThread("chat", "Alex", messages = listOf(photo), directHistory = true)
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(messages = listOf(message(photo.id, text = "Updated caption"))), connected = false)
+        assertEquals(photo.copy(text = "Updated caption"), state.value.threads.getValue("chat").messages.single())
+    }
+
+    @Test fun phoneCacheAt240MessagesCannotEvictAnUnmatchedQueuedLocalSend() {
+        val queued = local.copy(timestamp = 0, status = "queued")
+        val old = WireThread("chat", "Alex", messages = listOf(queued))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(directHistory = true,
+            messages = List(240) { message("guid-$it", 1L + it) }), connected = false)
+        val merged = state.value.threads.getValue("chat").messages
+        assertEquals(220, merged.size)
+        assertEquals(queued, merged.first())
+        assertEquals("guid-239", merged.last().id)
+    }
+
+    @Test fun partialUpdatesPreserveExistingHistoryAndItsDirectMarker() {
+        val old = WireThread("chat", "Alex", directHistory = true,
+            messages = listOf(message("older", 1), message("newer", 2000)))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onThread(old.copy(messages = listOf(message("delta")), directHistory = false), connected = false)
+        val merged = state.value.threads.getValue("chat")
+        assertEquals(listOf("older", "delta", "newer"), merged.messages.map { it.id })
+        assertTrue(merged.directHistory)
+    }
+
+    @Test fun sendConfirmationIsPartialAndCannotDeleteNewerCachedBackendHistory() {
+        val other = local.copy(id = "local-other", text = "Other", status = "queued")
+        val old = WireThread("chat", "Alex", directHistory = true,
+            messages = listOf(message("older", 1), local, other, message("newer", 2000)))
+        state.value = state.value.copy(threads = mapOf("chat" to old))
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND, ok = true,
+            threadId = "chat", message = local.copy(id = "confirmed-guid")))
+        val merged = state.value.threads.getValue("chat")
+        assertEquals(setOf("older", "confirmed-guid", "local-other", "newer"), merged.messages.map { it.id }.toSet())
+        assertTrue(merged.directHistory)
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(state.value.queuedSends.isEmpty())
+    }
+
+    @Test fun canonicalAuthoritativeHistoryAlsoDiscardsNotificationIdsMigratedFromAnAlias() {
+        val old = WireThread("old", "Alex", address = "alex@example.com", messages = listOf(
+            message(Protocol.messageId("old", 1, "Alex", "Hello"), 1).copy(threadId = "old"), local.copy(status = "queued", threadId = "old")))
+        state.value = state.value.copy(threads = mapOf("old" to old), conversations = listOf(old.toSummary()))
+        WatchRepository.onThread(old.copy(id = "chat", directHistory = true, messages = listOf(message("backend"))), connected = false)
+        assertEquals(setOf("chat"), state.value.threads.keys)
+        assertEquals(setOf("backend", local.id), state.value.threads.getValue("chat").messages.map { it.id }.toSet())
+        assertTrue(state.value.threads.getValue("chat").messages.all { it.threadId == "chat" })
+    }
+
+    @Test fun correlatedThreadErrorClearsOnlyItsMatchingLoad() {
+        threadRequests["chat"] = "load"
+        threadRequests["other"] = "other-load"
+        state.value = state.value.copy(requestingThreads = setOf("chat", "other"))
+        WatchRepository.onThreadPayload(ThreadPayload(requestedThreadId = "chat", error = "Chat unavailable"))
+        assertEquals(setOf("other"), state.value.requestingThreads)
+        assertEquals(mapOf("other" to "other-load"), threadRequests)
+        assertEquals("Chat unavailable", state.value.error)
+        WatchRepository.failThreadRequest("chat", "load", "Stale timeout")
+        assertEquals("Chat unavailable", state.value.error)
+    }
+
+    @Test fun lateCorrelatedErrorCannotClearAnotherLoadOrReplaceItsNotice() {
+        threadRequests["other"] = "other-load"
+        state.value = state.value.copy(requestingThreads = setOf("other"), error = "Keep this")
+        WatchRepository.onThreadPayload(ThreadPayload(requestedThreadId = "chat", error = "Stale error"))
+        assertEquals(setOf("other"), state.value.requestingThreads)
+        assertEquals(mapOf("other" to "other-load"), threadRequests)
+        assertEquals("Keep this", state.value.error)
+    }
+
+    @Test fun correlatedCanonicalReplyClearsOriginalAndCanonicalLoadsWithoutTouchingOtherChats() {
+        val old = WireThread("original", "Alex")
+        state.value = state.value.copy(threads = emptyMap(), conversations = listOf(old.toSummary()),
+            visibleThreadId = old.id, requestingThreads = setOf(old.id, "chat", "other"))
+        threadRequests[old.id] = "original-load"
+        threadRequests["chat"] = "canonical-load"
+        threadRequests["other"] = "other-load"
+        WatchRepository.onThreadPayload(ThreadPayload(requestedThreadId = old.id,
+            thread = WireThread("chat", "Alex", directHistory = true, messages = listOf(message("guid")))))
+        assertEquals(setOf("other"), state.value.requestingThreads)
+        assertEquals(mapOf("other" to "other-load"), threadRequests)
+        assertEquals(listOf("chat"), state.value.conversations.map { it.id })
+        assertEquals("chat", state.value.visibleThreadId)
+        assertEquals("chat", WatchNavigation.openThread.value)
+        WatchRepository.failThreadRequest(old.id, "original-load", "Stale timeout")
+        assertNull(state.value.error)
+    }
+
+    @Test fun legacySuccessfulThreadReplyStillLeavesUnrelatedLoadsPending() {
+        threadRequests["chat"] = "load"
+        threadRequests["other"] = "other-load"
+        state.value = state.value.copy(requestingThreads = setOf("chat", "other"))
+        WatchRepository.onThreadPayload(ThreadPayload(thread = WireThread("chat", "Alex")))
+        assertEquals(setOf("other"), state.value.requestingThreads)
+        assertEquals(mapOf("other" to "other-load"), threadRequests)
     }
 }
