@@ -147,5 +147,4 @@ jobs:
             - `phone/` — complete patched OpenBubbles 2.0.0 ARM64 APK set (4 files, install together)
             - `OpenBubblesWear-Morphe-1.1.0.mpp` — rebuildable Morphe patch bundle
             - `SHA256SUMS.txt` — checksums for all assets
-          files: release-assets/
-        fail_on_unmatched_files: false
+          files: release-assets/**/*
