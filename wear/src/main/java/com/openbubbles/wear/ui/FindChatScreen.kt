@@ -44,11 +44,10 @@ import com.openbubbles.wear.protocol.ThreadSummary
 private const val ADDRESS_INPUT_KEY = "openbubbles_wear_new_address"
 
 @Composable
-fun NewMessageScreen(
+fun FindChatScreen(
     state: WatchState,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
-    onStartChat: (String) -> Unit,
     onOpenContacts: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
@@ -66,7 +65,7 @@ fun NewMessageScreen(
             ?.toString()
             ?.trim()
         if (!address.isNullOrEmpty()) {
-            WatchRepository.startNewChat(address)?.let(onStartChat)
+            WatchRepository.findChatByAddress(address)?.let(onOpenChat)
         }
     }
 
@@ -76,7 +75,7 @@ fun NewMessageScreen(
             .build()
         val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
         RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(input))
-        RemoteInputIntentHelper.putTitleExtra(intent, "New message")
+        RemoteInputIntentHelper.putTitleExtra(intent, "Find a chat")
         runCatching { launcher.launch(intent) }
     }
 
@@ -110,7 +109,7 @@ fun NewMessageScreen(
                         }
                         Spacer(Modifier.width(2.dp))
                         Text(
-                            text = "New message",
+                            text = "Find a chat",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -128,17 +127,10 @@ fun NewMessageScreen(
                     }
                 }
 
-                if (!state.automationAvailable) {
+                if (!state.phoneOnline) {
                     item {
                         NoticeCard(
-                            message = "Starting a brand-new chat needs the optional accessibility automation. You can still open any cached chat below and send.",
-                            isError = false
-                        )
-                    }
-                } else if (!state.phoneOnline) {
-                    item {
-                        NoticeCard(
-                            message = "Phone offline. You can write now and the message will be queued until it reconnects.",
+                            message = "Phone offline. Only chats already saved on the watch can be opened.",
                             isError = false
                         )
                     }
@@ -153,7 +145,6 @@ fun NewMessageScreen(
                 item {
                     Button(
                         onClick = { enterRecipient() },
-                        enabled = state.automationAvailable && state.relayEnabled,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(
@@ -193,7 +184,7 @@ fun NewMessageScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "Use Choose a contact or enter a number/email. Chats also appear after OpenBubbles posts a notification.",
+                                    text = "Use Choose a contact or enter a number/email to open a chat OpenBubbles has already published or notified. Brand-new chats aren't supported.",
                                     style = MaterialTheme.typography.bodyExtraSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -218,8 +209,7 @@ fun NewMessageScreen(
                         style = MaterialTheme.typography.bodyExtraSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            }
+                }            }
         }
     }
 }

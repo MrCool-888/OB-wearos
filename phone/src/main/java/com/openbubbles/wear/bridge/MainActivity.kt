@@ -178,8 +178,8 @@ private fun BridgeScreen() {
         scope.launch {
             withContext(Dispatchers.IO) { NotificationCenter.syncNow(context) }
             state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
-            setupNotice = if (granted) "Contacts allowed. On the watch open New message → Choose a contact."
-                else "Contacts were not allowed. Recent chats and manual number/email entry still work."
+            setupNotice = if (granted) "Contacts allowed. On the watch open Find a chat and choose a contact."
+                else "Contacts were not allowed. Recent chats still work."
             setupNoticeFailed = !granted
         }
     }
@@ -269,17 +269,11 @@ private fun BridgeScreen() {
                 )
             }
             item {
-                AutomationCard(
-                    state = state,
-                    onOpenAutomation = { openAutomationSettings(context) }
-                )
-            }
-            item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Chats without notifications", style = MaterialTheme.typography.titleMedium)
                         Text(PublishedChatDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
-                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. Chats that have posted a notification keep sending through its saved reply action while the phone is locked; older history waits for unlock.",
+                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. A chat can send while the phone is locked only after OpenBubbles has posted a notification for it, because that notification supplies the reply action.",
                             style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !setupBusy, onClick = {
                             runSetup { ctx ->
@@ -355,7 +349,7 @@ private fun ContactsCard(allowed: Boolean, onAllow: () -> Unit, onSettings: () -
                 else "Optional. Allow access to the phone address book used by OpenBubbles on Android.")
             Text("When you browse or search on the watch, names and phone/email addresses are copied over the Wear Data Layer. No contact photos, notes, or third-party uploads. OpenBubbles-only private contacts may not be in this address book.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Watch: New message → Choose a contact. Starting a new chat still needs accessibility automation; reading contacts does not.",
+            Text("Watch: Find a chat → Choose a contact. Only chats OpenBubbles has already published or notified can be opened; contacts without one show an explanation.",
                 style = MaterialTheme.typography.bodySmall)
             if (!allowed) Button(onClick = onAllow) { Text("Allow contact picker") }
             TextButton(onClick = onSettings) { Text("Contacts permission settings") }
@@ -517,7 +511,7 @@ private fun NotificationAccessHelpDialog(
                 Text("3. Return to Notification access and enable OpenBubbles Wear. This permission is under Special app access, not App info → Notifications.")
                 Text("Only continue if you trust this bridge: Android gives a notification listener access to all notifications, including sensitive content. The bridge only relays OpenBubbles notifications.")
                 if (state.shizukuPermission && !state.notificationAccess) {
-                    Text("Alternatively, Unblock with Shizuku approves restricted settings for this bridge only and grants its notification-listener access. It does not turn on accessibility automation or change OpenBubbles.")
+                    Text("Alternatively, Unblock with Shizuku approves restricted settings for this bridge only and grants its notification-listener access. It does not change OpenBubbles.")
                 } else if (!state.notificationAccess) {
                     Text("If the menu is missing, you can optionally start Shizuku using wireless debugging and grant access in the phone bridge's Shizuku card, then return here.")
                 }
@@ -591,7 +585,7 @@ private fun ShizukuCard(
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                "Shizuku can grant this bridge notification access and accessibility, and exempt it from battery optimization without you hunting through settings. It runs commands as the shell user, never as root, and never modifies OpenBubbles.",
+                "Shizuku can grant this bridge notification access and exempt it from battery optimization without you hunting through settings. It runs commands as the shell user, never as root, and never modifies OpenBubbles.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -679,12 +673,6 @@ private fun ShizukuCard(
                     )
                     Spacer(Modifier.height(8.dp))
                     StatusRow(
-                        ok = state.automationEnabled,
-                        title = "Accessibility automation",
-                        detail = state.automationStatus
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    StatusRow(
                         ok = state.batteryUnrestricted,
                         title = "Background access",
                         detail = if (state.batteryUnrestricted) {
@@ -696,7 +684,6 @@ private fun ShizukuCard(
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (!state.notificationAccess ||
-                            !state.automationEnabled ||
                             !state.batteryUnrestricted
                         ) {
                             Button(onClick = onRunSetup, enabled = !busy) {
@@ -725,80 +712,6 @@ private fun ShizukuCard(
     }
 }
 
-
-@Composable
-private fun AutomationCard(
-    state: BridgeUiState,
-    onOpenAutomation: () -> Unit
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Send without a notification",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "Optional accessibility service",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Icon(
-                    imageVector = if (state.automationEnabled) {
-                        Icons.Filled.CheckCircle
-                    } else {
-                        Icons.Filled.Settings
-                    },
-                    contentDescription = null,
-                    tint = if (state.automationEnabled) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                if (state.automationEnabled) {
-                    state.automationStatus
-                } else {
-                    "Turn this on to start chats, send in chats that aren't notifying, and load older messages. Replies to live notifications work without it."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.automationEnabled) {
-                    TextButton(onClick = onOpenAutomation) {
-                        Text("Automation settings")
-                    }
-                } else {
-                    Button(onClick = onOpenAutomation) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Enable automation")
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "It only operates OpenBubbles' own screens. Messages are still sent and encrypted by OpenBubbles, and no account data is copied.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
 
 @Composable
 private fun RelayCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
@@ -864,7 +777,7 @@ private fun SyncCard(
             )
             InfoRow(
                 "Lock",
-                if (state.phoneLocked) "Locked — history and quiet sends wait" else "Unlocked"
+                if (state.phoneLocked) "Locked (replies still send)" else "Unlocked"
             )
             if (state.lastWatchName.isNotBlank()) {
                 InfoRow("Watch name", state.lastWatchName)
@@ -878,14 +791,6 @@ private fun SyncCard(
                     state.listenerConnected -> "Connected"
                     state.notificationAccess -> "Reconnecting…"
                     else -> "Notification access off"
-                }
-            )
-            InfoRow(
-                "Accessibility service",
-                when {
-                    state.automationAvailable -> "Connected"
-                    state.automationEnabled -> "Enabled; not connected"
-                    else -> "Off"
                 }
             )
             InfoRow(
@@ -972,10 +877,9 @@ private fun LimitationsCard() {
             }
             Spacer(Modifier.height(8.dp))
             Bullet("Conversations appear after OpenBubbles posts a notification for them.")
-            Bullet("With automation on, the watch can also start chats and open a chat whose notification is gone.")
             Bullet("Muted chats and hidden alerts may not appear until you send or receive in them.")
             Bullet("Photos and GIFs are copied into bridge storage from notifications, then sent to the watch when you tap them. Hide text previews in OpenBubbles prevents images from reaching the bridge.")
-            Bullet("Replies, automation sends and mark-read all go through OpenBubbles, so your normal account and encryption are preserved.")
+            Bullet("Replies and mark-read go through OpenBubbles' own notification actions, so your normal account and encryption are preserved. The phone can stay locked; the chat must have notified at least once so the bridge has a reply action.")
         }
     }
 }
@@ -1073,12 +977,6 @@ private fun Bullet(text: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-private fun openAutomationSettings(context: Context) {
-    runCatching {
-        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 }
 

@@ -13,8 +13,6 @@ import com.openbubbles.wear.protocol.BridgeError
 import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.ContactsRequest
 import com.openbubbles.wear.protocol.WatchContact
-import com.openbubbles.wear.protocol.HistoryPayload
-import com.openbubbles.wear.protocol.HistoryRequest
 import com.openbubbles.wear.protocol.MarkReadRequest
 import com.openbubbles.wear.protocol.MediaPayload
 import com.openbubbles.wear.protocol.MediaRequest
@@ -54,9 +52,6 @@ data class QueuedSend(
     val requestId: String,
     val threadId: String,
     val text: String,
-    val address: String? = null,
-    val title: String? = null,
-    val useReply: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val attempts: Int = 0,
     /** Time before which an automatic retry should not be attempted. */
@@ -85,8 +80,7 @@ data class WatchState(
     val protocolVersion: Int = 0,
     val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
-    val automationAvailable: Boolean = false,
-    /** Android is showing a secure keyguard; UI history and quiet sends wait. */
+    /** Android is showing a secure keyguard; shown for information only. */
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
     val connected: Boolean = false,
@@ -97,10 +91,6 @@ data class WatchState(
     val syncing: Boolean = false,
     val requestingThreads: Set<String> = emptySet(),
     val sendingThreads: Set<String> = emptySet(),
-    val loadingHistory: Set<String> = emptySet(),
-    val historyRequests: Map<String, String> = emptyMap(),
-    val historyWindows: Map<String, List<WireMessage>> = emptyMap(),
-    val historyExhausted: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
     val alertsEnabled: Boolean = true,
@@ -140,7 +130,6 @@ object WatchRepository {
     private const val KEY_PROTOCOL_VERSION = "protocol_version"
     private const val KEY_NOTIFICATION_ACCESS = "notification_access"
     private const val KEY_RELAY_ENABLED = "relay_enabled"
-    private const val KEY_AUTOMATION_AVAILABLE = "automation_available"
     private const val KEY_LAST_SYNC = "last_sync"
     private const val KEY_PHONE_GENERATED = "phone_generated"
     private const val KEY_READ_AT = "read_at:"
@@ -155,6 +144,7 @@ object WatchRepository {
     private const val KEY_CONTACTS_NEXT = "contacts_next"
     private const val LOCAL_PREFIX = "local-"
     private const val AUTO_PREFIX = "auto-"
+    /** Legacy local ID for a chat started on an older watch build. */
     private const val NEW_THREAD_PREFIX = "new:"
     private const val MEDIA_DIR = "watch_media"
     private const val MAX_MESSAGES = 220
@@ -165,12 +155,8 @@ object WatchRepository {
     private const val LOCAL_MATCH_WINDOW_MS = 5 * 60_000L
     private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
     private const val MAX_REPLY_LENGTH = 800
-    private const val HISTORY_PAGE_SIZE = 60
     private const val MAX_QUEUE = 100
     private const val QUEUE_DISPATCH_TIMEOUT_MS = 20_000L
-    private const val LOCKED_RETRY_DELAY_MS = 30_000L
-    private const val LOCKED_SEND_INFO =
-        "Phone locked. The message is queued and will retry automatically."
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(WatchState())
@@ -216,7 +202,6 @@ object WatchRepository {
             protocolVersion = prefs.getInt(KEY_PROTOCOL_VERSION, 0),
             notificationAccess = prefs.getBoolean(KEY_NOTIFICATION_ACCESS, false),
             relayEnabled = prefs.getBoolean(KEY_RELAY_ENABLED, true),
-            automationAvailable = prefs.getBoolean(KEY_AUTOMATION_AVAILABLE, false),
             lastSyncAt = prefs.getLong(KEY_LAST_SYNC, 0L),
             phoneGeneratedAt = prefs.getLong(KEY_PHONE_GENERATED, 0L),
             quickReplies = quickReplies,
@@ -294,8 +279,9 @@ object WatchRepository {
                 participants = summary.participants
             )
         }
-        // A chat started from an address gets a real shortcut-based ID once
-        // OpenBubbles posts its first notification. Drop the temporary copy.
+        // A chat started from an address on an older watch build gets a real
+        // shortcut-based ID once OpenBubbles posts its first notification.
+        // Drop the temporary copy.
         val realIdsByAddress = summaries
             .filterNot { it.id.startsWith(NEW_THREAD_PREFIX) }
             .mapNotNull { summary ->
@@ -322,14 +308,8 @@ object WatchRepository {
                 protocolVersion = payload.version,
                 notificationAccess = payload.notificationAccess,
                 relayEnabled = payload.relayEnabled,
-                automationAvailable = payload.automationAvailable,
                 phoneLocked = payload.phoneLocked,
                 phoneAwake = payload.phoneAwake,
-                queuedSends = if (unlocked) {
-                    current.queuedSends.map { queued -> queued.copy(nextAttemptAt = 0L) }
-                } else {
-                    current.queuedSends
-                },
                 contactsAccess = payload.contactsAccess ?: current.contactsAccess,
                 contacts = if (payload.contactsAccess == false) emptyList() else current.contacts,
                 contactsNextOffset = if (payload.contactsAccess == false) null else current.contactsNextOffset,
@@ -342,9 +322,9 @@ object WatchRepository {
                 error = null,
                 info = when {
                     !current.phoneLocked && payload.phoneLocked ->
-                        "Phone locked. Saved chats and notification replies keep sending; older history waits for unlock."
+                        "Phone locked. Replies still send through OpenBubbles."
 
-                    unlocked -> "Phone unlocked. Sending queued messages."
+                    unlocked -> "Phone unlocked."
                     else -> current.info
                 }
             )
@@ -460,7 +440,7 @@ object WatchRepository {
     @Synchronized
     fun onActionResult(result: ActionResult) {
         if (!initialized) return
-        if (!result.retryable) removeQueuedSend(result.requestId)
+        removeQueuedSend(result.requestId)
         val preview = result.threadId
         when (result.action) {
             Protocol.ACTION_REPLY -> {
@@ -469,28 +449,16 @@ object WatchRepository {
                 updateLocalMessage(
                     threadId = preview,
                     messageId = localId,
-                    status = when {
-                        result.ok -> "sent"
-                        result.retryable -> "queued"
-                        else -> "failed"
-                    }
+                    status = if (result.ok) "sent" else "failed"
                 )
                 _state.update {
-                    it.copy(sendingThreads = it.sendingThreads - preview.orEmpty())
+                    it.copy(
+                        sendingThreads = it.sendingThreads - preview.orEmpty(),
+                        error = if (result.ok) null
+                        else result.error ?: "The reply was not sent."
+                    )
                 }
-                if (result.retryable) {
-                    requeueRetry(result, preview)
-                    _state.update {
-                        it.copy(phoneLocked = true, error = null,
-                            info = result.error ?: LOCKED_SEND_INFO)
-                    }
-                } else if (!result.ok) {
-                    _state.update {
-                        it.copy(error = result.error ?: "The reply was not sent.")
-                    }
-                } else {
-                    markReadLocally(preview)
-                }
+                if (result.ok) markReadLocally(preview)
             }
 
             Protocol.ACTION_SEND -> {
@@ -504,32 +472,15 @@ object WatchRepository {
                 updateLocalMessage(
                     threadId = target,
                     messageId = localId,
-                    status = when {
-                        result.ok -> "sent"
-                        result.retryable -> "queued"
-                        else -> "failed"
-                    }
+                    status = if (result.ok) "sent" else "failed"
                 )
-                if (result.retryable) {
-                    requeueRetry(result, target)
-                    _state.update {
-                        it.copy(
-                            sendingThreads = it.sendingThreads - target.orEmpty() -
-                                preview.orEmpty(),
-                            phoneLocked = true,
-                            error = null,
-                            info = result.error ?: LOCKED_SEND_INFO
-                        )
-                    }
-                } else {
-                    _state.update {
-                        it.copy(
-                            sendingThreads = it.sendingThreads - target.orEmpty() -
-                                preview.orEmpty(),
-                            error = if (result.ok) null
-                            else result.error ?: "The message was not sent."
-                        )
-                    }
+                _state.update {
+                    it.copy(
+                        sendingThreads = it.sendingThreads - target.orEmpty() -
+                            preview.orEmpty(),
+                        error = if (result.ok) null
+                        else result.error ?: "The message was not sent."
+                    )
                 }
                 if (result.ok && target != null) {
                     markReadLocally(target)
@@ -576,20 +527,14 @@ object WatchRepository {
                 bridgeVersion = pong.bridgeVersion,
                 notificationAccess = pong.notificationAccess,
                 relayEnabled = pong.relayEnabled,
-                automationAvailable = pong.automationAvailable,
                 phoneLocked = pong.phoneLocked,
                 phoneAwake = pong.phoneAwake,
-                queuedSends = if (unlocked) {
-                    current.queuedSends.map { queued -> queued.copy(nextAttemptAt = 0L) }
-                } else {
-                    current.queuedSends
-                },
                 contactsAccess = pong.contactsAccess ?: current.contactsAccess,
                 contacts = if (pong.contactsAccess == false) emptyList() else current.contacts,
                 contactsNextOffset = if (pong.contactsAccess == false) null else current.contactsNextOffset,
                 contactsRequestId = if (pong.contactsAccess == false) null else current.contactsRequestId,
                 quickReplies = pong.quickReplies.ifEmpty { Protocol.DEFAULT_QUICK_REPLIES },
-                info = if (unlocked) "Phone unlocked. Sending queued messages." else current.info
+                info = if (unlocked) "Phone unlocked." else current.info
             )
         }
         persist()
@@ -768,17 +713,14 @@ object WatchRepository {
         val thread = state.threads[threadId]
         val summary = state.conversations.firstOrNull { it.id == threadId }
         val canReply = (thread?.canReply ?: summary?.canReply) == true
-        val canAutomate = (thread?.canSend ?: summary?.canSend) == true
-        if (!canReply && !canAutomate) {
+        if (!canReply) {
             _state.update {
                 it.copy(
-                    error = "This chat can't send right now. Enable automation in the bridge app or open the chat in OpenBubbles."
+                    error = "This chat has no OpenBubbles reply action yet. Open it in OpenBubbles on the phone, then try again."
                 )
             }
             return false
         }
-        val title = thread?.title ?: summary?.title
-        val address = thread?.address ?: summary?.address
 
         val now = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
@@ -825,9 +767,6 @@ object WatchRepository {
                 requestId = requestId,
                 threadId = threadId,
                 text = text,
-                address = address,
-                title = title,
-                useReply = canReply,
                 createdAt = now,
                 nextAttemptAt = 0L
             )
@@ -935,11 +874,7 @@ object WatchRepository {
                     val thread = state.threads[item.threadId]
                     val summary = state.conversations.firstOrNull { it.id == item.threadId }
                     val canReply = thread?.canReply == true || summary?.canReply == true
-                    val canSend = thread?.canSend == true || summary?.canSend == true
-                    val canAddressDirectly =
-                        (item.address != null || thread?.address != null) &&
-                            state.automationAvailable
-                    if (!canReply && !canSend && !canAddressDirectly) {
+                    if (!canReply) {
                         pendingSends.remove(item.requestId)
                         lastError =
                             "A queued message is waiting for its chat to become available on the phone."
@@ -949,8 +884,6 @@ object WatchRepository {
                         SendRequest(
                             requestId = item.requestId,
                             threadId = item.threadId,
-                            address = item.address ?: thread?.address ?: summary?.address,
-                            title = item.title ?: thread?.title ?: summary?.title,
                             text = item.text
                         )
                     )
@@ -1016,51 +949,11 @@ object WatchRepository {
     }
 
     /**
-     * A retryable phone result (currently only a secure lock) performed no
-     * side effect. Put the message back in the durable outbox with a backoff so
-     * automatic syncs do not hammer the phone before it is unlocked.
+     * Finds an existing cached or published chat by phone number or email.
+     * Brand-new chats are not supported without OpenBubbles notification
+     * actions, so an unknown address is reported instead of created.
      */
-    private fun requeueRetry(result: ActionResult, threadId: String?) {
-        if (threadId == null) return
-        val now = System.currentTimeMillis()
-        val queued = _state.value.queuedSends.firstOrNull { it.requestId == result.requestId }
-        if (queued != null) {
-            _state.update { state ->
-                state.copy(queuedSends = state.queuedSends.map { item ->
-                    if (item.requestId != result.requestId) item else item.copy(
-                        attempts = item.attempts + 1,
-                        nextAttemptAt = now + LOCKED_RETRY_DELAY_MS
-                    )
-                })
-            }
-            return
-        }
-        val state = _state.value
-        val thread = state.threads[threadId] ?: return
-        val summary = state.conversations.firstOrNull { it.id == threadId }
-        val local = thread.messages.firstOrNull { it.id == LOCAL_PREFIX + result.requestId }
-            ?: return
-        enqueueSend(
-            QueuedSend(
-                requestId = result.requestId,
-                threadId = threadId,
-                text = local.text,
-                address = thread.address ?: summary?.address,
-                title = thread.title ?: summary?.title,
-                useReply = false,
-                createdAt = local.timestamp,
-                attempts = 1,
-                nextAttemptAt = now + LOCKED_RETRY_DELAY_MS
-            )
-        )
-    }
-
-    /**
-     * Adds a temporary conversation for a brand-new address. The phone uses the
-     * same "new:<address>" ID so the optimistic watch thread and the automation
-     * result refer to one conversation.
-     */
-    fun startNewChat(address: String, title: String? = null): String? {
+    fun findChatByAddress(address: String): String? {
         if (!initialized) return null
         val normalized = Protocol.normalizeAddress(address)
         if (normalized == null) {
@@ -1069,197 +962,23 @@ object WatchRepository {
             }
             return null
         }
-        val existing = _state.value.threads.values.firstOrNull { thread ->
-            !thread.isGroup && Protocol.normalizeAddress(thread.address) == normalized
+        val thread = _state.value.threads.values.firstOrNull { candidate ->
+            !candidate.isGroup && Protocol.normalizeAddress(candidate.address) == normalized
         }
-        if (existing != null) return existing.id
-        val existingSummary = _state.value.conversations.firstOrNull { summary ->
-            !summary.isGroup && Protocol.normalizeAddress(summary.address) == normalized
+        val summary = _state.value.conversations.firstOrNull { candidate ->
+            !candidate.isGroup && Protocol.normalizeAddress(candidate.address) == normalized
         }
-        if (existingSummary != null) return existingSummary.id
-        if (!_state.value.automationAvailable) {
+        val id = thread?.id ?: summary?.id
+        if (id == null) {
             _state.update {
                 it.copy(
-                    error = "Enable accessibility automation in the bridge app to start a brand-new chat."
+                    error = "No saved chat with this contact yet. Send or receive a message in OpenBubbles, then open it on the phone to refresh it."
                 )
             }
             return null
         }
-        val threadId = Protocol.newThreadId(normalized)
-        val displayTitle = title?.trim()?.takeIf { it.isNotBlank() } ?: normalized
-        val thread = WireThread(
-            id = threadId,
-            title = displayTitle,
-            address = normalized,
-            canSend = true,
-            updatedAt = System.currentTimeMillis()
-        )
-        _state.update {
-            it.copy(
-                error = null,
-                info = "New chat with $displayTitle",
-                threads = capThreads(it.threads + (threadId to thread)),
-                conversations = (
-                    it.conversations.filterNot { summary -> summary.id == threadId } +
-                        thread.toSummary()
-                    ).sortedByDescending { summary -> summary.lastTimestamp }
-            )
-        }
-        persist()
-        return threadId
-    }
-
-    /**
-     * Requests one page of older messages. Returns true only when the request
-     * was handed to the Data Layer, so callers can safely retry after a guard
-     * such as a secure lock clears.
-     */
-    @Synchronized
-    fun loadOlder(threadId: String): Boolean {
-        if (!initialized) return false
-        val state = _state.value
-        if (threadId in state.loadingHistory) return false
-        if (!state.phoneOnline) {
-            _state.update { it.copy(error = "Connect the phone to load history. Saved messages are still available.") }
-            return false
-        }
-        if (!state.relayEnabled) {
-            _state.update { it.copy(error = "Relay is paused on the phone.") }
-            return false
-        }
-        if (!state.automationAvailable) {
-            _state.update {
-                it.copy(error = "Older messages need accessibility automation. Enable it in the bridge app on the phone.")
-            }
-            return false
-        }
-        if (state.phoneLocked) {
-            _state.update {
-                it.copy(
-                    error = "Phone locked. Unlock it to load older messages. Saved messages still work.",
-                    info = null
-                )
-            }
-            return false
-        }
-        val context = appContext ?: return false
-        val thread = state.threads[threadId]
-        val summary = state.conversations.firstOrNull { it.id == threadId }
-        val requestId = UUID.randomUUID().toString()
-        _state.update {
-            it.copy(
-                loadingHistory = it.loadingHistory + threadId,
-                historyRequests = it.historyRequests + (threadId to requestId),
-                error = null,
-                info = null
-            )
-        }
-        PhoneLink.send(
-            context,
-            Protocol.PATH_HISTORY,
-            Wire.encodeBytes(
-                HistoryRequest(
-                    requestId = requestId,
-                    threadId = threadId,
-                    title = thread?.title ?: summary?.title,
-                    address = thread?.address ?: summary?.address,
-                    limit = HISTORY_PAGE_SIZE,
-                    isGroup = thread?.isGroup ?: summary?.isGroup ?: false,
-                    anchorMessages = (state.historyWindows[threadId] ?: thread?.messages.orEmpty())
-                        .filterNot { it.id.startsWith(LOCAL_PREFIX) }.sortedBy { it.timestamp }.take(12)
-                )
-            )
-        ) { sent ->
-            if (!sent) {
-                onHistoryFailure(threadId, requestId, "Phone isn't reachable. Could not load older messages.", unreachable = true)
-            }
-        }
-        scope.launch {
-            delay(125_000L)
-            onHistoryFailure(threadId, requestId, "The phone took too long to load older messages.")
-        }
-        return true
-    }
-
-    internal fun onHistoryFailure(threadId: String, requestId: String, message: String, unreachable: Boolean = false) {
-        _state.update { if (it.historyRequests[threadId] != requestId) it else it.copy(
-            loadingHistory = it.loadingHistory - threadId, historyRequests = it.historyRequests - threadId,
-            connected = if (unreachable) false else it.connected,
-            reachable = if (unreachable) false else it.reachable, error = message) }
-    }
-
-    @Synchronized
-    fun onHistory(payload: HistoryPayload) {
-        if (!initialized) return
-        val threadId = payload.threadId
-        val state = _state.value
-        if (state.historyRequests[threadId] != payload.requestId) return
-        val current = state.threads[threadId]
-            ?: state.conversations.firstOrNull { it.id == threadId }?.let { summary ->
-                WireThread(
-                    id = summary.id,
-                    title = summary.title,
-                    isGroup = summary.isGroup,
-                    participants = summary.participants,
-                    address = summary.address,
-                    canSend = summary.canSend
-                )
-            }
-        if (payload.error != null) {
-            _state.update {
-                it.copy(
-                    loadingHistory = it.loadingHistory - threadId,
-                    historyRequests = it.historyRequests - threadId,
-                    // A retryable failure means the phone was locked when the
-                    // request arrived. Reflect that so the UI and the
-                    // automatic history request can retry after unlock.
-                    phoneLocked = it.phoneLocked || payload.retryable,
-                    error = payload.error
-                )
-            }
-            return
-        }
-        if (current == null || payload.messages.isEmpty()) {
-            _state.update {
-                it.copy(
-                    loadingHistory = it.loadingHistory - threadId,
-                    historyRequests = it.historyRequests - threadId,
-                    historyExhausted = if (payload.hasMore) it.historyExhausted - threadId
-                    else it.historyExhausted + threadId,
-                    info = "No older messages were found."
-                )
-            }
-            return
-        }
-        val mergedById = LinkedHashMap<String, WireMessage>()
-        ((state.historyWindows[threadId] ?: current.messages) + payload.messages.filter { it.threadId == threadId }).forEach { message ->
-            val previous = mergedById[message.id]
-            mergedById[message.id] = previous?.let(message::mergeMediaFrom) ?: message
-        }
-        val mergedMessages = mergedById.values
-            .sortedBy { it.timestamp }
-            .take(MAX_MESSAGES)
-        // Keep a durable newest cache as well as the separate older viewing window.
-        replaceThread(mergeThread(current.copy(messages = payload.messages.filter { it.threadId == threadId })))
-        _state.update {
-            it.copy(
-                loadingHistory = it.loadingHistory - threadId,
-                historyRequests = it.historyRequests - threadId,
-                historyWindows = (it.historyWindows + (threadId to mergedMessages)).entries.toList().takeLast(40).associate { entry -> entry.toPair() },
-                historyExhausted = if (payload.hasMore) it.historyExhausted - threadId
-                else it.historyExhausted + threadId,
-                info = null
-            )
-        }
-        persist()
-    }
-
-    @Synchronized
-    fun showLatest(threadId: String) {
-        _state.update { it.copy(historyWindows = it.historyWindows - threadId,
-            loadingHistory = it.loadingHistory - threadId, historyRequests = it.historyRequests - threadId,
-            historyExhausted = it.historyExhausted - threadId) }
-        requestThread(threadId)
+        _state.update { it.copy(error = null, info = null) }
+        return id
     }
 
     @Synchronized
@@ -1839,9 +1558,6 @@ object WatchRepository {
                             requestId = requestId,
                             threadId = threadId,
                             text = item.optString("text"),
-                            address = item.optString("address").takeIf { it.isNotBlank() },
-                            title = item.optString("title").takeIf { it.isNotBlank() },
-                            useReply = item.optBoolean("useReply", false),
                             createdAt = item.optLong("createdAt", 0L),
                             attempts = item.optInt("attempts", 0),
                             nextAttemptAt = item.optLong("nextAttemptAt", 0L)
@@ -1860,9 +1576,6 @@ object WatchRepository {
                     put("requestId", item.requestId)
                     put("threadId", item.threadId)
                     put("text", item.text)
-                    put("address", item.address.orEmpty())
-                    put("title", item.title.orEmpty())
-                    put("useReply", item.useReply)
                     put("createdAt", item.createdAt)
                     put("attempts", item.attempts)
                     put("nextAttemptAt", item.nextAttemptAt)
@@ -1942,7 +1655,6 @@ object WatchRepository {
             .putInt(KEY_PROTOCOL_VERSION, state.protocolVersion)
             .putBoolean(KEY_NOTIFICATION_ACCESS, state.notificationAccess)
             .putBoolean(KEY_RELAY_ENABLED, state.relayEnabled)
-            .putBoolean(KEY_AUTOMATION_AVAILABLE, state.automationAvailable)
             .putLong(KEY_LAST_SYNC, state.lastSyncAt)
             .putLong(KEY_PHONE_GENERATED, state.phoneGeneratedAt)
             .putBoolean(KEY_ALERTS_ENABLED, state.alertsEnabled)

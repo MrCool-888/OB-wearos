@@ -78,11 +78,6 @@ class WearListenerService : WearableListenerService() {
                     }
                 }
 
-                Protocol.PATH_HISTORY_RESULT -> {
-                    Wire.decodeBytes<com.openbubbles.wear.protocol.HistoryPayload>(data)
-                        ?.let { WatchRepository.onHistory(it) }
-                }
-
                 Protocol.PATH_MEDIA_RESULT -> {
                     Wire.decodeBytes<com.openbubbles.wear.protocol.MediaPayload>(data)
                         ?.let { WatchRepository.onMediaResult(it) }
@@ -101,7 +96,7 @@ class WearListenerService : WearableListenerService() {
                 Protocol.PATH_PING, Protocol.PATH_SYNC_REQUEST,
                 Protocol.PATH_THREAD_REQUEST, Protocol.PATH_REPLY,
                 Protocol.PATH_MARK_READ, Protocol.PATH_OPEN_PHONE,
-                Protocol.PATH_SEND, Protocol.PATH_HISTORY,
+                Protocol.PATH_SEND,
                 Protocol.PATH_MEDIA_REQUEST -> Unit
 
                 else -> Log.d(TAG, "Ignoring unknown path $path")

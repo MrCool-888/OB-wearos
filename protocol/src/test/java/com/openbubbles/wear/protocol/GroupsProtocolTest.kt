@@ -3,7 +3,7 @@ package com.openbubbles.wear.protocol
 import org.junit.Assert.*
 import org.junit.Test
 
-class GroupsHistoryProtocolTest {
+class GroupsProtocolTest {
     @Test fun groupGuidValidationDoesNotInferGroupsFromNames() {
         assertTrue(Protocol.isGroupGuid("iMessage;+;chat123"))
         assertTrue(Protocol.isGroupGuid("SMS;+;1234"))
@@ -19,13 +19,9 @@ class GroupsHistoryProtocolTest {
         val result = GroupsResult(requestId = "r", groups = listOf(WireThread(id = "iMessage;+;chat1", title = "Family", isGroup = true).toSummary()), note = "Partial")
         assertEquals(result, Wire.decodeBytes<GroupsResult>(Wire.encodeBytes(result)))
     }
-    @Test fun historyWindowAnchorRoundTripsAndOldRequestsRemainCompatible() {
-        val request = HistoryRequest(requestId = "r", threadId = "iMessage;+;chat1", isGroup = true,
-            anchorMessages = listOf(WireMessage(id = "m", threadId = "iMessage;+;chat1", text = "Anchor", timestamp = 1000)))
-        assertEquals(request, Wire.decodeBytes<HistoryRequest>(Wire.encodeBytes(request)))
-        val legacy = Wire.decode<HistoryRequest>("{\"requestId\":\"old\",\"threadId\":\"chat\"}")!!
-        assertNull(legacy.anchorMessages)
-        val empty = request.copy(anchorMessages = emptyList())
-        assertEquals(empty, Wire.decodeBytes<HistoryRequest>(Wire.encodeBytes(empty)))
+    @Test fun sendRequestRequiresThreadAndRoundTrips() {
+        val request = SendRequest(requestId = "r", threadId = "iMessage;+;chat1", text = "Hi")
+        assertEquals(request, Wire.decodeBytes<SendRequest>(Wire.encodeBytes(request)))
+        assertNull(Wire.decode<SendRequest>("{\"requestId\":\"old\",\"text\":\"Hi\"}"))
     }
 }

@@ -12,8 +12,6 @@ data class BridgeUiState(
     val openBubblesInstalled: Boolean = false,
     val openBubblesVersion: String = "",
     val openBubblesPackage: String = "",
-    val automationAvailable: Boolean = false,
-    val automationEnabled: Boolean = false,
     val contactsAccess: Boolean = false,
     val legacyBridgeInstalled: Boolean = false,
     val relayEnabled: Boolean = true,
@@ -32,13 +30,7 @@ data class BridgeUiState(
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
     val bridgeVersion: String = BridgeInfo.BRIDGE_VERSION
-) {
-    val automationStatus: String get() = when {
-        automationAvailable -> "On. Service connected; new chats and older history are available."
-        automationEnabled -> "On in Android settings; service not connected yet. If this persists, switch it off and on once under Accessibility → Installed apps."
-        else -> "Off. Replies to live notifications still work."
-    }
-}
+)
 
 fun readBridgeUiState(context: Context): BridgeUiState {
     NotificationCenter.init(context)
@@ -48,8 +40,6 @@ fun readBridgeUiState(context: Context): BridgeUiState {
         openBubblesInstalled = BridgeInfo.isOpenBubblesInstalled(context),
         openBubblesVersion = BridgeInfo.openBubblesVersion(context),
         openBubblesPackage = BridgeInfo.openBubblesPackage(context).orEmpty(),
-        automationAvailable = BridgeInfo.isAutomationReady(context),
-        automationEnabled = BridgeInfo.hasAutomationAccess(context),
         contactsAccess = ContactDirectory.hasAccess(context),
         legacyBridgeInstalled = runCatching {
             context.packageManager.getPackageInfo("com.openbubbles.wear.bridge", 0)

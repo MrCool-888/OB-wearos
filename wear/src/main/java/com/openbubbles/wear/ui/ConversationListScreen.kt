@@ -45,7 +45,7 @@ fun ConversationListScreen(
     state: WatchState,
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onNewMessage: () -> Unit,
+    onFindChat: () -> Unit,
     onSync: () -> Unit,
     onOpenPhone: () -> Unit,
     onDismissNotice: () -> Unit
@@ -141,11 +141,10 @@ fun ConversationListScreen(
 
                 item {
                     Button(
-                        onClick = onNewMessage,
-                        enabled = state.relayEnabled,
+                        onClick = onFindChat,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("New message")
+                        Text("Find a chat")
                     }
                 }
 
@@ -231,10 +230,10 @@ private fun PhoneStatusCard(
             "New messages stay on the phone until relay is resumed."
 
         state.phoneLocked && state.queuedCount > 0 ->
-            "Replies send through OpenBubbles. ${state.queuedCount} ${if (state.queuedCount == 1) "message is" else "messages are"} retrying; older history waits for unlock."
+            "Replies send through OpenBubbles. ${state.queuedCount} ${if (state.queuedCount == 1) "message is" else "messages are"} waiting for the phone."
 
         state.phoneLocked ->
-            "Replies send through OpenBubbles while locked. Older history waits for unlock."
+            "Replies send through OpenBubbles without unlocking."
 
         unreadCount > 0 ->
             "$unreadCount unread ${if (unreadCount == 1) "chat" else "chats"} · Tap to refresh"
@@ -354,7 +353,7 @@ private fun ConversationCard(
                     )
                     if (!summary.notificationActive) {
                         Text(
-                            text = "History",
+                            text = "Saved",
                             style = MaterialTheme.typography.labelSmall,
                             color = scheme.tertiary
                         )

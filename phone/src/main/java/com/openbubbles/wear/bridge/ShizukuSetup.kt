@@ -1,6 +1,5 @@
 package com.openbubbles.wear.bridge
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.ParcelFileDescriptor
@@ -14,7 +13,7 @@ import rikka.shizuku.Shizuku
  * Nothing here is required: every step has a manual equivalent in Android
  * settings. Shizuku runs shell commands through the `shell` user, never root,
  * and OpenBubbles itself is untouched. Setup commands grant the bridge's own
- * notification-listener/accessibility components and battery exemption. Optional
+ * notification-listener component and battery exemption. Optional
  * group discovery separately reads OpenBubbles' published Android shortcuts.
  */
 object ShizukuSetup {
@@ -56,9 +55,6 @@ object ShizukuSetup {
     fun notificationAccessGranted(context: Context): Boolean =
         BridgeInfo.hasNotificationAccess(context)
 
-    fun automationGranted(context: Context): Boolean =
-        BridgeInfo.hasAutomationAccess(context)
-
     fun batteryUnrestricted(context: Context): Boolean = runCatching {
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         power.isIgnoringBatteryOptimizations(context.packageName)
@@ -85,39 +81,6 @@ object ShizukuSetup {
         )
     }
 
-    fun enableAutomation(context: Context): StepResult {
-        if (!hasPermission()) return notGranted()
-        if (automationGranted(context)) {
-            return StepResult(true, "Automation is already on.")
-        }
-        val target = ComponentName(
-            context,
-            OpenBubblesAutomationService::class.java
-        )
-        val component = target.flattenToString()
-        val current = readSecure("enabled_accessibility_services")
-            ?: return StepResult(false, "Shizuku could not read accessibility settings.")
-        val parts = current.split(':')
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toMutableList()
-        if (parts.none { PermissionComponents.matches(it, target) }) {
-            parts += component
-            val written = writeSecure(
-                "enabled_accessibility_services",
-                parts.joinToString(":")
-            )
-            if (!written.ok) {
-                return StepResult(false, written.output.ifBlank { "Could not update accessibility settings." })
-            }
-        }
-        val enabled = writeSecure("accessibility_enabled", "1")
-        if (!enabled.ok) {
-            return StepResult(false, enabled.output.ifBlank { "Could not enable the accessibility service." })
-        }
-        return StepResult(true, "Automation requested. Android may take a moment to bind the service.")
-    }
-
     fun keepAlive(context: Context): StepResult {
         if (!hasPermission()) return notGranted()
         if (batteryUnrestricted(context)) {
@@ -142,7 +105,6 @@ object ShizukuSetup {
         if (!hasPermission()) return notGranted()
         val steps = listOf(
             enableNotificationAccess(context),
-            enableAutomation(context),
             keepAlive(context)
         )
         val failed = steps.firstOrNull { !it.ok }
@@ -152,20 +114,6 @@ object ShizukuSetup {
             StepResult(true, "Setup requested. Check the status cards below; if a permission stays off, enable it in Android settings.")
         }
     }
-
-    fun readSecure(name: String): String? {
-        val result = shell("settings --user $userId get secure $name")
-        if (!result.ok) return null
-        return result.output
-            .lineSequence()
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            ?.takeUnless { it == "null" }
-            ?: ""
-    }
-
-    private fun writeSecure(name: String, value: String): ShellResult =
-        shell("settings --user $userId put secure $name ${shellQuote(value)}")
 
     private val userId: Int get() = android.os.Process.myUid() / 100_000
 

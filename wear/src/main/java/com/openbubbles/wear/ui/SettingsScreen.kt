@@ -147,10 +147,6 @@ fun SettingsScreen(
                             if (state.relayEnabled) "On" else "Paused"
                         )
                         InfoRow(
-                            "Automation",
-                            if (state.automationAvailable) "On" else "Off"
-                        )
-                        InfoRow(
                             "Last sync",
                             if (state.lastSyncAt > 0L) relativeTime(state.lastSyncAt) else "Never"
                         )
@@ -312,7 +308,8 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         AboutLine("Chats appear once OpenBubbles posts a notification for them.")
-                        AboutLine("Enable automation on the phone to start new chats, send in quiet chats and load older messages.")
+                        AboutLine("Replies use OpenBubbles' notification action, so they send even while the phone is locked. A chat needs to have notified at least once.")
+                        AboutLine("New chats can't be started from the watch; only chats OpenBubbles has already published or notified can be opened.")
                         AboutLine("Muted chats and hidden alerts may be missing until you use them.")
                         AboutLine("Photos and GIFs are copied to the watch when you open them. OpenBubbles' Hide text previews setting can prevent attachments from reaching the bridge.")
                         AboutLine("Everything is sent by OpenBubbles on the phone, so your account and encryption stay there.")

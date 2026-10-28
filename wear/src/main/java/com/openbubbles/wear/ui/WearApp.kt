@@ -27,14 +27,14 @@ import com.openbubbles.wear.WatchNotifications
 import com.openbubbles.wear.WatchRepository
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "1.7.0"
+const val WATCH_APP_VERSION = "2.0.0"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
     data class Chat(val threadId: String) : WearScreen
     data class Composer(val threadId: String) : WearScreen
     data class Media(val threadId: String, val mediaId: String) : WearScreen
-    data object NewMessage : WearScreen
+    data object FindChat : WearScreen
     data object Contacts : WearScreen
     data object Settings : WearScreen
 }
@@ -148,7 +148,7 @@ fun WearApp() {
                 state = state,
                 onOpenThread = { threadId -> push(WearScreen.Chat(threadId)) },
                 onOpenSettings = { push(WearScreen.Settings) },
-                onNewMessage = { push(WearScreen.NewMessage) },
+                onFindChat = { push(WearScreen.FindChat) },
                 onSync = { WatchRepository.sync(context) },
                 onOpenPhone = { WatchRepository.openOnPhone(null) },
                 onDismissNotice = { WatchRepository.clearNotices() }
@@ -160,7 +160,6 @@ fun WearApp() {
                 onBack = { pop() },
                 onReply = { push(WearScreen.Composer(screen.threadId)) },
                 onOpenPhone = { WatchRepository.openOnPhone(screen.threadId) },
-                onLoadOlder = { WatchRepository.loadOlder(screen.threadId) },
                 onOpenMedia = { mediaId ->
                     push(WearScreen.Media(screen.threadId, mediaId))
                 },
@@ -174,17 +173,16 @@ fun WearApp() {
                 onBack = { pop() }
             )
 
-            WearScreen.NewMessage -> NewMessageScreen(
+            WearScreen.FindChat -> FindChatScreen(
                 state = state,
                 onBack = { pop() },
                 onOpenChat = { threadId -> push(WearScreen.Chat(threadId)) },
-                onStartChat = { threadId -> push(WearScreen.Chat(threadId)) },
                 onOpenContacts = { push(WearScreen.Contacts) },
                 onDismissNotice = { WatchRepository.clearNotices() }
             )
 
             WearScreen.Contacts -> ContactPickerScreen(state = state, onBack = { pop() },
-                onStartChat = { threadId -> push(WearScreen.Chat(threadId)) })
+                onOpenChat = { threadId -> push(WearScreen.Chat(threadId)) })
 
             is WearScreen.Composer -> ComposerScreen(
                 state = state,
