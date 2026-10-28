@@ -277,17 +277,18 @@ private fun BridgeScreen() {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Groups without notifications", style = MaterialTheme.typography.titleMedium)
-                        Text(GroupShortcutDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
-                        Text("Open OpenBubbles first so it can publish recent named chats. Start Shizuku and grant bridge access above, then import. Reading messages still needs accessibility and an unlocked phone.",
+                        Text("Chats without notifications", style = MaterialTheme.typography.titleMedium)
+                        Text(PublishedChatDiscovery.NOTE, style = MaterialTheme.typography.bodySmall)
+                        Text("Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. Saved chats and notification replies work while the phone is locked; older history and quiet-chat sends wait for unlock.",
                             style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !setupBusy, onClick = {
                             runSetup { ctx ->
-                                val result = NotificationCenter.discoverGroups(ctx, java.util.UUID.randomUUID().toString())
+                                val result = NotificationCenter.discoverChats(ctx, java.util.UUID.randomUUID().toString())
+                                val found = result.groups.size + result.chats.size
                                 ShizukuSetup.StepResult(result.error == null, result.error
-                                    ?: "Imported ${result.groups.size} published groups. Sync the watch. ${result.note.orEmpty()}")
+                                    ?: "Imported $found ${if (found == 1) "chat" else "chats"} (${result.groups.size} ${if (result.groups.size == 1) "group" else "groups"}). Sync the watch. ${result.note.orEmpty()}")
                             }
-                        }) { Text("Find published groups with Shizuku") }
+                        }) { Text("Find chats with Shizuku") }
                     }
                 }
             }
@@ -857,6 +858,14 @@ private fun SyncCard(
                 }
             )
             InfoRow("Last sync", formatRelativeTime(state.lastPublishAt))
+            InfoRow(
+                "Phone screen",
+                if (state.phoneAwake) "Awake" else "Asleep"
+            )
+            InfoRow(
+                "Lock",
+                if (state.phoneLocked) "Locked — history and quiet sends wait" else "Unlocked"
+            )
             if (state.lastWatchName.isNotBlank()) {
                 InfoRow("Watch name", state.lastWatchName)
             }

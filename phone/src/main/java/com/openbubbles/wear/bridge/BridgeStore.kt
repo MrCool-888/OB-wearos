@@ -2,6 +2,7 @@ package com.openbubbles.wear.bridge
 
 import android.content.Context
 import android.util.Log
+import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.Wire
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
@@ -16,6 +17,10 @@ class BridgeStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val lock = Any()
     private var threads: LinkedHashMap<String, WireThread> = load()
+
+    init {
+        synchronized(lock) { trim() }
+    }
 
     fun snapshot(): List<WireThread> = synchronized(lock) {
         threads.values.sortedByDescending { it.lastActivity() }
@@ -90,11 +95,56 @@ class BridgeStore(context: Context) {
         persist()
     }
 
-    fun importPublishedGroup(group: WireThread): WireThread = synchronized(lock) {
-        require(group.isGroup && com.openbubbles.wear.protocol.Protocol.isGroupGuid(group.id))
-        val existing = threads[group.id]
-        val updated = (existing ?: group).copy(title = group.title, isGroup = true, address = null,
-            updatedAt = maxOf(existing?.updatedAt ?: 0L, System.currentTimeMillis()))
+    /**
+     * Adds a conversation found through OpenBubbles' published shortcuts or
+     * notification channels. Existing cached messages, unread state and
+     * previews are preserved; a newly discovered chat starts as an empty
+     * history placeholder so it cannot displace a real recent conversation.
+     */
+    fun importPublishedChat(chat: WireThread): WireThread = synchronized(lock) {
+        require(Protocol.isChatGuid(chat.id))
+        val group = chat.isGroup || Protocol.isGroupGuid(chat.id)
+        val normalizedAddress = if (group) null else Protocol.normalizeAddress(chat.address)
+        val existing = threads[chat.id]
+        // A chat started from the watch before its first notification uses a
+        // "new:<address>" ID. Fold that temporary thread into the published
+        // direct GUID instead of showing both.
+        val legacy = if (!group && existing == null && normalizedAddress != null) {
+            threads.values.firstOrNull { candidate ->
+                candidate.id != chat.id &&
+                    !Protocol.isChatGuid(candidate.id) &&
+                    Protocol.normalizeAddress(candidate.address)
+                        ?.equals(normalizedAddress, ignoreCase = true) == true
+            }
+        } else {
+            null
+        }
+        val base = existing ?: legacy
+        val updated = if (base == null) {
+            chat.copy(
+                title = chat.title.trim().take(160).ifBlank { chat.address ?: "Conversation" },
+                isGroup = group,
+                address = normalizedAddress,
+                participants = emptyList(),
+                messages = emptyList(),
+                unread = false,
+                notificationActive = false,
+                canReply = false,
+                canMarkRead = false,
+                canSend = false,
+                updatedAt = 0L
+            )
+        } else {
+            base.copy(
+                id = chat.id,
+                title = chat.title.trim().take(160).ifBlank { base.title }
+                    .ifBlank { normalizedAddress ?: "Conversation" },
+                isGroup = base.isGroup || group,
+                address = if (base.isGroup || group) null else base.address ?: normalizedAddress
+            )
+        }
+        if (legacy != null && legacy.id != updated.id) threads.remove(legacy.id)
+        threads.remove(updated.id)
         threads[updated.id] = updated
         trim()
         persist()
@@ -147,9 +197,21 @@ class BridgeStore(context: Context) {
     }
 
     private fun trim() {
-        while (threads.size > MAX_THREADS) {
-            val oldest = threads.values.minByOrNull { it.lastActivity() } ?: break
+        // Keep real conversations and discovery placeholders in separate
+        // budgets. Importing a large channel list must never evict a chat that
+        // has actual message history.
+        var messageThreads = threads.values.filterNot { it.isPlaceholder() }
+        while (messageThreads.size > MAX_THREADS) {
+            val oldest = messageThreads.minByOrNull { it.lastActivity() } ?: break
             threads.remove(oldest.id)
+            messageThreads = messageThreads.filterNot { it.id == oldest.id }
+        }
+        var placeholders = threads.values.filter { it.isPlaceholder() }
+        while (placeholders.size > MAX_PLACEHOLDERS) {
+            // Placeholders have no timestamp. Remove the earliest imported one.
+            val oldest = placeholders.firstOrNull() ?: break
+            threads.remove(oldest.id)
+            placeholders = placeholders.drop(1)
         }
         threads.values.forEach { thread ->
             if (thread.messages.size > MAX_MESSAGES) {
@@ -158,13 +220,15 @@ class BridgeStore(context: Context) {
         }
     }
 
+    private fun WireThread.isPlaceholder(): Boolean =
+        messages.isEmpty() && !notificationActive
+
     private fun load(): LinkedHashMap<String, WireThread> {
         val raw = prefs.getString(KEY_THREADS, null) ?: return linkedMapOf()
         val decoded = Wire.decode<List<WireThread>>(raw) ?: return linkedMapOf()
         val map = LinkedHashMap<String, WireThread>()
         decoded
             .sortedByDescending { it.lastActivity() }
-            .take(MAX_THREADS)
             .forEach { map[it.id] = it }
         return map
     }
@@ -172,7 +236,6 @@ class BridgeStore(context: Context) {
     private fun persist() {
         val list = threads.values
             .sortedByDescending { it.lastActivity() }
-            .take(MAX_THREADS)
         runCatching {
             prefs.edit().putString(KEY_THREADS, Wire.encode(list)).apply()
         }.onFailure {
@@ -186,7 +249,10 @@ class BridgeStore(context: Context) {
         private const val KEY_THREADS = "threads"
         const val AUTO_MESSAGE_PREFIX = "auto-"
         private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
+        /** Conversations with message history or a live notification. */
         const val MAX_THREADS = 40
+        /** Discovery-only chats with no cached messages yet. */
+        const val MAX_PLACEHOLDERS = 60
         const val MAX_MESSAGES = 240
     }
 }

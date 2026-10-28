@@ -64,7 +64,9 @@ object ActionDedupe {
     fun claim(context: Context, requestId: String, action: String, threadId: String?): Claim {
         init(context)
         if (requestId in inFlight) return Claim(false)
-        get(context, requestId)?.let { return Claim(false, it) }
+        // A retryable result (for example, the phone was locked) performed no
+        // side effect, so the same request may run again after unlock.
+        get(context, requestId)?.let { if (!it.retryable) return Claim(false, it) }
         // If the process dies after sending but before saving its result, we
         // cannot tell whether OpenBubbles sent it. Never repeat that side effect.
         val uncertain = ActionResult(

@@ -29,6 +29,8 @@ data class BridgeUiState(
     val lastPublishAt: Long = 0L,
     val phoneName: String = "",
     val lastWatchName: String = "",
+    val phoneLocked: Boolean = false,
+    val phoneAwake: Boolean = true,
     val bridgeVersion: String = BridgeInfo.BRIDGE_VERSION
 ) {
     val automationStatus: String get() = when {
@@ -65,6 +67,8 @@ fun readBridgeUiState(context: Context): BridgeUiState {
         lastPublishAt = NotificationCenter.lastPublishAt(context),
         phoneName = BridgeInfo.phoneName(),
         lastWatchName = preferences.lastSeenWatchName,
+        phoneLocked = BridgeInfo.isPhoneLocked(context),
+        phoneAwake = BridgeInfo.isPhoneAwake(context),
         bridgeVersion = BridgeInfo.BRIDGE_VERSION
     )
 }

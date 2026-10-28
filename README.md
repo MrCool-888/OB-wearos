@@ -45,15 +45,19 @@ setup, or message transport.
 - **Contact picker**: browse/search the phone address book used by OpenBubbles on Android; choose
   a saved number or email instead of typing it. Contacts permission is optional and granted on the phone.
 - **Group chats**: an explicit Groups view plus a group section in New message. Existing group
-  identities and notification sender labels are preserved. Optional Shizuku discovery imports
-  published Android group shortcuts without needing a notification (partial list only).
+  identities and notification sender labels are preserved. Optional Shizuku discovery imports chats
+  from OpenBubbles' published Android shortcuts **and notification channels** without needing a
+  notification (partial list only).
 - **Send in quiet chats**: send even after the notification has been dismissed, through
   OpenBubbles' composer.
 - **History on open**: with automation ready and the phone online/unlocked, opening a contact or
   group automatically requests readable older text, including when the watch cache is empty.
   Load more with **Load older messages**; use **Latest messages** to leave the older viewing window.
+- **Locked-phone behavior**: cached chats, live notification replies, new incoming messages, and
+  Android-published chat discovery keep working while the phone is securely locked. Older history
+  and quiet-chat sends wait for unlock; sends typed on the watch are saved and retried automatically.
 - **Reply when live**: replies to active notifications use OpenBubbles' own reply action, so they
-  work even when automation is off.
+  work even when automation is off or the phone is locked.
 - Mark as read and open on phone, using OpenBubbles' notification actions and saved content
   intents.
 - Optimistic send bubbles (`Sending…` / `Not sent`) that resolve when the phone confirms.
@@ -78,24 +82,25 @@ setup, or message transport.
   for new chats, sending without a live notification, and loading older messages.
 
 No root access, custom OpenBubbles build, or OpenBubbles-side changes are required. Shizuku is
-optional for setup and required only for discovering groups through published Android shortcuts.
+optional for setup and required only for discovering chats through OpenBubbles' published Android
+shortcuts and notification channels.
 
 ## Install
 
-Download the APKs from the [1.5.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.5.0).
+Download the APKs from the [1.6.0 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/1.6.0).
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-1.5.0.apk`
-- `dist/OpenBubblesWear-Watch-1.5.0.apk`
+- `dist/OpenBubblesWear-Phone-1.6.0.apk`
+- `dist/OpenBubblesWear-Watch-1.6.0.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.5.0.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.5.0.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-1.6.0.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-1.6.0.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -212,8 +217,8 @@ validated on hardware; the project does not claim Android 17 / One UI 9 device v
 3. If it still says **Phone offline**, tap **Sync now** and confirm the watch is paired in the
    Wear OS phone app. Opening the phone bridge app also helps re-establish the connection.
 4. Conversations appear after OpenBubbles posts a notification for them. Use **New message** to
-   choose a contact/address, or **Groups → Find groups (Shizuku)** to import published groups
-   without waiting for a notification.
+   choose a contact/address, or **Find chats (Shizuku)** to import chats from OpenBubbles'
+   published Android shortcuts and notification channels without waiting for a notification.
 5. In watch Settings, allow notifications for the companion's extra alerts. If these duplicate
    mirrored OpenBubbles alerts, turn **Extra alerts** off.
 6. Add **OpenBubbles Wear** from the watch's tile picker or as an unread complication in a compatible
@@ -223,23 +228,24 @@ validated on hardware; the project does not claim Android 17 / One UI 9 device v
 
 Send a message to the phone from another device, or open an existing chat in OpenBubbles. As soon
 as OpenBubbles posts or updates a chat notification, the conversation appears on the watch. Old
-chats that have never produced a notification on this phone cannot be discovered by the
-notification path, but with automation on you can start a new chat by address or search for an
-existing one by title when loading history.
+chats that have never produced a notification or Android shortcut/channel on this phone cannot be
+discovered by the bridge, but with automation on you can start a new chat by address or search for
+an existing one by title when loading history.
 
 ### Pick a contact or group on the watch
 
-1. Install both 1.5.0 APKs and optionally allow Contacts in the phone bridge.
+1. Install both 1.6.0 APKs and optionally allow Contacts in the phone bridge.
 2. On the watch, open **New message → Choose a contact**. Browse or **Search contacts** by name,
    phone number, or email; **Load more contacts** fetches the next page. If someone has multiple
    numbers/emails, choose one explicitly. Selecting a contact opens its chat/history screen—it
    does not send. Tap **Send message** or **Reply** when you want to compose.
 3. Starting a brand-new chat still requires connected accessibility automation and an unlocked
-   phone. Existing notification replies work without automation. No root or OpenBubbles changes.
-4. Use **Groups** on the Messages screen or **Group chats** in New message to open an existing group.
-   For groups without notifications: open OpenBubbles on the phone first, start Shizuku via wireless
-   debugging, grant the bridge Shizuku access, then tap **Find groups (Shizuku)** on the watch or
-   **Find published groups with Shizuku** in the phone bridge. Sync after importing on the phone.
+   phone. Existing notification replies work without automation and while the phone is locked. No
+   root or OpenBubbles changes.
+4. Use **Groups** on the Messages screen or **Published chats** in New message to open an existing
+   group. For chats without notifications: open OpenBubbles on the phone first, start Shizuku via
+   wireless debugging, grant the bridge Shizuku access, then tap **Find chats (Shizuku)** on the
+   watch or **Find chats with Shizuku** in the phone bridge. Sync after importing on the phone.
    Selecting a group reopens its stable chat ID, not a new recipient list.
 5. With accessibility connected and the phone online/unlocked, opening a chat automatically loads
    readable history. **Load older messages** requests the next older page. **Latest messages**
@@ -247,10 +253,11 @@ existing one by title when loading history.
 
 The address book is not a directory of registered Apple/iMessage accounts, and OpenBubbles-only
 private/imported contacts may be absent. The last browsed contacts page/search is cached for offline
-use; it is not a complete offline phone-book mirror. Search/paging needs the phone. Shortcut discovery
-is a partial group list: the inspected OpenBubbles source publishes up to four recent named chats
-at startup, and those can include direct chats. Unpublished groups still need a notification or a
-future supported integration; the bridge does not enumerate OpenBubbles' private storage.
+use; it is not a complete offline phone-book mirror. Search/paging needs the phone. Shortcut/channel
+discovery is a partial chat list: the inspected OpenBubbles source publishes up to four recent named
+chats as shortcuts at startup and creates one Android notification channel per chat. Unpublished
+groups still need a notification or a future supported integration; the bridge does not enumerate
+OpenBubbles' private storage.
 
 ## Using the watch app
 
@@ -280,11 +287,16 @@ future supported integration; the bridge does not enumerate OpenBubbles' private
 ## Important limitations
 
 - **Notifications are the main source.** A chat is visible after OpenBubbles posts a notification
-  for it. Muted chats, suppressed notifications, and chats that never notify may be missing until
-  you choose a contact/address or discover a published group shortcut through Shizuku.
-- **Group discovery is partial.** Shizuku reads only OpenBubbles' published Android shortcuts for
-  the current Android user, not its private database. It may expose no groups or only a few recent
-  named groups. Android/OEM restrictions can prevent the query. Notification discovery still works.
+  for it. Muted chats and chats that never notified may be missing until you choose a
+  contact/address or run Shizuku discovery, which also reads Android notification channels.
+- **Chat discovery is partial.** Shizuku reads OpenBubbles' published Android shortcuts and
+  notification channels for the current Android user, not its private database. It may expose no
+  chats or only chats that have appeared to Android before. Android/OEM restrictions can prevent the
+  query. Notification discovery still works, and Shizuku is optional.
+- **Secure lock limits UI automation.** A locked phone cannot be unlocked by the bridge. Cached
+  chats, live notification replies, incoming syncs, and published chat discovery keep working.
+  Older history and quiet-chat sends require unlock; quiet-chat messages are saved in the watch
+  outbox and retried automatically after the phone reports it is unlocked.
 - **History is best effort.** The bridge sees only the messages OpenBubbles includes in the
   notification, plus the bubbles automation can scroll into view. Full message history is not
   guaranteed. Empty-cache chats can load readable text, but inaccessible UI text produces an error,
@@ -340,8 +352,9 @@ OpenBubbles account and chat UI.
   screen only while a watch-requested send or history job is running, and it types the message you
   asked to send. It does not read OpenBubbles' database, credentials, or encryption keys.
 - Shizuku setup changes only this bridge's notification/accessibility grants and battery exemption.
-  User-requested group discovery additionally reads OpenBubbles' Android-published shortcut IDs and
-  titles for the current user. It does not access private files and rejects root-mode Shizuku.
+  User-requested chat discovery additionally reads OpenBubbles' Android-published shortcut IDs and
+  titles plus its notification channels for the current user. It does not access private files,
+  notification-history databases, or root, and rejects root-mode Shizuku.
 - Messages stay on the phone and watch. Nothing is sent to a third-party server by this project.
 - Optional Contacts permission reads only names and phone/email addresses for watch-requested
   browsing/search. No contact photos, notes, account credentials, or third-party upload. Cached
@@ -415,7 +428,7 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 1.5.0 and watch app 1.5.0, using protocol version 3. Update
+The current release is phone bridge 1.6.0 and watch app 1.6.0, using protocol version 3. Update
 both APKs together for request deduplication and the latest features. A 1.2.0 watch paired with a 1.1.0
 phone falls back to text-only chats (media requests fail with a clear message), but a 1.0.0 watch
 cannot use the newer actions.
@@ -437,3 +450,5 @@ cannot use the newer actions.
   action flow.
 - [Testing](docs/TESTING.md) — fake notifications, adb commands, automation checks, debug builds,
   and known emulator behavior.
+- [1.6.0 release notes](docs/RELEASE-1.6.0.md) — discovery without notifications and locked-phone
+  behavior.

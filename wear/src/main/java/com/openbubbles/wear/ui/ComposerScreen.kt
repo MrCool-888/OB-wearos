@@ -176,6 +176,17 @@ fun ComposerScreen(
                             isError = false
                         )
                     }
+                } else if (state.phoneLocked) {
+                    item {
+                        NoticeCard(
+                            message = if (canReply) {
+                                "Phone locked. Notification replies still work; older history waits for unlock."
+                            } else {
+                                "Phone locked. Your message is saved on the watch and sends after you unlock the phone."
+                            },
+                            isError = false
+                        )
+                    }
                 }
 
                 val quickReplies = state.quickReplies.ifEmpty {

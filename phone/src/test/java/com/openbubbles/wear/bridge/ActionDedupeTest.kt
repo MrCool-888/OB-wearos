@@ -45,6 +45,23 @@ class ActionDedupeTest {
         assertEquals(ActionDedupe.Claim(false, result), claim("one"))
     }
 
+    @Test fun retryableLockedResultCanRunAgainAfterUnlock() {
+        assertTrue(claim("one").started)
+        val locked = ActionResult(
+            requestId = "one",
+            action = Protocol.ACTION_SEND,
+            ok = false,
+            threadId = "chat",
+            error = "Phone locked",
+            retryable = true
+        )
+        assertTrue(ActionDedupe.put(context, locked))
+        ActionDedupe.end("one")
+        val retry = claim("one")
+        assertTrue(retry.started)
+        assertNull(retry.result)
+    }
+
     @Test fun interruptedRequestIsNotSentAgainAfterRestart() {
         assertTrue(claim("one").started)
         // Simulate losing the in-memory in-flight set but keeping the journal.

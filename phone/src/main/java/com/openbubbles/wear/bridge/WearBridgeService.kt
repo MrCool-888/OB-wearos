@@ -60,7 +60,7 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
                 Protocol.PATH_GROUPS_REQUEST -> {
                     val request = Wire.decodeBytes<com.openbubbles.wear.protocol.GroupsRequest>(data) ?: return
-                    val result = NotificationCenter.discoverGroups(applicationContext, request.requestId)
+                    val result = NotificationCenter.discoverChats(applicationContext, request.requestId)
                     WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT, Wire.encodeBytes(result))
                 }
             }
@@ -195,6 +195,7 @@ class WearBridgeService : WearableListenerService() {
                         ok = result.error == null,
                         threadId = result.threadId ?: request.threadId,
                         error = result.error,
+                        retryable = result.retryable,
                         message = result.message
                     )
                 )
@@ -241,7 +242,8 @@ class WearBridgeService : WearableListenerService() {
                         threadId = result.threadId,
                         messages = result.messages,
                         hasMore = result.hasMore,
-                        error = result.error
+                        error = result.error,
+                        retryable = result.retryable
                     )
                 )
             )

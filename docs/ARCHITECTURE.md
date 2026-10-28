@@ -232,8 +232,11 @@ of timing out first.
 
 #### Opening a conversation
 
-1. Reject locked-phone automation. Send a saved notification content `PendingIntent`, when
-   available, and wait for a composer with an exact title in the header.
+1. Reject automation while Android reports a secure keyguard (`KeyguardManager.isDeviceLocked`).
+   A swipe-only keyguard is not treated as secure, and a short wake lock turns on an
+   unlocked-but-asleep screen. Lock credentials are never read or bypassed. Send a saved
+   notification content `PendingIntent`, when available, and wait for a composer with an exact
+   title in the header.
 2. For a recognized stable GUID, open the package-manager-provided exported launcher activity with
    OpenBubbles' `chatGuid` and `android.intent.extra.shortcut.ID` extras. A group GUID that cannot
    be opened fails without falling back to a similarly named group.
@@ -283,23 +286,34 @@ validation is required.
 - It only runs when the watch requests a send or history job (including history on chat open).
 - It uses the exported launcher/notification intents and does not call non-exported components.
 - It does not use root or Shizuku.
+- A secure lock cannot be bypassed. While locked, the bridge rejects UI automation with a retryable
+  result; live notification replies remain available.
 
 ### Optional assisted setup and diagnostics
 
-`ShizukuSetup` uses Shizuku's shell process API for user-requested setup and published-group discovery. Notification access
-is granted through `cmd notification allow_listener`, not by editing Android's legacy settings
-mirror. Accessibility updates preserve the existing colon-separated list and target the bridge's
-Android user. Battery exemption uses `cmd deviceidle whitelist` with a `dumpsys` fallback. Commands
-are bounded by a ten-second shell timeout and 1 MB output limit; root-mode Shizuku is rejected. Setup steps have manual
-Android Settings equivalents and OpenBubbles itself is never modified.
+`ShizukuSetup` uses Shizuku's shell process API for user-requested setup and chat discovery.
+Notification access is granted through `cmd notification allow_listener`, not by editing Android's
+legacy settings mirror. Accessibility updates preserve the existing colon-separated list and target
+the bridge's Android user. Battery exemption uses `cmd deviceidle whitelist` with a `dumpsys`
+fallback. Commands are bounded by a ten-second shell timeout and 1 MB output limit; root-mode
+Shizuku is rejected. Setup steps have manual Android Settings equivalents and OpenBubbles itself is
+never modified.
 
-`GroupShortcutDiscovery` queries `cmd shortcut get-shortcuts --user USER --flags 19 'PACKAGE'`
-only for the installed OpenBubbles package and bridge's current Android user. Flags select dynamic,
-pinned and cached shortcuts. A bounded parser accepts enabled `iMessage;+;…`, `SMS;+;…`, or
-`RCS;+;…` GUIDs with a non-redacted title and matching owner. Direct, disabled, foreign and
-malformed entries are discarded. Importing a group preserves cached messages/unread/participants.
-The reference OpenBubbles source publishes up to four recent named chats at startup, not every
-group. Shortcut availability and command support need real-device validation.
+`PublishedChatDiscovery` reads two public Android surfaces for the installed OpenBubbles package and
+the bridge's current Android user:
+
+- `cmd shortcut get-shortcuts --user USER --flags 19 'PACKAGE'`: dynamic, pinned, and cached
+  shortcuts. A bounded parser accepts enabled `iMessage`, `SMS`, or `RCS` chat GUIDs with a
+  non-redacted title and matching owner. Disabled, foreign, and malformed entries are discarded.
+- `dumpsys notification --noredact --package 'PACKAGE'`: OpenBubbles creates one notification
+  channel per chat (`com.bluebubbles.new_messages.<GUID>`), named for the chat. Deleted/redacted
+  channels and non-chat channels are discarded; the `Notify Anyways: ` prefix is removed.
+
+Group status comes only from `;+;` GUIDs, never from a title. Neither surface is a complete chat
+directory and neither reads notification-history databases or private storage. Imports preserve
+existing cached messages, unread state, participants, and send ability. Newly discovered chats are
+stored as empty placeholders so they cannot evict a conversation with real history. Discovery runs
+automatically at most every ten minutes off the main thread and is also available manually.
 
 The **Notification access blocked?** recovery dialog explains Android's sideload restrictions and
 links separately to this package's App info and the exact listener's special-access page. Its
@@ -330,7 +344,9 @@ contacts, notification text, or other apps' enabled-service entries.
 `ActionDedupe` atomically claims request IDs and commits a journal entry before calling OpenBubbles.
 Completed results are persisted and replayed instead of repeating a send. A crash between the side
 effect and saving its result leaves an uncertain failure marker: a replay must not blindly send it
-again. The journal retains 200 IDs; it is duplicate protection, not an exactly-once delivery promise.
+again. A result marked `retryable` did no side effect (for example, the phone was securely locked), so
+a replay may run again after unlock. The journal retains 200 IDs; it is duplicate protection, not an
+exactly-once delivery promise.
 
 ## Watch side
 
@@ -354,11 +370,12 @@ or the contact response; explicit false clears the cache, while older metadata w
 does not pretend to revoke permission. Offline copies remain until a revocation signal arrives.
 
 The watch's new-message picker includes **Choose a contact**, recent direct chats even when no
-address was exposed, and **Group chats**. Group browsing filters the same cached summaries rather
+address was exposed, and **Published chats**. Group browsing filters the same cached summaries rather
 than fabricating one-to-one recipients. Group notification shortcut IDs and sender labels survive
-parsing/sync and are used for replies. Since 1.5, groups may also be discovered from Android-published
-shortcuts through optional Shizuku access without a notification. This is only a partial list;
-the integration does not enumerate OpenBubbles' private group database or create new groups.
+parsing/sync and are used for replies. Since 1.6, groups and direct chats may also be discovered from
+Android-published shortcuts and notification channels through optional Shizuku access without a
+notification. This is only a partial list; the integration does not enumerate OpenBubbles' private
+chat database, notification-history database, or create new groups.
 
 `WearListenerService` receives live messages and data-item changes. It forwards them to
 `WatchRepository`, which owns all watch state and persistence.
@@ -369,16 +386,19 @@ the integration does not enumerate OpenBubbles' private group database or create
 
 - Conversation summaries for the list.
 - Full threads that the user has opened or that arrived live.
-- Phone/bridge metadata, notification access, relay state, automation availability.
+- Phone/bridge metadata, notification access, relay state, automation availability, secure-lock and
+  screen-awake state.
 - Connectivity (`connected`, `reachable`), sync timestamps, quick replies.
 - In-flight send/history/media requests and per-thread history exhaustion state.
 - Cached media metadata (file path, MIME type, dimensions, size) keyed by media ID.
 - A persisted outbox, alert preference, notification permission, and the currently visible thread.
 - Transient UI notices (`error`, `info`).
 
-The watch cache persists up to 40 threads and 220 messages per thread. It is designed for offline
-reading, not as an authoritative history. Media is persisted separately: the watch keeps the most
-recent 60 files / 40 MB in `filesDir/watch_media` and records their metadata in SharedPreferences.
+The watch cache persists up to 40 threads with messages and up to 220 messages per thread. It is
+designed for offline reading, not as an authoritative history. The phone store keeps 240 messages
+per real conversation and separately budgets up to 40 message-bearing conversations and 60
+discovery placeholders. Media is persisted separately: the watch keeps the most recent 60 files /
+40 MB in `filesDir/watch_media` and records their metadata in SharedPreferences.
 
 ### Sync and thread aliasing
 
@@ -392,6 +412,9 @@ recent 60 files / 40 MB in `filesDir/watch_media` and records their metadata in 
 - When a real thread arrives with the same normalized address as a temporary `new:<address>`
   thread, the watch merges their messages into the real ID and removes the temporary entry. Sync
   summaries do the same cleanup without needing the full thread.
+- A send rejected with `retryable=true` (secure lock) stays in the durable outbox with a 30-second
+  backoff. Reconnect/pong/sync resets that backoff when the phone becomes unlocked. Live notification
+  replies are still attempted while locked because they do not use UI automation.
 
 ### Addresses and new chats
 
@@ -445,10 +468,12 @@ RANGED_VALUE, with a tap intent into the newest unread chat. Counts represent un
 
 ### History loading
 
-Chat open automatically requests history once when phone/relay/automation become ready. Selecting
-a contact/manual recipient opens Chat, not Composer. `loadOlder` sends `/history` with the thread
-ID, title, address, group flag, a limit of 60, and up to 12 oldest visible messages as an anchor.
-Null anchors preserve old-watch behavior; empty anchors explicitly allow initial loading.
+Chat open automatically requests history once when phone/relay/automation become ready and the phone
+is not securely locked. The auto request is retried when a lock clears; a manual request still
+explains the lock. Selecting a contact/manual recipient opens Chat, not Composer. `loadOlder` sends
+`/history` with the thread ID, title, address, group flag, a limit of 60, and up to 12 oldest visible
+messages as an anchor. Null anchors preserve old-watch behavior; empty anchors explicitly allow
+initial loading.
 
 Results/failures/125-second timeouts are correlated by thread and request ID. Late callbacks cannot
 clear a newer request. A separate memory-only `historyWindows` map retains the oldest 220 messages
@@ -514,14 +539,16 @@ JSON produced by kotlinx.serialization with unknown keys ignored.
 | `/media_result` | phone → watch | Whether the media data item was published, or an error. |
 | `/contacts_request` | watch → phone | Request a name/address-filtered page from the permitted Android address book. |
 | `/contacts_result` | phone → watch | Correlated contact page, address choices, continuation, permission status, or error. |
-| `/groups_request` | watch → phone | Explicit request to find OpenBubbles-published group shortcuts using Shizuku. |
-| `/groups_result` | phone → watch | Correlated partial group list, note, or error. |
+| `/groups_request` | watch → phone | Explicit request to find OpenBubbles-published shortcuts/channels using Shizuku. |
+| `/groups_result` | phone → watch | Correlated partial groups plus direct chats, note, or error. |
 
-`SyncPayload` and `PongPayload` carry `automationAvailable`. `ThreadSummary` carries `address`,
-`canSend`, and the existing reply/mark-read flags. `SendRequest` carries an optional `threadId`,
-`address`, `title`, and `text`. `HistoryRequest` carries `threadId`, optional `title`/`address`, and
-a `limit`. `WireMessage` carries optional `mediaId`, `mediaMime`, `mediaWidth`, `mediaHeight`, and
-`mediaSize`. `MediaRequest` carries the media ID; `MediaPayload` echoes it with the transfer result.
+`SyncPayload` and `PongPayload` carry `automationAvailable`, `phoneLocked`, and `phoneAwake`.
+`ThreadSummary` carries `address`, `canSend`, and the existing reply/mark-read flags. `SendRequest`
+carries an optional `threadId`, `address`, `title`, and `text`. `HistoryRequest` carries `threadId`,
+optional `title`/`address`, and a `limit`. `HistoryPayload` and `ActionResult` carry an optional
+`retryable` flag so a lock failure can rerun after unlock. `WireMessage` carries optional `mediaId`,
+`mediaMime`, `mediaWidth`, `mediaHeight`, and `mediaSize`. `MediaRequest` carries the media ID;
+`MediaPayload` echoes it with the transfer result.
 
 Durable Data API paths:
 
@@ -547,8 +574,10 @@ provider for chat history. Notifications, accessible UI, and Android-published c
 shortcuts provide integration surfaces without modifying or repackaging the official app.
 
 Non-root Shizuku cannot read OpenBubbles' private database or invoke its non-exported components.
-It can query Android-published shortcuts for partial group discovery; it cannot supply complete
-history or a complete private group list. This project intentionally avoids root, a custom
+It can query Android-published shortcuts and notification channels for partial group/direct chat
+discovery and use accessible UI for visible history; it cannot supply complete history or a complete
+private chat list. Notification-history databases are signature-protected and are not read. This
+project intentionally avoids root, a custom
 OpenBubbles build, and private-file access.
 
 ### WearBubbles reference
@@ -573,6 +602,9 @@ No WearBubbles source code or Mac-server dependency was incorporated.
 - **Notification removed**: cache remains; mark-read disappears, and reply/send require automation.
 - **Automation disabled**: new chats, quiet-chat sends, and history requests fail with a setup
   message; live notification replies still work.
+- **Phone securely locked**: UI automation is rejected with a retryable result. Cached chats,
+  notification replies, incoming syncs, and published discovery remain available. Older history and
+  quiet-chat sends wait; queued messages retry after the unlock is reported.
 - **Media unavailable**: OpenBubbles may omit attachment URIs when **Hide text previews** is on, the
   bridge may have already pruned the file, or the notification URI grant may have expired before it
   could be copied. The watch shows **Load photo** with a phone-reported error and can retry while

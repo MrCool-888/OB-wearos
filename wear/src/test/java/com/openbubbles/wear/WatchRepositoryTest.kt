@@ -315,22 +315,158 @@ class WatchRepositoryTest {
     @Test fun groupResultsAreCorrelatedAndDoNotRemoveNotificationGroups() {
         val old = WireThread(id = "notification-group", title = "Old", isGroup = true).toSummary()
         val found = WireThread(id = "iMessage;+;chat123", title = "Family", isGroup = true).toSummary()
-        state.value = state.value.copy(conversations = listOf(old), groupsRequestId = "new")
+        state.value = state.value.copy(conversations = listOf(old), discoveryRequestId = "new")
         WatchRepository.onGroups(GroupsResult(requestId = "stale", groups = listOf(found)))
-        assertEquals("new", state.value.groupsRequestId)
+        assertEquals("new", state.value.discoveryRequestId)
         assertEquals(listOf(old), state.value.conversations)
         WatchRepository.onGroups(GroupsResult(requestId = "new", groups = listOf(found), note = "Partial list"))
         assertEquals(setOf(old.id, found.id), state.value.groups.map { it.id }.toSet())
-        assertNull(state.value.groupsRequestId)
-        assertEquals("Partial list", state.value.groupsNotice)
+        assertNull(state.value.discoveryRequestId)
+        assertEquals("Partial list", state.value.discoveryNotice)
+    }
+
+    @Test fun discoveryImportsDirectChatsAndMergesByAddress() {
+        val old = WireThread(id = "new:+15551234567", title = "Alex", address = "+15551234567",
+            unread = true, canSend = true,
+            messages = listOf(WireMessage(id = "old", threadId = "new:+15551234567",
+                text = "Hi", timestamp = 900L))).toSummary()
+        val found = WireThread(id = "iMessage;-;+15551234567", title = "Alex", address = "+15551234567").toSummary()
+        state.value = state.value.copy(conversations = listOf(old), discoveryRequestId = "r")
+        WatchRepository.onGroups(GroupsResult(requestId = "r", chats = listOf(found)))
+        val merged = state.value.conversations.single()
+        assertEquals(found.id, merged.id)
+        assertEquals("Alex", merged.title)
+        assertTrue(merged.unread)
+        assertEquals("Hi", merged.lastPreview)
+        assertEquals(900L, merged.lastTimestamp)
+        assertTrue(merged.canSend)
+        assertTrue(state.value.directChats.any { it.id == found.id })
+        assertFalse(state.value.groups.any { it.id == found.id })
     }
 
     @Test fun groupDiscoveryErrorKeepsSavedChats() {
         val old = state.value.conversations
-        state.value = state.value.copy(groupsRequestId = "r")
+        state.value = state.value.copy(discoveryRequestId = "r")
         WatchRepository.onGroups(GroupsResult(requestId = "r", error = "Start Shizuku"))
         assertEquals(old, state.value.conversations)
-        assertEquals("Start Shizuku", state.value.groupsNotice)
-        assertNull(state.value.groupsRequestId)
+        assertEquals("Start Shizuku", state.value.discoveryNotice)
+        assertNull(state.value.discoveryRequestId)
+    }
+
+    @Test fun retryableLockedSendStaysInOutboxWithBackoff() {
+        val before = System.currentTimeMillis()
+        WatchRepository.onActionResult(ActionResult(
+            requestId = "request",
+            action = Protocol.ACTION_SEND,
+            ok = false,
+            threadId = "chat",
+            error = "The phone is securely locked.",
+            retryable = true
+        ))
+        assertEquals("queued", status())
+        val queued = state.value.queuedSends.single()
+        assertEquals(1, queued.attempts)
+        assertTrue(queued.nextAttemptAt >= before + 30_000L)
+        assertNull(state.value.error)
+        assertTrue(state.value.info!!.contains("locked", ignoreCase = true))
+        assertTrue(state.value.sendingThreads.isEmpty())
+    }
+
+    @Test fun lockedQuietSendIsSavedWithoutAskingThePhone() {
+        pending.clear()
+        state.value = state.value.copy(
+            connected = true,
+            relayEnabled = true,
+            phoneLocked = true,
+            threads = mapOf("chat" to WireThread(
+                id = "chat",
+                title = "Alex",
+                address = "+15551234567",
+                canSend = true
+            )),
+            conversations = emptyList(),
+            queuedSends = emptyList(),
+            sendingThreads = emptySet()
+        )
+        assertTrue(WatchRepository.sendReply("chat", "Held until unlock"))
+        val queued = state.value.queuedSends.single()
+        assertFalse(queued.useReply)
+        assertTrue(queued.nextAttemptAt > System.currentTimeMillis())
+        assertTrue(state.value.info!!.contains("unlock", ignoreCase = true))
+        assertTrue(state.value.sendingThreads.isEmpty())
+        assertTrue(pending.isEmpty())
+        assertEquals("queued", state.value.threads.getValue("chat").messages.last().status)
+    }
+
+    @Test fun lockedLiveReplyStillDispatchesThroughTheNotification() {
+        pending.clear()
+        state.value = state.value.copy(
+            connected = true,
+            relayEnabled = true,
+            phoneLocked = true,
+            threads = mapOf("chat" to WireThread(
+                id = "chat",
+                title = "Alex",
+                address = "+15551234567",
+                canReply = true,
+                canSend = true
+            )),
+            conversations = emptyList(),
+            queuedSends = emptyList(),
+            sendingThreads = emptySet()
+        )
+        assertTrue(WatchRepository.sendReply("chat", "Live reply"))
+        val queued = state.value.queuedSends.single()
+        assertTrue(queued.useReply)
+        assertEquals(0L, queued.nextAttemptAt)
+    }
+
+    @Test fun unlockClearsLockedSendBackoff() {
+        state.value = state.value.copy(
+            phoneLocked = true,
+            queuedSends = listOf(QueuedSend(
+                requestId = "request",
+                threadId = "chat",
+                text = "Hello",
+                attempts = 2,
+                nextAttemptAt = System.currentTimeMillis() + 60_000L
+            ))
+        )
+        WatchRepository.onPong(PongPayload(relayEnabled = false, phoneLocked = false))
+        assertFalse(state.value.phoneLocked)
+        assertEquals(0L, state.value.queuedSends.single().nextAttemptAt)
+        assertTrue(state.value.info!!.contains("unlocked", ignoreCase = true))
+    }
+
+    @Test fun lockedHistoryRequestFailsBeforeAskingThePhone() {
+        state.value = state.value.copy(
+            connected = true,
+            reachable = true,
+            relayEnabled = true,
+            automationAvailable = true,
+            phoneLocked = true
+        )
+        WatchRepository.loadOlder("chat")
+        assertEquals("Phone locked. Unlock it to load older messages. Saved messages still work.", state.value.error)
+        assertTrue(state.value.historyRequests.isEmpty())
+        assertTrue(state.value.loadingHistory.isEmpty())
+    }
+
+    @Test fun retryableHistoryResultReportsLockSoAutoHistoryCanRetry() {
+        state.value = state.value.copy(
+            phoneLocked = false,
+            historyRequests = mapOf("chat" to "r"),
+            loadingHistory = setOf("chat")
+        )
+        WatchRepository.onHistory(HistoryPayload(
+            requestId = "r",
+            threadId = "chat",
+            error = "The phone is securely locked.",
+            retryable = true
+        ))
+        assertTrue(state.value.phoneLocked)
+        assertEquals("The phone is securely locked.", state.value.error)
+        assertTrue(state.value.historyRequests.isEmpty())
+        assertTrue(state.value.loadingHistory.isEmpty())
     }
 }

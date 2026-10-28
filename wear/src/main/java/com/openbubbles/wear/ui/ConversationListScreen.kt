@@ -113,7 +113,7 @@ fun ConversationListScreen(
                     item {
                         Card(onClick = onSync, modifier = Modifier.fillMaxWidth()) {
                             Text("No group chats yet", style = MaterialTheme.typography.titleSmall)
-                            Text("Find published groups with Shizuku below, or receive a group notification. Published shortcuts are a partial list, not every group.",
+                            Text("Use Find chats (Shizuku) below, or receive a group notification. Published shortcuts and channels are a partial list, not every group.",
                                 style = MaterialTheme.typography.bodyExtraSmall)
                         }
                     }
@@ -137,7 +137,7 @@ fun ConversationListScreen(
                     }
                 }
 
-                if (groupsOnly) item { GroupDiscoveryControls(state) }
+                item { ChatDiscoveryControls(state) }
 
                 item {
                     Button(
@@ -206,6 +206,7 @@ private fun PhoneStatusCard(
         !state.phoneOnline -> scheme.error
         !state.notificationAccess -> scheme.error
         !state.relayEnabled -> scheme.tertiary
+        state.phoneLocked -> scheme.tertiary
         else -> scheme.primary
     }
     val title = when {
@@ -213,6 +214,7 @@ private fun PhoneStatusCard(
         !state.phoneOnline -> "Phone offline"
         !state.notificationAccess -> "Notification access off"
         !state.relayEnabled -> "Relay paused on phone"
+        state.phoneLocked -> "Phone locked"
         else -> "Connected to phone"
     }
     val detail = when {
@@ -227,6 +229,12 @@ private fun PhoneStatusCard(
 
         !state.relayEnabled ->
             "New messages stay on the phone until relay is resumed."
+
+        state.phoneLocked && state.queuedCount > 0 ->
+            "Saved chats and notification replies work. ${state.queuedCount} ${if (state.queuedCount == 1) "message waits" else "messages wait"} for unlock; older history also waits."
+
+        state.phoneLocked ->
+            "Saved chats and notification replies work. Older history and quiet-chat sends wait for unlock."
 
         unreadCount > 0 ->
             "$unreadCount unread ${if (unreadCount == 1) "chat" else "chats"} · Tap to refresh"

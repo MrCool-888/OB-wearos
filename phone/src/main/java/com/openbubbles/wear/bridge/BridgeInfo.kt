@@ -1,16 +1,23 @@
 package com.openbubbles.wear.bridge
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 
 object BridgeInfo {
-    const val BRIDGE_VERSION = "1.5.0"
+    const val BRIDGE_VERSION = "1.6.0"
+
+    const val LOCKED_HISTORY_MESSAGE =
+        "The phone is securely locked. Unlock it to read older messages from OpenBubbles. Saved messages still work."
+    const val LOCKED_SEND_MESSAGE =
+        "The phone is securely locked. This message is saved and will send after you unlock it."
 
     val OPENBUBBLES_PACKAGES = setOf(
         "com.openbubbles.messaging",
@@ -47,6 +54,21 @@ object BridgeInfo {
 
     fun isAutomationReady(context: Context): Boolean =
         hasAutomationAccess(context) && OpenBubblesAutomation.isReady()
+
+    /**
+     * A secure keyguard (PIN, pattern, password or biometric) blocks the
+     * accessibility automation. A swipe-only keyguard is not treated as locked
+     * here: activities can still be shown over it and the automation can retry.
+     *
+     * This deliberately never reads, stores or attempts lock credentials.
+     */
+    fun isPhoneLocked(context: Context): Boolean = runCatching {
+        context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true
+    }.getOrDefault(false)
+
+    fun isPhoneAwake(context: Context): Boolean = runCatching {
+        context.getSystemService(PowerManager::class.java)?.isInteractive == true
+    }.getOrDefault(true)
 
     internal fun enabledAccessibilityServices(context: Context): String? = runCatching {
         Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
