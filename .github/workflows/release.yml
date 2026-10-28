@@ -106,11 +106,12 @@ jobs:
           cd ..
 
       - name: Create release and upload assets
-        uses: softprops/action-gh-release@v2
+        uses: amestsantim/opencode-github-release@v1
         if: startsWith(github.ref, 'refs/heads/main')
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: 2.1.1-${{ github.run_number }}
-          name: OpenBubbles Wear 2.1.1 (build ${{ github.run_number }})
+          release_name: OpenBubbles Wear 2.1.1 (build ${{ github.run_number }})
           body: |
             ## OpenBubbles Wear 2.1.1
 
@@ -147,5 +148,6 @@ jobs:
             - `phone/` — complete patched OpenBubbles 2.0.0 ARM64 APK set (4 files, install together)
             - `OpenBubblesWear-Morphe-1.1.0.mpp` — rebuildable Morphe patch bundle
             - `SHA256SUMS.txt` — checksums for all assets
-          files: release-assets/
-        fail_on_unmatched_files: false
+          assets: release-assets/
+          draft: false
+          prerelease: false
