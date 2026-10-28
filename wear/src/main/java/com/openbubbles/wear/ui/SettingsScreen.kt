@@ -52,7 +52,7 @@ fun SettingsScreen(
     val scheme = MaterialTheme.colorScheme
     val statusColor = when {
         !state.phoneOnline -> scheme.error
-        !state.notificationAccess -> scheme.error
+        !state.notificationAccess && !state.directBridge -> scheme.error
         !state.relayEnabled -> scheme.tertiary
         else -> scheme.primary
     }
@@ -119,7 +119,7 @@ fun SettingsScreen(
                             title = when {
                                 state.syncing -> "Syncing…"
                                 !state.phoneOnline -> "Phone offline"
-                                !state.notificationAccess -> "Notification access is off"
+                                !state.notificationAccess && !state.directBridge -> "Notification access is off"
                                 !state.relayEnabled -> "Relay is paused"
                                 else -> "Connected"
                             },
@@ -138,6 +138,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(8.dp))
                         InfoRow("Phone", state.phoneName.ifBlank { "Unknown" })
                         InfoRow("Bridge", state.bridgeVersion.ifBlank { "Not connected" })
+                        InfoRow("Wear patch", if (state.directBridge) "Connected" else "Not detected")
                         InfoRow(
                             "Notification access",
                             if (state.notificationAccess) "Granted" else "Off"
@@ -270,7 +271,8 @@ fun SettingsScreen(
                         InfoRow("Cached chats", state.threads.size.toString())
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "The watch keeps a small copy for offline reading. Open a chat on the phone to refresh its notification.",
+                            text = if (state.directBridge) "The watch keeps a small copy for offline reading. Refresh a chat to load recent history from OpenBubbles."
+                                else "The watch keeps a small copy for offline reading. Open a chat on the phone to refresh its notification.",
                             style = MaterialTheme.typography.bodyExtraSmall,
                             color = scheme.onSurfaceVariant
                         )
@@ -307,10 +309,16 @@ fun SettingsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.height(6.dp))
-                        AboutLine("Chats appear once OpenBubbles posts a notification for them.")
-                        AboutLine("Replies use OpenBubbles' notification action, so they send even while the phone is locked. A chat needs to have notified at least once.")
-                        AboutLine("New chats can't be started from the watch; only chats OpenBubbles has already published or notified can be opened.")
-                        AboutLine("Muted chats and hidden alerts may be missing until you use them.")
+                        if (state.directBridge) {
+                            AboutLine("The Wear patch loads chats and recent history directly from OpenBubbles, including text hidden in notification previews.")
+                            AboutLine("Send and mark-read work without notifications, even while the phone is locked. Choose a contact to start a one-to-one chat on the first send.")
+                            AboutLine("Live incoming alerts still need notification access. Refresh quiet chats to load new messages.")
+                        } else {
+                            AboutLine("Chats appear once OpenBubbles posts a notification for them.")
+                            AboutLine("Replies use OpenBubbles' notification action, so they send even while the phone is locked. A chat needs to have notified at least once.")
+                            AboutLine("New chats can't be started from the watch; only chats OpenBubbles has already published or notified can be opened.")
+                            AboutLine("Muted chats and hidden alerts may be missing until you use them.")
+                        }
                         AboutLine("Photos and GIFs are copied to the watch when you open them. OpenBubbles' Hide text previews setting can prevent attachments from reaching the bridge.")
                         AboutLine("Everything is sent by OpenBubbles on the phone, so your account and encryption stay there.")
                     }

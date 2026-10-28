@@ -9,9 +9,7 @@ import com.openbubbles.wear.protocol.WireThread
 import kotlin.math.abs
 
 /**
- * Durable, notification-derived conversation cache. OpenBubbles does not expose a
- * readable database to us, so the notification's own MessagingStyle history is the
- * source for the watch.
+ * Durable conversation cache from notifications and the optional in-app Wear bridge.
  */
 class BridgeStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -44,11 +42,27 @@ class BridgeStore(context: Context) {
                 ?.takeIf { it != incoming.id }
                 ?.let { threads[it] }
             val oldMessages = mergeMessages(legacy?.messages.orEmpty(), existing?.messages.orEmpty())
-            val merged = mergeMessages(oldMessages, incoming.messages)
+            val oldest = incoming.messages.minOfOrNull { it.timestamp }
+            val retained = if (incoming.directHistory) oldMessages.filter { message ->
+                message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX) ||
+                    (!Protocol.isNotificationMessageId(message.id) && oldest != null && message.timestamp < oldest)
+            } else oldMessages
+            val messages = incoming.messages.map { message ->
+                val previous = oldMessages.firstOrNull { it.id == message.id }
+                    ?: if (incoming.directHistory && !incoming.isGroup) oldMessages.singleOrNull {
+                        it.timestamp == message.timestamp && it.fromMe == message.fromMe &&
+                            it.text == message.text && incoming.messages.count { other ->
+                                other.timestamp == message.timestamp && other.fromMe == message.fromMe && other.text == message.text
+                            } == 1
+                    } else null
+                previous?.let(message::mergeMediaFrom) ?: message
+            }
+            val merged = mergeMessages(retained, messages).map { it.copy(threadId = incoming.id) }
             val updated = incoming.copy(
                 messages = merged,
                 address = incoming.address ?: existing?.address ?: legacy?.address,
-                updatedAt = maxOf(incoming.updatedAt, merged.lastOrNull()?.timestamp ?: 0L)
+                updatedAt = maxOf(incoming.updatedAt, merged.lastOrNull()?.timestamp ?: 0L),
+                directHistory = incoming.directHistory || existing?.directHistory == true || legacy?.directHistory == true
             )
             if (mergeFromId != null && legacy != null) threads.remove(mergeFromId)
             threads.remove(updated.id)
@@ -104,20 +118,17 @@ class BridgeStore(context: Context) {
         require(chat.id.isNotBlank())
         val group = chat.isGroup || Protocol.isGroupGuid(chat.id)
         val normalizedAddress = if (group) null else Protocol.normalizeAddress(chat.address)
-        val existing = threads[chat.id]
-        // A chat started from the watch before its first notification uses a
-        // "new:<address>" ID, and 1.x used the bare chat GUID. Fold either into
-        // the same person's 2.x key instead of showing two conversations.
-        val legacy = if (!group && existing == null && normalizedAddress != null) {
+        // Metadata must not rename a notification's ID and strand its actions.
+        // Only an actual new notification can migrate the existing conversation.
+        val base = threads[chat.id] ?: if (!group && normalizedAddress != null) {
             threads.values.firstOrNull { candidate ->
-                candidate.id != chat.id &&
+                !candidate.isGroup &&
                     Protocol.normalizeAddress(candidate.address)
                         ?.equals(normalizedAddress, ignoreCase = true) == true
             }
         } else {
             null
         }
-        val base = existing ?: legacy
         val updated = if (base == null) {
             chat.copy(
                 title = chat.title.trim().take(160).ifBlank { chat.address ?: "Conversation" },
@@ -134,14 +145,12 @@ class BridgeStore(context: Context) {
             )
         } else {
             base.copy(
-                id = chat.id,
                 title = chat.title.trim().take(160).ifBlank { base.title }
                     .ifBlank { normalizedAddress ?: "Conversation" },
                 isGroup = base.isGroup || group,
                 address = if (base.isGroup || group) null else base.address ?: normalizedAddress
             )
         }
-        if (legacy != null && legacy.id != updated.id) threads.remove(legacy.id)
         threads.remove(updated.id)
         threads[updated.id] = updated
         trim()

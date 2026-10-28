@@ -21,13 +21,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.wear.compose.material3.MaterialTheme
 import com.openbubbles.wear.WatchNavigation
 import com.openbubbles.wear.WatchNotifications
 import com.openbubbles.wear.WatchRepository
+import com.openbubbles.wear.refreshVisibleConversations
+import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "2.0.1"
+const val WATCH_APP_VERSION = "2.1.0"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
@@ -99,10 +102,6 @@ fun WearApp() {
     LaunchedEffect(requestedThread) {
         val threadId = requestedThread ?: return@LaunchedEffect
         stack = listOf(WearScreen.Conversations, WearScreen.Chat(threadId))
-        WatchRepository.markReadLocally(threadId)
-        val canMarkRead = state.threads[threadId]?.canMarkRead == true ||
-            state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true
-        if (canMarkRead) WatchRepository.markRead(threadId)
         WatchNavigation.consume()
     }
 
@@ -126,6 +125,16 @@ fun WearApp() {
         onDispose {
             lifecycle.removeObserver(observer)
             WatchRepository.setVisibleThread(null)
+        }
+    }
+    val showingConversations = current == WearScreen.Conversations
+    LaunchedEffect(lifecycleOwner, showingConversations) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (showingConversations) {
+                refreshVisibleConversations(WatchRepository.state) { WatchRepository.sync(context, manual = false) }
+            } else {
+                refreshVisibleDirectChat(WatchRepository.state, WatchRepository::requestThread)
+            }
         }
     }
 

@@ -8,6 +8,16 @@ Apple's servers directly and never handles your account or encryption keys.
 > This project is not affiliated with OpenBubbles or Apple. It works with the official
 > OpenBubbles 2.0.x APK without modifying it.
 
+### Experimental Morphe version
+
+The **2.1.1 testing build** adds an optional Morphe patch for native OpenBubbles 2.0.0
+(20002289): direct chat discovery/history, sending without a notification, and new one-to-one
+chats from the watch. It includes a signed, complete phone APK set and matching companion apps;
+follow [Install and test 2.1.1](docs/INSTALL-2.1.1.md), or read the [Morphe build notes](docs/MORPHE.md).
+The patch has not been validated with a signed-in backend on a physical phone/watch. **Do not
+uninstall stock OpenBubbles to try it:** replacing its signature can require a data-erasing
+reinstall. The notification-mode instructions below remain applicable without the patch.
+
 ## How it works
 
 OpenBubbles builds a `MessagingStyle` notification for each active conversation. That notification
@@ -70,20 +80,22 @@ OpenBubbles' published Android shortcuts and notification channels.
 
 ## Install
 
-Download the APKs from the [2.0.1 device-testing release](https://github.com/MrCool-888/OB-wearos/releases/tag/2.0.1).
+The notification-only testing build is **2.0.2**, with the locked-send fixes described in
+[its build notes](docs/RELEASE-2.0.2.md). The previously published
+[2.0.1 release](https://github.com/MrCool-888/OB-wearos/releases/tag/2.0.1) does not contain these fixes.
 Real phone/watch validation is still required; see [the testing checklist](docs/TESTING.md).
 
 Release APKs are built and copied to `dist/`:
 
-- `dist/OpenBubblesWear-Phone-2.0.1.apk`
-- `dist/OpenBubblesWear-Watch-2.0.1.apk`
+- `dist/OpenBubblesWear-Phone-2.0.2.apk`
+- `dist/OpenBubblesWear-Watch-2.0.2.apk`
 - `dist/SHA256SUMS.txt`
 
 Install each APK on the matching device:
 
 ```bash
-adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-2.0.1.apk
-adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-2.0.1.apk
+adb -s <phone-serial> install -r dist/OpenBubblesWear-Phone-2.0.2.apk
+adb -s <watch-serial> install -r dist/OpenBubblesWear-Watch-2.0.2.apk
 ```
 
 Both APKs are signed with the same local release key. They use application IDs that are different
@@ -98,10 +110,12 @@ from the official app:
 Phone and watch intentionally share an application ID and signing certificate, as required by
 Google's Wear Data Layer. Their source-code namespaces remain different.
 
-**Upgrading:** install both 2.0.1 APKs over 2.0.0 (or 1.7.0). The phone bridge no longer uses an
+**Upgrading:** install both 2.0.2 APKs over 2.0.1, 2.0.0, or 1.7.0. The phone bridge no longer uses an
 accessibility service; if you enabled it for an older version, you can turn it off in Android's
 accessibility settings. The bridge's cached conversations are kept. Application IDs, signing
-certificate, and protocol v3 are unchanged, so matching 2.0.1 phone/watch apps are recommended.
+certificate, and protocol v3 are unchanged, so matching 2.0.2 phone/watch apps are recommended.
+Keep an OpenBubbles chat notification active during installation so the restarted bridge can
+capture its reply action again. Tokens are kept in memory, not on disk.
 
 ### Phone setup
 
@@ -190,7 +204,7 @@ discovered by the bridge and cannot be started from the watch.
 
 ### Pick a contact or group on the watch
 
-1. Install both 2.0.1 APKs and optionally allow Contacts in the phone bridge.
+1. Install both 2.0.2 APKs and optionally allow Contacts in the phone bridge.
 2. On the watch, open **Find a chat → Choose a contact**. Browse or **Search contacts** by name,
    phone number, or email; **Load more contacts** fetches the next page. If someone has multiple
    numbers/emails, choose one explicitly. Selecting a contact opens its existing chat. It does not
@@ -249,9 +263,12 @@ integration; the bridge does not enumerate OpenBubbles' private storage.
   watch can find and open only chats that already exist in the notification/shortcut cache.
 - **Secure lock:** replies send through OpenBubbles' notification reply action, so the phone can
   stay locked. The reply token belongs to OpenBubbles and may be cancelled when it updates or
-  dismisses a notification; a saved-action send is best effort rather than guaranteed. If a chat has
-  no live or saved reply action, its message stays in the watch outbox and cannot be sent until
-  OpenBubbles publishes one.
+  dismisses a notification; a retained-action send is best effort rather than guaranteed. Tokens
+  remain usable after notification removal only while the bridge process stays alive and
+  OpenBubbles keeps them valid. Android cannot persist these tokens to disk. After process death,
+  an app update, or reboot, an active/new notification is needed to capture them again. Missing or
+  rejected actions produce an error, not a queue waiting for unlock. Offline transport still uses
+  the outbox; queued messages without a current reply capability wait for one, not for unlocking.
 - **No older-message history.** The bridge sees only the messages OpenBubbles includes in the
   notification. It cannot scroll OpenBubbles or load messages from its private database, so very
   old messages are not available on the watch.
@@ -368,10 +385,9 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-The current release is phone bridge 2.0.1 and watch app 2.0.1, using protocol version 3. Update
-both APKs together. The wire format is backward-compatible with 1.7.0 and 2.0.0 for the remaining
-fields, but the watch still requires a reply action from the phone, so matching 2.0.1 apps are
-recommended.
+Source builds now produce phone/watch **2.1.1** (versionCode 14), using backward-compatible protocol
+version 3. Update both apps together. Without the optional patch, sending still requires a live or
+retained notification reply action. [Morphe preview notes](docs/MORPHE.md) describe the direct path.
 
 ### Project layout
 
@@ -381,13 +397,16 @@ recommended.
 | `phone/` | Phone bridge, notification listener, cache, Data Layer publisher, setup UI. |
 | `wear/` | Wear OS Compose app, Data Layer listener, cache, chat/find-chat UI. |
 | `testnotifier/` | Debug-only fake OpenBubbles notification source. Never ship it. |
+| `morphe/` | Separate Gradle build for the optional Wear bridge patch bundle. |
 | `docs/` | Architecture and testing notes. |
 | `work/` | Local reference/decompilation artifacts, not part of the app. |
 
 ## More documentation
 
+- [Morphe preview](docs/MORPHE.md) — patch build, signing/certificate requirements, risks and limitations.
 - [Architecture](docs/ARCHITECTURE.md) — notification parsing, caching, protocol, and action flow.
 - [Testing](docs/TESTING.md) — fake notifications, adb commands, debug builds, and known emulator
   behavior.
+- [2.0.2 build notes](docs/RELEASE-2.0.2.md) — retain real reply tokens for locked, quiet-chat sends.
 - [2.0.1 release notes](docs/RELEASE-2.0.1.md) — OpenBubbles 2.x chat discovery and contact fixes.
 - [2.0.0 release notes](docs/RELEASE-2.0.0.md) — accessibility removed; notification-only sending.

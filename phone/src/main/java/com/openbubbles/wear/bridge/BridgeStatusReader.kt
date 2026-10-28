@@ -9,6 +9,9 @@ import java.util.concurrent.TimeUnit
 
 data class BridgeUiState(
     val notificationAccess: Boolean = false,
+    val directBridge: Boolean = false,
+    val directBridgeEnabled: Boolean = true,
+    val backendState: String = "Not connected",
     val openBubblesInstalled: Boolean = false,
     val openBubblesVersion: String = "",
     val openBubblesPackage: String = "",
@@ -37,6 +40,9 @@ fun readBridgeUiState(context: Context): BridgeUiState {
     val preferences = BridgePreferences(context)
     return BridgeUiState(
         notificationAccess = BridgeInfo.hasNotificationAccess(context),
+        directBridge = PatchBridgeClient.isAvailable(context),
+        directBridgeEnabled = preferences.directBridgeEnabled,
+        backendState = PatchBridgeClient.backendState,
         openBubblesInstalled = BridgeInfo.isOpenBubblesInstalled(context),
         openBubblesVersion = BridgeInfo.openBubblesVersion(context),
         openBubblesPackage = BridgeInfo.openBubblesPackage(context).orEmpty(),

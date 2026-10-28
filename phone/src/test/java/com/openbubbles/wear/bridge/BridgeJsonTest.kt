@@ -1,0 +1,86 @@
+package com.openbubbles.wear.bridge
+
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [32])
+class BridgeJsonTest {
+    @Test fun canonicalBackendChatCanBeOpenedInOpenBubbles() {
+        val launcher = android.content.Intent().setClassName("com.openbubbles.messaging", "com.localob.messaging.app.MainActivity")
+        val intent = ConversationLaunch.existingGuid(launcher, "chat_iMessage;+;chat123")
+        assertEquals("iMessage;+;chat123", intent.getStringExtra("chatGuid"))
+    }
+
+    @Test fun directMediaOnlyAcceptsTheAuthenticatedReadOnlyProvider() {
+        val valid = "content://com.openbubbles.messaging.wear.media/attachment/attachment-guid"
+        val message = BridgeJson.message(JSONObject().put("id", "message-guid").put("attachment", true)
+            .put("mediaUri", valid).put("mediaMime", "image/gif"), "chat")!!
+        assertEquals(valid, message.sourceUri)
+        assertTrue(message.mediaId!!.startsWith("media-"))
+        for (uri in listOf("file:///data/data/private", "content://contacts/one", "$valid/extra", "$valid?path=secret")) {
+            assertNull(BridgeJson.mediaUri(uri))
+        }
+    }
+
+    @Test
+    fun threadUsesNotificationShortcutIdAndRealHistory() {
+        val json = JSONObject(
+            """
+            {
+              "id": "iMessage;-;+15551234567",
+              "title": "Alex",
+              "isGroup": false,
+              "address": "+1 (555) 123-4567",
+              "participants": ["+15551234567"],
+              "unread": true,
+              "messages": [
+                {"id": "m1", "text": "Hi", "timestamp": 1000, "fromMe": false, "sender": "Alex"},
+                {"id": "m2", "text": "Hello", "timestamp": 2000, "fromMe": true}
+              ]
+            }
+            """.trimIndent()
+        )
+        val thread = BridgeJson.thread(json)!!
+        assertEquals("chat_iMessage;-;+15551234567", thread.id)
+        assertEquals("+15551234567", thread.address)
+        assertEquals(listOf("m1", "m2"), thread.messages.map { it.id })
+        assertEquals("chat_iMessage;-;+15551234567", thread.messages[0].threadId)
+        assertTrue(thread.unread)
+        assertTrue(thread.canSend)
+        assertEquals(2000L, thread.updatedAt)
+    }
+
+    @Test
+    fun summaryKeepsPreviewAndCanonicalId() {
+        val summary = BridgeJson.summary(
+            JSONObject(
+                """
+                {"id": "chat_SMS;-;a@example.com", "title": "Ann", "isGroup": false,
+                 "address": "a@example.com", "lastTimestamp": 9000, "lastPreview": "See you"}
+                """.trimIndent()
+            )
+        )!!
+        assertEquals("chat_SMS;-;a@example.com", summary.id)
+        assertEquals(9000L, summary.lastTimestamp)
+        assertEquals("See you", summary.lastPreview)
+        assertTrue(summary.canReply)
+    }
+
+    @Test
+    fun blankAttachmentlessMessageIsDropped() {
+        assertNull(BridgeJson.message(JSONObject("""{"text": ""}"""), "chat_x"))
+    }
+
+    @Test
+    fun idMustBePresent() {
+        assertNull(BridgeJson.thread(JSONObject("""{"title": "No id"}""")))
+        assertNull(BridgeJson.thread(JSONObject("""{"id": ""}""")))
+    }
+}

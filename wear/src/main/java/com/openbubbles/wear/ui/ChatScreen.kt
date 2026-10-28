@@ -67,7 +67,7 @@ fun ChatScreen(
     val newestMessageId = messages.lastOrNull()?.id
     val listState = rememberScalingLazyListState()
     val requesting = threadId in state.requestingThreads
-    val canReply = thread?.canReply == true || summary?.canReply == true
+    val canReply = state.canReplyTo(threadId)
 
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val isGroup = thread?.isGroup ?: summary?.isGroup ?: false
@@ -179,7 +179,8 @@ fun ChatScreen(
                 } else if (messages.isEmpty()) {
                     item {
                         NoticeCard(
-                            message = "No saved messages yet. Messages appear after OpenBubbles posts a notification for this chat.",
+                            message = if (state.directBridge) "No messages loaded. Refresh an existing chat, or reply to start this conversation."
+                                else "No saved messages yet. Messages appear after OpenBubbles posts a notification for this chat.",
                             isError = false
                         )
                     }
@@ -255,13 +256,17 @@ private fun ChatStatus(
         state.phoneLocked && canReply -> {
             color = scheme.primary
             title = "Phone locked · reply ready"
-            detail = "Replies send through OpenBubbles' notification action without unlocking."
+            detail = if (state.directBridge) {
+                "Messages send through OpenBubbles without unlocking."
+            } else {
+                "Replies send through OpenBubbles' notification action without unlocking."
+            }
         }
 
         !canReply -> {
             color = scheme.tertiary
             title = "Read only"
-            detail = "Open this chat in OpenBubbles on the phone to refresh its reply action."
+            detail = "Open this chat in OpenBubbles on the phone, or install the Wear patch, to enable sending."
         }
 
         else -> {
@@ -372,6 +377,12 @@ private fun MessageBubble(
                         style = MaterialTheme.typography.labelSmall,
                         color = scheme.error
                     )
+
+                    "unconfirmed" -> Text(
+                        text = " · Not confirmed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.error
+                    )
                 }
             }
         }
@@ -476,7 +487,7 @@ private fun ChatActions(
     onRefresh: () -> Unit,
     onMarkRead: () -> Unit
 ) {
-    val canMarkRead = state.threads[threadId]?.canMarkRead == true ||
+    val canMarkRead = state.directBridge || state.threads[threadId]?.canMarkRead == true ||
         state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true
     val sending = threadId in state.sendingThreads
     val queuedCount = state.queuedSends.count { it.threadId == threadId }

@@ -200,7 +200,7 @@ class PublishedChatDiscoveryTest {
         assertEquals(imported, BridgeStore(RuntimeEnvironment.getApplication()).get("chat_contact:42"))
     }
 
-    @Test fun importingDirectAddressChatFoldsTemporaryNewAddressThread() {
+    @Test fun metadataKeepsTemporaryHistoryUnderItsExistingIdUntilANotificationArrives() {
         val store = BridgeStore(RuntimeEnvironment.getApplication())
         val temporary = WireThread(
             id = "new:+15551234567",
@@ -213,15 +213,19 @@ class PublishedChatDiscoveryTest {
         val imported = store.importPublishedChat(
             PublishedChatDiscovery.parseShortcuts(shortcut(id = directId, title = "Alex"), pkg).single()
         )
-        assertEquals(directId, imported.id)
+        assertEquals(temporary.id, imported.id)
         assertEquals(temporary.messages, imported.messages)
         assertEquals(temporary.address, imported.address)
         assertTrue(imported.canSend)
+        assertEquals(imported, store.get(temporary.id))
+        assertNull(store.get(directId))
+        val incoming = WireThread(id = directId, title = "Alex", address = temporary.address)
+        store.upsertIncoming(incoming, mergeFromId = temporary.id)
         assertNull(store.get(temporary.id))
-        assertEquals(imported, store.get(directId))
+        assertEquals(temporary.messages.map { it.copy(threadId = directId) }, store.get(directId)!!.messages)
     }
 
-    @Test fun importingDirectAddressChatFoldsLegacyGuidThread() {
+    @Test fun metadataKeepsLegacyGuidThreadAndItsActionKey() {
         val store = BridgeStore(RuntimeEnvironment.getApplication())
         val legacy = WireThread(
             id = directGuid,
@@ -234,9 +238,24 @@ class PublishedChatDiscoveryTest {
         val imported = store.importPublishedChat(
             PublishedChatDiscovery.parseShortcuts(shortcut(id = directId, title = "Alex"), pkg).single()
         )
-        assertEquals(directId, imported.id)
+        assertEquals(legacy.id, imported.id)
         assertEquals(legacy.messages, imported.messages)
-        assertNull(store.get(legacy.id))
+        assertEquals(imported, store.get(legacy.id))
+        assertNull(store.get(directId))
+    }
+
+    @Test fun staleAddressChannelCannotRenameAnActiveContactKeyedChat() {
+        val store = BridgeStore(RuntimeEnvironment.getApplication())
+        val live = WireThread(id = "chat_contact:42", title = "Alex", address = "+15551234567",
+            notificationActive = true, canReply = true)
+        store.update(live)
+        val imported = store.importPublishedChat(
+            PublishedChatDiscovery.parseChannels(channel(id = "conv_$directId", name = "Alex")).single()
+        )
+        assertEquals(live.id, imported.id)
+        assertTrue(imported.notificationActive)
+        assertTrue(imported.canReply)
+        assertEquals(listOf(live.id), store.snapshot().map { it.id })
     }
 
     @Test fun discoveryPlaceholdersCannotEvictConversationsWithMessages() {

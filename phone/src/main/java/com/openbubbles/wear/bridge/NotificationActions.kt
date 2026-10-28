@@ -18,11 +18,11 @@ object NotificationActions {
 
     fun replyAction(notification: Notification): Notification.Action? =
         notification.actions?.firstOrNull { action ->
-            !action.remoteInputs.isNullOrEmpty()
+            savedReply(action) != null
         }
 
     /**
-     * Extracts only what [sendReply] needs so the action can be persisted. A
+     * Extracts only what [sendReply] needs so the action can be retained. A
      * reply without a free-form input cannot carry typed text, so it is not
      * saved.
      */
@@ -43,10 +43,8 @@ object NotificationActions {
     }
 
     fun sendReply(context: Context, action: Notification.Action, text: String): Boolean {
-        val inputs = action.remoteInputs
-        if (inputs.isNullOrEmpty() || text.isBlank()) return false
-        val input = inputs.firstOrNull { it.allowFreeFormInput } ?: inputs.first()
-        return sendResults(context, action.actionIntent, input.resultKey, text)
+        val reply = savedReply(action) ?: return false
+        return sendReply(context, reply, text)
     }
 
     fun sendReply(context: Context, reply: SavedReply, text: String): Boolean =

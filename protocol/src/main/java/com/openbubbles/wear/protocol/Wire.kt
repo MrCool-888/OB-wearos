@@ -35,4 +35,24 @@ object Wire {
         }
         return candidate
     }
+
+    fun syncForTransport(payload: SyncPayload, maxBytes: Int = 90_000): SyncPayload {
+        var candidate = payload.copy(conversations = payload.conversations.map { it.forTransport() })
+        while (candidate.conversations.size > 1 && encodeBytes(candidate).size > maxBytes) {
+            candidate = candidate.copy(conversations = candidate.conversations.dropLast(1))
+        }
+        return candidate
+    }
+
+    fun groupsForTransport(result: GroupsResult, maxBytes: Int = 90_000): GroupsResult {
+        var summaries = (result.groups + result.chats).sortedByDescending { it.lastTimestamp }.map { it.forTransport() }
+        fun resultWith(chats: List<ThreadSummary>) = result.copy(groups = chats.filter { it.isGroup }, chats = chats.filterNot { it.isGroup })
+        while (summaries.size > 1 && encodeBytes(resultWith(summaries)).size > maxBytes) summaries = summaries.dropLast(1)
+        return resultWith(summaries)
+    }
+
+    private fun ThreadSummary.forTransport(): ThreadSummary = copy(
+        title = title.take(160), lastPreview = lastPreview.take(160),
+        participants = participants.take(12).map { it.take(80) }
+    )
 }

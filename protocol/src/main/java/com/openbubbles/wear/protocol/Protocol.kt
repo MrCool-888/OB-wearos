@@ -12,6 +12,10 @@ import java.util.Locale
  * asks the phone to perform actions against the live OpenBubbles notification.
  */
 object Protocol {
+    private val notificationMessageId = Regex("^m-[0-9a-f]{40}(?:-[0-9]+)?$")
+
+    fun isNotificationMessageId(id: String): Boolean = notificationMessageId.matches(id)
+
     const val VERSION = 3
 
     const val CAPABILITY_PHONE = "openbubbles_wear_bridge"
