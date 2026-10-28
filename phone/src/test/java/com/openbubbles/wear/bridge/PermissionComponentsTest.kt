@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
-import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -17,19 +16,13 @@ import org.robolectric.annotation.Config
 @Config(sdk = [32], application = Application::class)
 class PermissionComponentsTest {
     private lateinit var context: Context
-    private val expected = ComponentName("com.openbubbles.wear", OpenBubblesAutomationService::class.java.name)
-    private val short = "com.openbubbles.wear/.bridge.OpenBubblesAutomationService"
-    private val full = "com.openbubbles.wear/com.openbubbles.wear.bridge.OpenBubblesAutomationService"
-    private var service: OpenBubblesAutomationService? = null
+    private val expected = ComponentName("com.openbubbles.wear", NotificationRelayService::class.java.name)
+    private val short = "com.openbubbles.wear/.bridge.NotificationRelayService"
+    private val full = "com.openbubbles.wear/com.openbubbles.wear.bridge.NotificationRelayService"
 
     @Before fun reset() {
         context = RuntimeEnvironment.getApplication()
-        Settings.Secure.putString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
-        OpenBubblesAutomation::class.java.getDeclaredField("service").apply { isAccessible = true }.set(null, null)
-    }
-
-    @After fun detach() {
-        service?.let(OpenBubblesAutomation::detach)
+        Settings.Secure.putString(context.contentResolver, "enabled_notification_listeners", "")
     }
 
     @Test fun shortenedAndroidComponentMatchesFullyQualifiedComponent() {
@@ -39,12 +32,12 @@ class PermissionComponentsTest {
     }
 
     @Test fun otherAppAndOldBridgeDoNotMatch() {
-        assertFalse(PermissionComponents.matches("com.openbubbles.wear.bridge/.OpenBubblesAutomationService", expected))
-        assertFalse(PermissionComponents.matches("com.other/.bridge.OpenBubblesAutomationService", expected))
+        assertFalse(PermissionComponents.matches("com.openbubbles.wear.bridge/.NotificationRelayService", expected))
+        assertFalse(PermissionComponents.matches("com.other/.bridge.NotificationRelayService", expected))
     }
 
     @Test fun differentServiceAndMalformedValuesDoNotMatch() {
-        assertFalse(PermissionComponents.matches("com.openbubbles.wear/.bridge.NotificationRelayService", expected))
+        assertFalse(PermissionComponents.matches("com.openbubbles.wear/.bridge.DebugRelayReceiver", expected))
         assertFalse(PermissionComponents.matches(null, expected))
         assertFalse(PermissionComponents.matches("", expected))
         assertFalse(PermissionComponents.matches("not-a-component", expected))
@@ -55,41 +48,14 @@ class PermissionComponentsTest {
         assertFalse(PermissionComponents.contains("com.other/.Service", expected))
     }
 
-    @Test fun secureSettingsFallbackRecognizesShortEnabledComponent() {
-        Settings.Secure.putString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, short)
-        assertTrue(BridgeInfo.hasAutomationAccess(context))
-        assertFalse(BridgeInfo.isAutomationReady(context))
-    }
-
-    @Test fun secureSettingsFallbackRecognizesFullEnabledComponent() {
-        Settings.Secure.putString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, full)
-        assertTrue(BridgeInfo.hasAutomationAccess(context))
-    }
-
-    @Test fun enabledWithoutConnectionIsNotLabeledOffOrAdvertisedAsReady() {
-        val status = BridgeUiState(automationEnabled = true, automationAvailable = false)
-        assertTrue(status.automationStatus.startsWith("On in Android settings"))
-        assertTrue(status.automationStatus.contains("not connected"))
-        assertFalse(BridgeInfo.isAutomationReady(context))
-    }
-
-    @Test fun connectedInstanceIsRecognizedWhileSettingsHaveNotPropagated() {
-        service = OpenBubblesAutomationService()
-        OpenBubblesAutomation.attach(service!!)
-        assertTrue(BridgeInfo.hasAutomationAccess(context))
-        assertTrue(BridgeInfo.isAutomationReady(context))
-        OpenBubblesAutomation.detach(service!!)
-        assertFalse(BridgeInfo.isAutomationReady(context))
-    }
-
     @Test fun diagnosticsContainOwnPermissionStateNotOtherAppsServiceNames() {
-        Settings.Secure.putString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        Settings.Secure.putString(context.contentResolver, "enabled_notification_listeners",
             "com.private.otherapp/.PrivateService:$short")
-        val report = BridgeDiagnostics.create(context, BridgeUiState(automationEnabled = true))
+        val report = BridgeDiagnostics.create(context, BridgeUiState())
         assertTrue(report.contains("Installed package: com.openbubbles.wear"))
-        assertTrue(report.contains("Accessibility listed in secure settings: true"))
-        assertTrue(report.contains("Accessibility connected/ready: false"))
+        assertTrue(report.contains("Listener listed in secure settings: true"))
         assertTrue(report.contains("Phone notification posting: not used"))
         assertFalse(report.contains("com.private.otherapp"))
+        assertFalse(report.contains("Accessibility"))
     }
 }

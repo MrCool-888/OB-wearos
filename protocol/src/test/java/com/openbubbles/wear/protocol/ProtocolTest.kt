@@ -232,32 +232,17 @@ class ProtocolTest {
         assertEquals("alice@example.com", Protocol.normalizeAddress(" ALICE@EXAMPLE.COM "))
         assertNull(Protocol.normalizeAddress(""))
         assertNull(Protocol.normalizeAddress("not-an-address"))
-        assertEquals("new:+15551234567", Protocol.newThreadId("+1 555 123 4567"))
-        assertEquals(
-            Protocol.newThreadId("alice@example.com"),
-            Protocol.newThreadId("mailto:Alice@Example.com")
-        )
     }
 
     @Test
-    fun sendAndHistoryPayloadsRoundTrip() {
+    fun sendPayloadRoundTrips() {
         val send = SendRequest(
             requestId = "r1",
-            threadId = "new:+15551234567",
-            address = "+15551234567",
-            title = "Alice",
+            threadId = "iMessage;-;alice@example.com",
             text = "Hello",
             sentAt = 5L
         )
         assertEquals(send, Wire.decode<SendRequest>(Wire.encode(send)))
-
-        val history = HistoryPayload(
-            requestId = "r2",
-            threadId = "t1",
-            messages = listOf(WireMessage("m1", "t1", "Old", 3L, sender = "Alice")),
-            hasMore = true
-        )
-        assertEquals(history, Wire.decode<HistoryPayload>(Wire.encode(history)))
     }
 
     @Test
@@ -280,13 +265,6 @@ class ProtocolTest {
         assertFalse(oldSync.phoneLocked)
         assertTrue(oldSync.phoneAwake)
 
-        val history = HistoryPayload(
-            requestId = "r",
-            threadId = "t",
-            error = "locked",
-            retryable = true
-        )
-        assertTrue(Wire.decode<HistoryPayload>(Wire.encode(history))!!.retryable)
         val result = ActionResult(
             requestId = "r",
             action = Protocol.ACTION_SEND,
@@ -316,25 +294,18 @@ class ProtocolTest {
     }
 
     @Test
-    fun summaryCarriesAutomationFields() {
+    fun summaryCarriesAddressAndReplyCapability() {
         val thread = WireThread(
             id = "t",
             title = "Alice",
             address = "alice@example.com",
+            canReply = true,
             canSend = true
         )
         val summary = thread.toSummary()
         assertEquals("alice@example.com", summary.address)
+        assertTrue(summary.canReply)
         assertTrue(summary.canSend)
-        assertTrue(
-            SyncPayload(
-                generatedAt = 1L,
-                phoneName = "Pixel",
-                bridgeVersion = "1.1.0",
-                notificationAccess = true,
-                automationAvailable = true
-            ).automationAvailable
-        )
     }
 
     @Test

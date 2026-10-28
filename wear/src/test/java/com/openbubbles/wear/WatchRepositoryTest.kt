@@ -12,7 +12,6 @@ import com.openbubbles.wear.protocol.WatchContact
 import com.openbubbles.wear.protocol.ContactAddress
 import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.PongPayload
-import com.openbubbles.wear.protocol.HistoryPayload
 import com.openbubbles.wear.protocol.GroupsResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
@@ -211,11 +210,20 @@ class WatchRepositoryTest {
         assertEquals(listOf(direct), watch.directChats)
     }
 
-    @Test fun choosingContactReusesDirectThreadAndNeverSendsOnSelection() {
+    @Test fun choosingContactOpensExistingChatAndNeverSendsOnSelection() {
         val thread = WireThread(id = "real-chat", title = "Alex", address = "alex@example.com")
         state.value = state.value.copy(threads = mapOf(thread.id to thread), conversations = listOf(thread.toSummary()), queuedSends = emptyList())
-        assertEquals("real-chat", WatchRepository.startNewChat("alex@example.com", "Alex"))
+        assertEquals("real-chat", WatchRepository.findChatByAddress("alex@example.com"))
         assertTrue(state.value.queuedSends.isEmpty())
+        assertNull(state.value.error)
+    }
+
+    @Test fun unknownContactDoesNotCreateAChat() {
+        state.value = state.value.copy(threads = emptyMap(), conversations = emptyList())
+        assertNull(WatchRepository.findChatByAddress("nobody@example.com"))
+        assertTrue(state.value.threads.isEmpty())
+        assertTrue(state.value.conversations.isEmpty())
+        assertTrue(state.value.error!!.contains("No saved chat"))
     }
 
     @Test fun mismatchedContactQueryOrOffsetCannotReplaceCurrentPage() {
@@ -235,81 +243,6 @@ class WatchRepositoryTest {
         assertFalse(context.getSharedPreferences("openbubbles_wear", Context.MODE_PRIVATE).contains("contacts"))
         WatchRepository.onPong(PongPayload(relayEnabled = false, contactsAccess = false))
         assertEquals("[]", cache.getString("contacts", ""))
-    }
-
-    private fun historyMessage(index: Int) = WireMessage(id = "m$index", threadId = "chat", text = "Message $index", timestamp = index.toLong())
-    private fun pendingHistory(id: String = "history") {
-        state.value = state.value.copy(historyRequests = mapOf("chat" to id), loadingHistory = setOf("chat"))
-    }
-
-    @Test fun initialHistoryLoadsIntoEmptyContactAndGroupChats() {
-        for (group in listOf(false, true)) {
-            state.value = WatchState(threads = mapOf("chat" to WireThread(id = "chat", title = "Chat", isGroup = group)))
-            pendingHistory()
-            WatchRepository.onHistory(HistoryPayload(requestId = "history", threadId = "chat", messages = listOf(historyMessage(1)), hasMore = true))
-            assertEquals(listOf(historyMessage(1)), state.value.historyWindows["chat"])
-            assertEquals(listOf(historyMessage(1)), state.value.threads.getValue("chat").messages)
-            assertEquals(group, state.value.threads.getValue("chat").isGroup)
-            assertTrue(state.value.loadingHistory.isEmpty())
-        }
-    }
-
-    @Test fun fullCacheRetainsOlderPageAndIncomingSnapshotsDoNotEvictIt() {
-        val latest = (301..520).map(::historyMessage)
-        state.value = WatchState(threads = mapOf("chat" to WireThread(id = "chat", title = "Alex", messages = latest)))
-        pendingHistory()
-        WatchRepository.onHistory(HistoryPayload(requestId = "history", threadId = "chat",
-            messages = (241..300).map(::historyMessage), hasMore = true))
-        assertEquals((241..460).map(::historyMessage), state.value.historyWindows["chat"])
-        assertEquals(latest, state.value.threads.getValue("chat").messages)
-        WatchRepository.onThread(WireThread(id = "chat", title = "Alex", messages = listOf(historyMessage(521))), connected = false)
-        assertEquals(241, state.value.historyWindows.getValue("chat").first().timestamp.toInt())
-        assertEquals(521, state.value.threads.getValue("chat").messages.last().timestamp.toInt())
-        pendingHistory("next")
-        WatchRepository.onHistory(HistoryPayload(requestId = "next", threadId = "chat", messages = (181..240).map(::historyMessage), hasMore = true))
-        assertEquals((181..400).map(::historyMessage), state.value.historyWindows["chat"])
-    }
-
-    @Test fun staleHistoryResponsesAndFailuresCannotClearNewerRequest() {
-        pendingHistory("new")
-        WatchRepository.onHistory(HistoryPayload(requestId = "old", threadId = "chat", error = "old error"))
-        WatchRepository.onHistoryFailure("chat", "old", "old timeout", unreachable = true)
-        assertEquals("new", state.value.historyRequests["chat"])
-        assertNull(state.value.error)
-        assertTrue("chat" in state.value.loadingHistory)
-        WatchRepository.onHistory(HistoryPayload(requestId = "new", threadId = "chat", messages = listOf(historyMessage(1))))
-        WatchRepository.onHistoryFailure("chat", "new", "late transport failure")
-        assertNull(state.value.error)
-        assertTrue(state.value.historyRequests.isEmpty())
-    }
-
-    @Test fun unreadableHistoryErrorDoesNotMarkHistoryExhausted() {
-        pendingHistory()
-        WatchRepository.onHistory(HistoryPayload(requestId = "history", threadId = "chat", error = "No readable text"))
-        assertFalse("chat" in state.value.historyExhausted)
-        assertEquals("No readable text", state.value.error)
-    }
-
-    @Test fun currentHistoryTimeoutClearsOnlyItsOwnRequest() {
-        pendingHistory()
-        WatchRepository.onHistoryFailure("chat", "history", "Timed out")
-        assertTrue(state.value.historyRequests.isEmpty())
-        assertTrue(state.value.loadingHistory.isEmpty())
-        assertEquals("Timed out", state.value.error)
-    }
-
-    @Test fun latestActionRestoresNewestCacheAndIgnoresPendingOlderResponse() {
-        val latest = listOf(historyMessage(100))
-        state.value = WatchState(threads = mapOf("chat" to WireThread(id = "chat", title = "Alex", messages = latest)),
-            historyWindows = mapOf("chat" to listOf(historyMessage(1))), historyExhausted = setOf("chat"))
-        pendingHistory()
-        WatchRepository.showLatest("chat")
-        assertFalse(state.value.historyWindows.containsKey("chat"))
-        assertEquals(latest, state.value.threads.getValue("chat").messages)
-        assertTrue(state.value.historyRequests.isEmpty())
-        assertFalse("chat" in state.value.historyExhausted)
-        WatchRepository.onHistory(HistoryPayload(requestId = "history", threadId = "chat", messages = listOf(historyMessage(2))))
-        assertFalse(state.value.historyWindows.containsKey("chat"))
     }
 
     @Test fun groupResultsAreCorrelatedAndDoNotRemoveNotificationGroups() {
@@ -353,27 +286,22 @@ class WatchRepositoryTest {
         assertNull(state.value.discoveryRequestId)
     }
 
-    @Test fun retryableLockedSendStaysInOutboxWithBackoff() {
-        val before = System.currentTimeMillis()
+    @Test fun failedSendIsMarkedFailedAndLeavesTheOutbox() {
         WatchRepository.onActionResult(ActionResult(
             requestId = "request",
             action = Protocol.ACTION_SEND,
             ok = false,
             threadId = "chat",
-            error = "The phone is securely locked.",
+            error = "OpenBubbles has no reply action for this chat yet.",
             retryable = true
         ))
-        assertEquals("queued", status())
-        val queued = state.value.queuedSends.single()
-        assertEquals(1, queued.attempts)
-        assertTrue(queued.nextAttemptAt >= before + 30_000L)
-        assertNull(state.value.error)
-        assertTrue(state.value.info!!.contains("locked", ignoreCase = true))
+        assertEquals("failed", status())
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertEquals("OpenBubbles has no reply action for this chat yet.", state.value.error)
         assertTrue(state.value.sendingThreads.isEmpty())
     }
 
-    @Test fun lockedQuietSendDispatchesWithoutWaitingForUnlock() {
-        pending.clear()
+    @Test fun chatWithoutReplyActionIsRejectedOnTheWatch() {
         state.value = state.value.copy(
             connected = true,
             relayEnabled = true,
@@ -388,14 +316,12 @@ class WatchRepositoryTest {
             queuedSends = emptyList(),
             sendingThreads = emptySet()
         )
-        assertTrue(WatchRepository.sendReply("chat", "Send now"))
-        val queued = state.value.queuedSends.singleOrNull()
-        assertFalse(queued?.useReply == true)
-        assertTrue(queued == null || queued.nextAttemptAt == 0L)
-        assertFalse(state.value.info.orEmpty().contains("after unlock", ignoreCase = true))
+        assertFalse(WatchRepository.sendReply("chat", "Send now"))
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertTrue(state.value.error!!.contains("reply action"))
     }
 
-    @Test fun lockedLiveReplyStillDispatchesThroughTheNotification() {
+    @Test fun lockedLiveReplyDispatchesThroughTheNotification() {
         pending.clear()
         state.value = state.value.copy(
             connected = true,
@@ -414,11 +340,31 @@ class WatchRepositoryTest {
         )
         assertTrue(WatchRepository.sendReply("chat", "Live reply"))
         val queued = state.value.queuedSends.single()
-        assertTrue(queued.useReply)
         assertEquals(0L, queued.nextAttemptAt)
     }
 
-    @Test fun unlockClearsLockedSendBackoff() {
+    @Test fun savedReplyActionSendsWhileLockedWithoutALiveNotification() {
+        pending.clear()
+        state.value = state.value.copy(
+            connected = true,
+            relayEnabled = true,
+            phoneLocked = true,
+            threads = mapOf("chat" to WireThread(
+                id = "chat",
+                title = "Alex",
+                notificationActive = false,
+                canReply = true
+            )),
+            conversations = emptyList(),
+            queuedSends = emptyList(),
+            sendingThreads = emptySet()
+        )
+        assertTrue(WatchRepository.sendReply("chat", "Saved reply"))
+        assertEquals(1, state.value.queuedCount)
+        assertTrue(state.value.info!!.contains("outbox"))
+    }
+
+    @Test fun unlockOnlyUpdatesPhoneState() {
         state.value = state.value.copy(
             phoneLocked = true,
             queuedSends = listOf(QueuedSend(
@@ -429,41 +375,10 @@ class WatchRepositoryTest {
                 nextAttemptAt = System.currentTimeMillis() + 60_000L
             ))
         )
+        val retryAt = state.value.queuedSends.single().nextAttemptAt
         WatchRepository.onPong(PongPayload(relayEnabled = false, phoneLocked = false))
         assertFalse(state.value.phoneLocked)
-        assertEquals(0L, state.value.queuedSends.single().nextAttemptAt)
+        assertEquals(retryAt, state.value.queuedSends.single().nextAttemptAt)
         assertTrue(state.value.info!!.contains("unlocked", ignoreCase = true))
-    }
-
-    @Test fun lockedHistoryRequestFailsBeforeAskingThePhone() {
-        state.value = state.value.copy(
-            connected = true,
-            reachable = true,
-            relayEnabled = true,
-            automationAvailable = true,
-            phoneLocked = true
-        )
-        WatchRepository.loadOlder("chat")
-        assertEquals("Phone locked. Unlock it to load older messages. Saved messages still work.", state.value.error)
-        assertTrue(state.value.historyRequests.isEmpty())
-        assertTrue(state.value.loadingHistory.isEmpty())
-    }
-
-    @Test fun retryableHistoryResultReportsLockSoAutoHistoryCanRetry() {
-        state.value = state.value.copy(
-            phoneLocked = false,
-            historyRequests = mapOf("chat" to "r"),
-            loadingHistory = setOf("chat")
-        )
-        WatchRepository.onHistory(HistoryPayload(
-            requestId = "r",
-            threadId = "chat",
-            error = "The phone is securely locked.",
-            retryable = true
-        ))
-        assertTrue(state.value.phoneLocked)
-        assertEquals("The phone is securely locked.", state.value.error)
-        assertTrue(state.value.historyRequests.isEmpty())
-        assertTrue(state.value.loadingHistory.isEmpty())
     }
 }

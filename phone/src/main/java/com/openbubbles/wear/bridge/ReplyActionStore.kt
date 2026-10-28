@@ -18,7 +18,7 @@ data class SavedReply(
  * notification action, these survive the notification being dismissed, so a
  * watch reply can still go through OpenBubbles' receiver while the phone is
  * locked. This is best-effort: OpenBubbles may cancel the token, in which case
- * callers fall back to automation or a retry after unlock.
+ * the send reports that the chat has no reply action.
  */
 class ReplyActionStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

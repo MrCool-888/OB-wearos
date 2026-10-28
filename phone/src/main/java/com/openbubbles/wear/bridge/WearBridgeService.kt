@@ -7,8 +7,6 @@ import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.WearableListenerService
 import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.BridgeError
-import com.openbubbles.wear.protocol.HistoryPayload
-import com.openbubbles.wear.protocol.HistoryRequest
 import com.openbubbles.wear.protocol.MarkReadRequest
 import com.openbubbles.wear.protocol.MediaPayload
 import com.openbubbles.wear.protocol.MediaRequest
@@ -55,7 +53,6 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_MARK_READ -> handleMarkRead(nodeId, data)
                 Protocol.PATH_OPEN_PHONE -> handleOpenPhone(nodeId, data)
                 Protocol.PATH_SEND -> handleSend(nodeId, data)
-                Protocol.PATH_HISTORY -> handleHistory(nodeId, data)
                 Protocol.PATH_MEDIA_REQUEST -> handleMediaRequest(nodeId, data)
                 Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
                 Protocol.PATH_GROUPS_REQUEST -> {
@@ -69,7 +66,6 @@ class WearBridgeService : WearableListenerService() {
             val json = data.toString(Charsets.UTF_8)
             val requestId = runCatching { Wire.decode<ReplyRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<SendRequest>(json)?.requestId }.getOrNull()
-                ?: runCatching { Wire.decode<HistoryRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<MediaRequest>(json)?.requestId }.getOrNull()
             WatchLink.sendToNode(
                 applicationContext,
@@ -184,8 +180,6 @@ class WearBridgeService : WearableListenerService() {
             NotificationCenter.send(
                 requestId = request.requestId,
                 threadId = request.threadId,
-                address = request.address,
-                title = request.title,
                 rawText = request.text
             ) { result ->
                 complete(
@@ -220,34 +214,6 @@ class WearBridgeService : WearableListenerService() {
             path,
             Wire.encodeBytes(result)
         )
-    }
-
-    private fun handleHistory(nodeId: String, data: ByteArray) {
-        val request = Wire.decodeBytes<HistoryRequest>(data) ?: return
-        NotificationCenter.history(
-            threadId = request.threadId,
-            title = request.title,
-            address = request.address,
-            limit = request.limit,
-            isGroup = request.isGroup,
-            anchorMessages = request.anchorMessages
-        ) { result ->
-            WatchLink.sendToNode(
-                applicationContext,
-                nodeId,
-                Protocol.PATH_HISTORY_RESULT,
-                Wire.encodeBytes(
-                    HistoryPayload(
-                        requestId = request.requestId,
-                        threadId = result.threadId,
-                        messages = result.messages,
-                        hasMore = result.hasMore,
-                        error = result.error,
-                        retryable = result.retryable
-                    )
-                )
-            )
-        }
     }
 
     private fun handleMediaRequest(nodeId: String, data: ByteArray) {

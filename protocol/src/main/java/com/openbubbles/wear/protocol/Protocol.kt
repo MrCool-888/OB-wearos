@@ -33,8 +33,6 @@ object Protocol {
     const val PATH_ACTION_RESULT = "$BASE_PATH/action_result"
     const val PATH_OPEN_PHONE = "$BASE_PATH/open_phone"
     const val PATH_SEND = "$BASE_PATH/send"
-    const val PATH_HISTORY = "$BASE_PATH/history"
-    const val PATH_HISTORY_RESULT = "$BASE_PATH/history_result"
     const val PATH_MEDIA_REQUEST = "$BASE_PATH/media_request"
     const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
     const val PATH_CONTACTS_REQUEST = "$BASE_PATH/contacts_request"
@@ -58,7 +56,6 @@ object Protocol {
     const val ACTION_MARK_READ = "mark_read"
     const val ACTION_OPEN_PHONE = "open_phone"
     const val ACTION_SEND = "send"
-    const val ACTION_HISTORY = "history"
     const val ACTION_MEDIA = "media"
 
     val DEFAULT_QUICK_REPLIES: List<String> = listOf(
@@ -164,10 +161,6 @@ object Protocol {
             else -> null
         }
     }
-
-    /** Stable local ID for a conversation created from an address on the watch. */
-    fun newThreadId(address: String): String =
-        "new:" + (normalizeAddress(address) ?: address.trim().lowercase(Locale.ROOT))
 
     /** OpenBubbles/BlueBubbles conversation GUIDs, not arbitrary shortcut labels. */
     fun isChatGuid(id: String): Boolean =

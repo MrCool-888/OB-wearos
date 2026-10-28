@@ -11,11 +11,11 @@ import com.openbubbles.wear.protocol.Wire
  * Keeps the content PendingIntent that OpenBubbles attached to each chat
  * notification. The intent is owned by OpenBubbles, so sending it opens the
  * exact conversation without knowing its chat GUID. It usually stays valid
- * after the notification is dismissed, which lets the automation open cached
+ * after the notification is dismissed, which lets the bridge open cached
  * chats without searching the conversation list.
  *
  * This is best-effort: the token can be cancelled by OpenBubbles at any time,
- * and callers must fall back to UI navigation.
+ * and callers must fall back to launching OpenBubbles normally.
  */
 class PendingIntentStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

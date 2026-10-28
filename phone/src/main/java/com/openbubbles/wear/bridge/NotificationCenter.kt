@@ -54,14 +54,6 @@ object NotificationCenter {
         val retryable: Boolean = false
     )
 
-    data class HistoryResult(
-        val threadId: String,
-        val messages: List<WireMessage> = emptyList(),
-        val hasMore: Boolean = false,
-        val error: String? = null,
-        val retryable: Boolean = false
-    )
-
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
@@ -288,7 +280,6 @@ object NotificationCenter {
         bridgeVersion = BridgeInfo.BRIDGE_VERSION,
         notificationAccess = initialized && BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = initialized && prefs.relayEnabled,
-        automationAvailable = automationAvailable(),
         phoneLocked = initialized && BridgeInfo.isPhoneLocked(appContext),
         phoneAwake = initialized && BridgeInfo.isPhoneAwake(appContext),
         trackedConversations = if (initialized) store.snapshot().size else 0,
@@ -300,11 +291,18 @@ object NotificationCenter {
         if (!initialized) return "The bridge is still starting."
         if (!prefs.relayEnabled) return "Relay is paused on the phone."
         if (text.isBlank()) return "The reply is empty."
-        val live = liveByThread[threadId]
-            ?: return "This chat is not currently notifying. Open it in OpenBubbles on the phone to refresh it."
-        val action = NotificationActions.replyAction(live.sbn.notification)
-            ?: return "OpenBubbles did not provide a reply action for this chat."
-        if (!NotificationActions.sendReply(appContext, action, text.trim())) {
+        val action = liveByThread[threadId]
+            ?.let { NotificationActions.replyAction(it.sbn.notification) }
+        val saved = if (action == null) replyActions.get(threadId) else null
+        if (action == null && saved == null) {
+            return "OpenBubbles has no reply action for this chat. Open it in OpenBubbles on the phone to refresh it."
+        }
+        val sent = when {
+            action != null -> NotificationActions.sendReply(appContext, action, text.trim())
+            saved != null -> NotificationActions.sendReply(appContext, saved, text.trim())
+            else -> false
+        }
+        if (!sent) {
             return "OpenBubbles rejected the reply. Open the conversation on the phone and try again."
         }
         prefs.markReadAt(threadId)
@@ -330,17 +328,14 @@ object NotificationCenter {
     }
 
     /**
-     * Sends through OpenBubbles' notification action when a chat is live or has
-     * a saved reply action, or through the optional accessibility automation
-     * when neither is available. Saved actions keep replies working after the
-     * notification is dismissed, including while the phone is locked. The
-     * callback runs on the caller's thread.
+     * Sends through OpenBubbles' own notification reply action: the live
+     * notification first, then the action saved from an earlier notification.
+     * The phone can stay locked; OpenBubbles performs the send. The callback
+     * runs on the caller's thread.
      */
     fun send(
         requestId: String,
         threadId: String?,
-        address: String?,
-        title: String?,
         rawText: String,
         callback: (SendResult) -> Unit
     ) {
@@ -357,20 +352,11 @@ object NotificationCenter {
             callback(SendResult(threadId, "The message is empty."))
             return
         }
-        val existing = threadId?.let { store.get(it) }
-        val normalizedAddress = Protocol.normalizeAddress(address)
-            ?: Protocol.normalizeAddress(existing?.address)
-            ?: address?.trim()?.takeIf { it.isNotBlank() }
         val targetId = threadId
-            ?: normalizedAddress?.let { Protocol.newThreadId(it) }
         if (targetId == null) {
-            callback(SendResult(null, "Enter a phone number or email address first."))
+            callback(SendResult(null, "Open this chat in OpenBubbles on the phone first."))
             return
         }
-        val displayTitle = title?.trim()?.takeIf { it.isNotBlank() }
-            ?: existing?.title?.takeIf { it.isNotBlank() }
-            ?: address?.trim()?.takeIf { it.isNotBlank() }
-            ?: "New chat"
 
         val live = liveByThread[targetId]
         val action = live?.let { NotificationActions.replyAction(it.sbn.notification) }
@@ -393,7 +379,7 @@ object NotificationCenter {
         }
 
         // The notification may be gone but its PendingIntent usually still
-        // works. Try it before the lock guard so locked replies do not wait.
+        // works, so a saved action sends without opening or unlocking anything.
         val saved = replyActions.get(targetId)
         if (saved != null && NotificationActions.sendReply(appContext, saved, text)) {
             prefs.markReadAt(targetId)
@@ -404,50 +390,12 @@ object NotificationCenter {
             return
         }
 
-        if (!automationAvailable()) {
-            callback(
-                SendResult(
-                    targetId,
-                    "This chat isn't notifying. Enable the optional automation service in the bridge app to send without a notification."
-                )
+        callback(
+            SendResult(
+                targetId,
+                "OpenBubbles has no reply action for this chat yet. Open it in OpenBubbles on the phone, then try again."
             )
-            return
-        }
-        if (BridgeInfo.isPhoneLocked(appContext)) {
-            callback(SendResult(targetId, BridgeInfo.LOCKED_SEND_MESSAGE, retryable = true))
-            return
-        }
-
-        OpenBubblesAutomation.send(
-            threadId = targetId,
-            title = displayTitle,
-            address = normalizedAddress ?: existing?.address,
-            text = text,
-            contentIntent = contentIntents.get(targetId),
-            isGroup = existing?.isGroup == true
-        ) { error ->
-            if (error != null) {
-                callback(
-                    SendResult(
-                        targetId,
-                        error,
-                        retryable = BridgeInfo.isPhoneLocked(appContext)
-                    )
-                )
-            } else {
-                prefs.markReadAt(targetId)
-                val message = recordSent(targetId, requestId, text)
-                val fallback = existing ?: WireThread(
-                    id = targetId,
-                    title = displayTitle,
-                    address = normalizedAddress,
-                    canSend = true
-                )
-                store.mergeHistory(targetId, listOfNotNull(message), fallback)
-                publishAfterAction(targetId)
-                callback(SendResult(targetId, null, message))
-            }
-        }
+        )
     }
 
     /**
@@ -457,7 +405,7 @@ object NotificationCenter {
     private fun recordSent(threadId: String, requestId: String, text: String): WireMessage {
         val now = System.currentTimeMillis()
         val message = WireMessage(
-            id = BridgeStore.AUTO_MESSAGE_PREFIX + requestId,
+            id = BridgeStore.OPTIMISTIC_MESSAGE_PREFIX + requestId,
             threadId = threadId,
             text = text,
             timestamp = now,
@@ -468,73 +416,6 @@ object NotificationCenter {
             store.mergeHistory(threadId, listOf(message))
         }
         return message
-    }
-
-    /**
-     * Uses OpenBubbles' own chat screen to scroll back through older bubbles.
-     * The callback runs on the caller's thread.
-     */
-    fun history(
-        threadId: String,
-        title: String?,
-        address: String?,
-        limit: Int,
-        isGroup: Boolean = false,
-        anchorMessages: List<WireMessage>? = null,
-        callback: (HistoryResult) -> Unit
-    ) {
-        if (!initialized) {
-            callback(HistoryResult(threadId, error = "The bridge is still starting."))
-            return
-        }
-        if (!prefs.relayEnabled) {
-            callback(HistoryResult(threadId, error = "Relay is paused on the phone."))
-            return
-        }
-        if (!automationAvailable()) {
-            callback(
-                HistoryResult(
-                    threadId,
-                    error = "Older messages need the optional automation service. Enable it in the bridge app on the phone."
-                )
-            )
-            return
-        }
-        if (BridgeInfo.isPhoneLocked(appContext)) {
-            callback(HistoryResult(threadId, error = BridgeInfo.LOCKED_HISTORY_MESSAGE, retryable = true))
-            return
-        }
-        val existing = store.get(threadId)
-        val fallbackTitle = title?.trim()?.takeIf { it.isNotBlank() }
-            ?: address?.trim()?.takeIf { it.isNotBlank() }
-            ?: "Conversation"
-        val thread = existing ?: WireThread(
-            id = threadId,
-            title = fallbackTitle,
-            isGroup = isGroup || Protocol.isGroupGuid(threadId),
-            address = Protocol.normalizeAddress(address),
-            canSend = true
-        )
-        OpenBubblesAutomation.loadHistory(
-            thread = if (anchorMessages == null) thread else thread.copy(messages = anchorMessages
-                .filter { it.threadId == threadId }.sortedBy { it.timestamp }.take(12)),
-            limit = limit,
-            contentIntent = contentIntents.get(threadId)
-        ) { outcome ->
-            if (outcome.messages.isNotEmpty()) {
-                store.mergeHistory(threadId, outcome.messages, thread)
-                publishAfterAction(threadId)
-            }
-            callback(
-                HistoryResult(
-                    threadId = threadId,
-                    messages = outcome.messages,
-                    hasMore = outcome.hasMore,
-                    error = outcome.error,
-                    retryable = outcome.error != null && BridgeInfo.isPhoneLocked(appContext)
-                )
-            )
-        }
     }
 
     fun openPhone(threadId: String?): String? {
@@ -603,9 +484,6 @@ object NotificationCenter {
         prefs.clearCachedMessages()
     }
 
-    fun automationAvailable(): Boolean =
-        initialized && BridgeInfo.isAutomationReady(appContext)
-
     /**
      * Manual discovery from the watch or the phone app. Shortcuts and
      * notification channels are both read, so groups and one-to-one chats are
@@ -665,11 +543,6 @@ object NotificationCenter {
         }, "OBWearChatDiscovery").start()
     }
 
-    fun onAutomationConnectionChanged(context: Context) {
-        init(context)
-        scheduleSync()
-    }
-
     fun mediaCount(context: Context): Int {
         init(context)
         return mediaCache.count()
@@ -708,7 +581,6 @@ object NotificationCenter {
         bridgeVersion = BridgeInfo.BRIDGE_VERSION,
         notificationAccess = BridgeInfo.hasNotificationAccess(appContext),
         relayEnabled = prefs.relayEnabled,
-        automationAvailable = automationAvailable(),
         phoneLocked = BridgeInfo.isPhoneLocked(appContext),
         phoneAwake = BridgeInfo.isPhoneAwake(appContext),
         conversations = threads.map { it.toSummary() },
@@ -722,7 +594,7 @@ object NotificationCenter {
             notificationActive = live != null,
             canReply = canReply,
             canMarkRead = live?.parsed?.hasMarkRead == true,
-            canSend = canReply || automationAvailable()
+            canSend = canReply
         )
     }
 

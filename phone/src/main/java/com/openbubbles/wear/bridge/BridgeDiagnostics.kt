@@ -9,7 +9,6 @@ import android.provider.Settings
 internal object BridgeDiagnostics {
     fun create(context: Context, state: BridgeUiState): String {
         val listener = ComponentName(context, NotificationRelayService::class.java)
-        val automation = ComponentName(context, OpenBubblesAutomationService::class.java)
         val configuredListener = runCatching {
             Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
         }.getOrNull()
@@ -24,10 +23,6 @@ internal object BridgeDiagnostics {
             appendLine("Listener listed in secure settings: ${PermissionComponents.contains(configuredListener, listener)}")
             appendLine("Listener connected: ${state.listenerConnected}")
             appendLine("Phone notification posting: not used; App info → Notifications is not listener access")
-            appendLine("Accessibility component: ${automation.flattenToString()}")
-            appendLine("Accessibility enabled: ${state.automationEnabled}")
-            appendLine("Accessibility listed in secure settings: ${PermissionComponents.contains(BridgeInfo.enabledAccessibilityServices(context), automation)}")
-            appendLine("Accessibility connected/ready: ${state.automationAvailable}")
             appendLine("Shizuku running: ${state.shizukuAvailable}")
             appendLine("Shizuku permission: ${state.shizukuPermission}")
             appendLine("Battery exempt: ${state.batteryUnrestricted}")

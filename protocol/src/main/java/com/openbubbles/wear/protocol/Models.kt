@@ -116,8 +116,7 @@ data class SyncPayload(
     val bridgeVersion: String,
     val notificationAccess: Boolean,
     val relayEnabled: Boolean = true,
-    val automationAvailable: Boolean = false,
-    /** True when Android is showing a secure keyguard; UI automation cannot run. */
+    /** True when Android is showing a secure keyguard; shown for information only. */
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
     val conversations: List<ThreadSummary> = emptyList(),
@@ -167,7 +166,6 @@ data class PongPayload(
     val bridgeVersion: String = "",
     val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
-    val automationAvailable: Boolean = false,
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
     val trackedConversations: Int = 0,
@@ -200,48 +198,14 @@ data class OpenPhoneRequest(
     val sentAt: Long = System.currentTimeMillis()
 )
 
-/**
- * Sends a message through OpenBubbles' own compose UI. This is used when the
- * conversation has no live notification (and therefore no reply action), or
- * when starting a brand-new conversation.
- */
+/** Sends text through the chat's OpenBubbles notification reply action. */
 @Serializable
 data class SendRequest(
     val version: Int = Protocol.VERSION,
     val requestId: String,
-    val threadId: String? = null,
-    val address: String? = null,
-    val title: String? = null,
+    val threadId: String,
     val text: String,
     val sentAt: Long = System.currentTimeMillis()
-)
-
-/** Asks the phone to scroll OpenBubbles' UI and return older messages. */
-@Serializable
-data class HistoryRequest(
-    val version: Int = Protocol.VERSION,
-    val requestId: String,
-    val threadId: String,
-    val title: String? = null,
-    val address: String? = null,
-    val limit: Int = 100,
-    val sentAt: Long = System.currentTimeMillis(),
-    val isGroup: Boolean = false,
-    // Null preserves older watches; empty means no cached text anchor yet.
-    val anchorMessages: List<WireMessage>? = null
-)
-
-@Serializable
-data class HistoryPayload(
-    val version: Int = Protocol.VERSION,
-    val requestId: String,
-    val threadId: String,
-    val messages: List<WireMessage> = emptyList(),
-    val hasMore: Boolean = false,
-    val error: String? = null,
-    /** The phone was locked, so the same request can succeed after unlock. */
-    val retryable: Boolean = false,
-    val completedAt: Long = System.currentTimeMillis()
 )
 
 /** Asks the phone to publish one cached image or GIF over the Data Layer. */
@@ -275,7 +239,7 @@ data class ActionResult(
     val ok: Boolean,
     val threadId: String? = null,
     val error: String? = null,
-    /** The action did no work and should be retried after the phone unlocks. */
+    /** The action did no work and can be retried later. */
     val retryable: Boolean = false,
     val completedAt: Long = System.currentTimeMillis(),
     val message: WireMessage? = null

@@ -59,9 +59,8 @@ class BridgeStore(context: Context) {
         }
 
     /**
-     * Merges messages recovered by UI automation (or an optimistic automation
-     * send) into a thread. A fallback thread is created for a brand-new address
-     * that has never produced a notification.
+     * Merges optimistic sent messages into a thread. A fallback thread is
+     * created only when imported discovery data has no cached entry yet.
      */
     fun mergeHistory(
         threadId: String,
@@ -178,10 +177,10 @@ class BridgeStore(context: Context) {
         old.forEach { byId[it.id] = it }
         new.forEach { incoming ->
             if (incoming.fromMe) {
-                // An optimistic accessibility send is replaced by the real
-                // message when the next notification or history scrape sees it.
+                // An optimistic send is replaced by the real message when the
+                // next notification sees it.
                 val optimistic = byId.values.firstOrNull { candidate ->
-                    candidate.id.startsWith(AUTO_MESSAGE_PREFIX) &&
+                    candidate.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX) &&
                         candidate.fromMe &&
                         candidate.text == incoming.text &&
                         abs(candidate.timestamp - incoming.timestamp) <= AUTO_MATCH_WINDOW_MS
@@ -247,7 +246,7 @@ class BridgeStore(context: Context) {
         private const val TAG = "OBWearStore"
         private const val PREFS_NAME = "openbubbles_wear_store"
         private const val KEY_THREADS = "threads"
-        const val AUTO_MESSAGE_PREFIX = "auto-"
+        const val OPTIMISTIC_MESSAGE_PREFIX = "auto-"
         private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
         /** Conversations with message history or a live notification. */
         const val MAX_THREADS = 40

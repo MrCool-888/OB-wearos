@@ -29,10 +29,6 @@ import androidx.wear.compose.material3.TextButton
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +49,6 @@ import com.openbubbles.wear.WatchState
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
 import java.io.File
-import kotlinx.coroutines.flow.first
 
 @Composable
 fun ChatScreen(
@@ -62,20 +57,17 @@ fun ChatScreen(
     onBack: () -> Unit,
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
-    onLoadOlder: () -> Unit,
     onOpenMedia: (String) -> Unit,
     onSendQueued: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
-    val historyWindow = state.historyWindows[threadId]
-    val messages = historyWindow ?: thread?.messages.orEmpty()
-    var autoHistoryRequested by remember(threadId) { mutableStateOf(false) }
+    val messages = thread?.messages.orEmpty()
     val newestMessageId = messages.lastOrNull()?.id
     val listState = rememberScalingLazyListState()
     val requesting = threadId in state.requestingThreads
-    val canSend = thread?.canSend == true || summary?.canSend == true
+    val canReply = thread?.canReply == true || summary?.canReply == true
 
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val isGroup = thread?.isGroup ?: summary?.isGroup ?: false
@@ -87,30 +79,9 @@ fun ChatScreen(
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
-    LaunchedEffect(threadId, state.phoneOnline, state.automationAvailable, state.relayEnabled, state.phoneLocked) {
-        if (state.phoneLocked) {
-            // A secure lock blocks UI history. Allow the automatic request to
-            // run again once the phone reports unlock, including when the lock
-            // appeared after the request was already sent.
-            autoHistoryRequested = false
-        } else if (!autoHistoryRequested && state.phoneOnline && state.automationAvailable &&
-            state.relayEnabled
-        ) {
-            // Let the cached-thread reply establish the oldest anchor first.
-            kotlinx.coroutines.delay(250)
-            kotlinx.coroutines.withTimeoutOrNull(13_000L) {
-                WatchRepository.state.first { threadId !in it.requestingThreads }
-            }
-            autoHistoryRequested = WatchRepository.loadOlder(threadId)
-        }
-    }
-    LaunchedEffect(historyWindow?.firstOrNull()?.id) {
-        if (historyWindow != null) runCatching { listState.scrollToItem(0) }
-    }
-    // Loading older messages prepends items without changing the newest ID, so
-    // only a new message should pull the list back to the bottom.
+    // Only a new message should pull the list back to the bottom.
     LaunchedEffect(newestMessageId) {
-        if (newestMessageId != null && historyWindow == null) {
+        if (newestMessageId != null) {
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
@@ -180,7 +151,7 @@ fun ChatScreen(
                         thread = thread,
                         hasSummary = summary != null,
                         requesting = requesting,
-                        canSend = canSend
+                        canReply = canReply
                     )
                 }
 
@@ -207,20 +178,10 @@ fun ChatScreen(
                     }
                 } else if (messages.isEmpty()) {
                     item {
-                        Card(
-                            onClick = onLoadOlder,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = if (state.phoneLocked) {
-                                    "No saved messages yet. Unlock the phone, then tap to read history from OpenBubbles."
-                                } else {
-                                    "No saved messages yet. Tap to read history from OpenBubbles on the unlocked phone."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        NoticeCard(
+                            message = "No saved messages yet. Messages appear after OpenBubbles posts a notification for this chat.",
+                            isError = false
+                        )
                     }
                 } else {
                     items(
@@ -241,13 +202,11 @@ fun ChatScreen(
                 item {
                     ChatActions(
                         state = state,
-                        thread = thread,
                         threadId = threadId,
+                        canReply = canReply,
                         requesting = requesting,
-                        canSend = canSend,
                         onReply = onReply,
                         onOpenPhone = onOpenPhone,
-                        onLoadOlder = onLoadOlder,
                         onSendQueued = onSendQueued,
                         onRefresh = { WatchRepository.requestThread(threadId) },
                         onMarkRead = { WatchRepository.markRead(threadId) }
@@ -264,7 +223,7 @@ private fun ChatStatus(
     thread: WireThread?,
     hasSummary: Boolean,
     requesting: Boolean,
-    canSend: Boolean
+    canReply: Boolean
 ) {
     val scheme = MaterialTheme.colorScheme
     val color: Color
@@ -274,7 +233,7 @@ private fun ChatStatus(
         thread == null && hasSummary -> {
             color = scheme.primary
             title = if (requesting) "Loading conversation…" else "Waiting for the phone"
-            detail = "The watch is asking the phone for the latest message history."
+            detail = "The watch is asking the phone for the latest messages."
         }
 
         thread == null -> {
@@ -293,40 +252,16 @@ private fun ChatStatus(
             }
         }
 
-        state.phoneLocked && thread.canReply -> {
+        state.phoneLocked && canReply -> {
             color = scheme.primary
             title = "Phone locked · reply ready"
-            detail = "Replies use OpenBubbles' saved notification action and send now. Older history waits for unlock."
+            detail = "Replies send through OpenBubbles' notification action without unlocking."
         }
 
-        state.phoneLocked && canSend -> {
-            color = scheme.tertiary
-            title = "Phone locked"
-            detail = "Sends use OpenBubbles automation. If it can't run while locked, your message is queued and retried automatically."
-        }
-
-        state.phoneLocked && !thread.canReply -> {
-            color = scheme.tertiary
-            title = "Phone locked · history only"
-            detail = "Saved messages work. Unlock the phone and enable automation to send in this chat."
-        }
-
-        canSend && !thread.canReply -> {
-            color = scheme.primary
-            title = "Send through your phone"
-            detail = "No live reply action. The phone will open this chat in OpenBubbles to send."
-        }
-
-        !thread.notificationActive -> {
-            color = scheme.tertiary
-            title = "History only"
-            detail = "Enable automation in the bridge app to send in this chat."
-        }
-
-        !thread.canReply -> {
+        !canReply -> {
             color = scheme.tertiary
             title = "Read only"
-            detail = "This notification doesn't have a reply action right now."
+            detail = "Open this chat in OpenBubbles on the phone to refresh its reply action."
         }
 
         else -> {
@@ -532,61 +467,36 @@ private fun AttachmentBubble(
 @Composable
 private fun ChatActions(
     state: WatchState,
-    thread: WireThread?,
     threadId: String,
+    canReply: Boolean,
     requesting: Boolean,
-    canSend: Boolean,
     onReply: () -> Unit,
     onOpenPhone: () -> Unit,
-    onLoadOlder: () -> Unit,
     onSendQueued: () -> Unit,
     onRefresh: () -> Unit,
     onMarkRead: () -> Unit
 ) {
-    val canReply = thread?.canReply == true
-    val canMarkRead = thread?.canMarkRead == true
+    val canMarkRead = state.threads[threadId]?.canMarkRead == true ||
+        state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true
     val sending = threadId in state.sendingThreads
-    val loadingHistory = threadId in state.loadingHistory
-    val historyExhausted = threadId in state.historyExhausted
     val queuedCount = state.queuedSends.count { it.threadId == threadId }
-    val canLoadHistory = state.automationAvailable &&
-        state.phoneOnline &&
-        state.relayEnabled &&
-        !state.phoneLocked
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (state.historyWindows.containsKey(threadId)) {
-            Text("Viewing older messages · approximate times", style = MaterialTheme.typography.bodyExtraSmall)
-            TextButton(onClick = { WatchRepository.showLatest(threadId) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Latest messages")
-            }
-        }
         Button(
             onClick = onReply,
-            enabled = (canReply || canSend) && state.relayEnabled && !sending,
+            enabled = canReply && state.relayEnabled && !sending,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 when {
                     sending -> "Sending…"
                     !state.phoneOnline && canReply -> "Queue reply"
-                    !state.phoneOnline && canSend -> "Queue message"
                     canReply -> "Reply"
-                    canSend -> "Send message"
                     else -> "Reply unavailable"
                 }
             )
         }
 
-        if (state.phoneLocked && !canReply && canSend) {
-            Text(
-                text = "Phone locked. This chat sends through automation; if it can't while locked, the message is queued and retried automatically.",
-                style = MaterialTheme.typography.bodyExtraSmall,
-                color = MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-        }
-
-        if (!state.phoneOnline && (canReply || canSend)) {
+        if (!state.phoneOnline && canReply) {
             Text(
                 text = "Phone offline. Messages are saved on the watch and sent when it reconnects.",
                 style = MaterialTheme.typography.bodyExtraSmall,
@@ -613,42 +523,6 @@ private fun ChatActions(
                         else -> "Queued until reconnect"
                     }
                 )
-            }
-        }
-
-        if (canSend && !canReply) {
-            Text(
-                text = "The phone will open this chat in OpenBubbles to send.",
-                style = MaterialTheme.typography.bodyExtraSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-        }
-
-        if (state.automationAvailable) {
-            if (historyExhausted) {
-                Text(
-                    text = "No older messages",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-            } else {
-                FilledTonalButton(
-                    onClick = onLoadOlder,
-                    enabled = canLoadHistory && !loadingHistory,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (loadingHistory) "Loading older…" else "Load older messages")
-                }
-                if (state.phoneLocked) {
-                    Text(
-                        text = "Unlock the phone to read older messages from OpenBubbles. Saved messages still work.",
-                        style = MaterialTheme.typography.bodyExtraSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                }
             }
         }
 

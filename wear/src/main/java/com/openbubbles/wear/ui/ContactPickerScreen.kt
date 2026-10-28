@@ -24,7 +24,7 @@ import com.openbubbles.wear.WatchState
 import com.openbubbles.wear.protocol.WatchContact
 
 @Composable
-fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onStartChat: (String) -> Unit) {
+fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onOpenChat: (String) -> Unit) {
     var query by remember { mutableStateOf(state.contactsQuery) }
     var selected by remember { mutableStateOf<WatchContact?>(null) }
     var inputError by remember { mutableStateOf<String?>(null) }
@@ -32,7 +32,7 @@ fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onStartChat: (Str
     LaunchedEffect(state.phoneOnline) { if (state.phoneOnline) WatchRepository.requestContacts(query) }
     LaunchedEffect(state.contactsAccess) { if (state.contactsAccess == false) selected = null }
     fun choose(contact: WatchContact, address: String) {
-        WatchRepository.startNewChat(address, contact.name)?.let(onStartChat)
+        WatchRepository.findChatByAddress(address)?.let(onOpenChat)
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -53,7 +53,7 @@ fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onStartChat: (Str
                 if (error != null) item { NoticeCard(message = error, isError = true) }
                 val contact = selected
                 if (contact != null) {
-                    item { Text("Choose the number or email to message.", style = MaterialTheme.typography.bodyExtraSmall) }
+                    item { Text("Choose the number or email to open its saved OpenBubbles chat.", style = MaterialTheme.typography.bodyExtraSmall) }
                     items(contact.addresses, key = { it.address }) { address ->
                         Card(onClick = { choose(contact, address.address) }, modifier = Modifier.fillMaxWidth()) {
                             Text(address.label.ifBlank { "Message" }, style = MaterialTheme.typography.labelSmall)
@@ -61,7 +61,7 @@ fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onStartChat: (Str
                         }
                     }
                 } else {
-                    item { Text("Phone address book used by OpenBubbles. Not a list of Apple/iMessage accounts.", style = MaterialTheme.typography.bodyExtraSmall) }
+                    item { Text("Phone address book used by OpenBubbles. Only contacts with an existing saved chat can be opened.", style = MaterialTheme.typography.bodyExtraSmall) }
                     if (state.contactsAccess == false) item {
                         NoticeCard(message = "On the phone, open the bridge and tap Allow contact picker. Recent chats and groups work without Contacts permission.", isError = false)
                     }

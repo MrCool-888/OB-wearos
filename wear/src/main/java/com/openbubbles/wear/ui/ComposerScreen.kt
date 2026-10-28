@@ -55,8 +55,7 @@ fun ComposerScreen(
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val canReply = (thread?.canReply ?: summary?.canReply) == true
-    val canSend = (thread?.canSend ?: summary?.canSend) == true
-    val enabled = (canReply || canSend) && state.relayEnabled
+    val enabled = canReply && state.relayEnabled
     val sending = threadId in state.sendingThreads
     val listState = rememberScalingLazyListState()
     var voiceError by remember { mutableStateOf<String?>(null) }
@@ -125,7 +124,7 @@ fun ComposerScreen(
                 }
 
                 item {
-                    SectionHeader(if (canReply) "Reply" else "Message")
+                    SectionHeader("Reply")
                 }
 
                 if (sending) {
@@ -164,7 +163,7 @@ fun ComposerScreen(
                                     "Relay is paused on the phone. Resume it in the bridge app to send."
 
                                 else ->
-                                    "Enable automation in the bridge app to send in this chat without a live notification."
+                                    "Open this chat in OpenBubbles on the phone to refresh its reply action."
                             },
                             isError = false
                         )
@@ -179,11 +178,7 @@ fun ComposerScreen(
                 } else if (state.phoneLocked) {
                     item {
                         NoticeCard(
-                            message = if (canReply) {
-                                "Phone locked. Replies use OpenBubbles' saved notification action and send now; older history waits for unlock."
-                            } else {
-                                "Phone locked. This chat needs the phone unlocked to send; your message is queued and retried automatically."
-                            },
+                            message = "Phone locked. Replies send through OpenBubbles without unlocking.",
                             isError = false
                         )
                     }
@@ -212,7 +207,7 @@ fun ComposerScreen(
                         enabled = enabled && !sending,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (canReply) "Speak or type a reply" else "Speak or type a message")
+                        Text("Speak or type a reply")
                     }
                 }
 

@@ -15,15 +15,12 @@ import java.util.UUID
  * ... --es op reply --es thread fake-maya --es text "On my way"
  * ... --es op mark_read --es thread fake-maya
  * ... --es op send --es thread fake-maya --es text "Sent from adb"
- * ... --es op send --es address +15551234567 --es text "New chat"
- * ... --es op history --es thread fake-maya
  * ... --es op media                       (list cached media IDs)
  * ... --es op media --es id media-abc123  (publish one item to the watch)
  *
  * Thread IDs come from the live notification's shortcut ID. Run `status` to
- * list every cached thread and its current capabilities. The `send` and
- * `history` operations exercise the same accessibility automation path as the
- * watch, so they require the optional automation service.
+ * list every cached thread and its current capabilities. `send` uses the same
+ * live-or-saved notification reply action as the watch.
  */
 class DebugRelayReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -51,33 +48,13 @@ class DebugRelayReceiver : BroadcastReceiver() {
 
             "send" -> {
                 val thread = intent.getStringExtra("thread")
-                val address = intent.getStringExtra("address")
-                val title = intent.getStringExtra("title")
                 val text = intent.getStringExtra("text") ?: "Sent from adb"
                 NotificationCenter.send(
                     requestId = UUID.randomUUID().toString(),
                     threadId = thread,
-                    address = address,
-                    title = title,
                     rawText = text
                 ) { result ->
-                    report(
-                        context,
-                        "send ${result.threadId ?: thread ?: address}",
-                        result.error
-                    )
-                }
-            }
-
-            "history" -> {
-                val thread = intent.getStringExtra("thread") ?: "fake-maya"
-                val title = intent.getStringExtra("title")
-                val address = intent.getStringExtra("address")
-                val limit = intent.getStringExtra("limit")?.toIntOrNull() ?: 60
-                NotificationCenter.history(thread, title, address, limit) { result ->
-                    val summary = "history $thread messages=${result.messages.size} " +
-                        "hasMore=${result.hasMore}"
-                    report(context, summary, result.error)
+                    report(context, "send ${result.threadId ?: thread}", result.error)
                 }
             }
 
@@ -114,7 +91,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
             else -> report(
                 context,
                 "unknown op=$op",
-                "Use status, reply, mark_read, open_phone, send, history, media, sync or clear_cache"
+                "Use status, reply, mark_read, open_phone, send, media, sync or clear_cache"
             )
         }
     }
@@ -125,7 +102,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
             TAG,
             "status access=${BridgeInfo.hasNotificationAccess(context)} " +
                 "installed=${BridgeInfo.isOpenBubblesInstalled(context)} " +
-                "relay=${pong.relayEnabled} automation=${pong.automationAvailable} " +
+                "relay=${pong.relayEnabled} locked=${pong.phoneLocked} " +
                 "tracked=${pong.trackedConversations} " +
                 "media=${NotificationCenter.mediaCount(context)} " +
                 "access=${pong.notificationAccess}"
@@ -145,7 +122,7 @@ class DebugRelayReceiver : BroadcastReceiver() {
         Toast.makeText(
             context,
             "Tracked ${pong.trackedConversations}, access ${pong.notificationAccess}, " +
-                "automation ${pong.automationAvailable}",
+                "locked ${pong.phoneLocked}",
             Toast.LENGTH_SHORT
         ).show()
     }
