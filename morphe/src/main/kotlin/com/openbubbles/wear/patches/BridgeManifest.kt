@@ -9,6 +9,7 @@ internal const val SERVICE_NAME = "com.openbubbles.wear.patch.CompanionService"
 internal const val BRIDGE_ACTION = "com.openbubbles.wear.PATCH_BRIDGE"
 internal const val MEDIA_PROVIDER_NAME = "com.openbubbles.wear.patch.CompanionMediaProvider"
 internal const val MEDIA_AUTHORITY = "com.openbubbles.messaging.wear.media"
+internal const val SETTINGS_ACTIVITY = "com.openbubbles.wear.patch.PatchSettingsActivity"
 
 internal fun addBridgeToManifest(document: Document) {
     val manifest = document.documentElement
@@ -49,6 +50,11 @@ internal fun addBridgeToManifest(document: Document) {
     // The helper checks sendingUid + companion certificate on every Messenger request.
     // A signature permission would reject the separately signed companion.
     application.appendChild(service)
+    application.appendChild(document.createElement("activity").apply {
+        setAttributeNS(ANDROID_NS, "android:name", SETTINGS_ACTIVITY)
+        setAttributeNS(ANDROID_NS, "android:label", "Morphe patches")
+        setAttributeNS(ANDROID_NS, "android:exported", "false")
+    })
     application.appendChild(document.createElement("provider").apply {
         setAttributeNS(ANDROID_NS, "android:name", MEDIA_PROVIDER_NAME)
         setAttributeNS(ANDROID_NS, "android:authorities", MEDIA_AUTHORITY)

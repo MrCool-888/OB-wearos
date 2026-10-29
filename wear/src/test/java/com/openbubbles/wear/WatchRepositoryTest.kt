@@ -57,6 +57,7 @@ class WatchRepositoryTest {
         @Suppress("UNCHECKED_CAST")
         threadRequests = field("pendingThreadRequests").get(null) as MutableMap<String, String>
         threadRequests.clear()
+        WatchRepository::class.java.getDeclaredField("discoveryOffset").apply { isAccessible = true }.setInt(null, 0)
         WatchNavigation.consume()
         state.value = WatchState(loading = false, relayEnabled = false,
             threads = mapOf("chat" to WireThread(id = "chat", title = "Alex", messages = listOf(local))),
@@ -330,6 +331,51 @@ class WatchRepositoryTest {
         assertFalse(merged.canSend)
         assertTrue(state.value.directChats.any { it.id == found.id })
         assertFalse(state.value.groups.any { it.id == found.id })
+    }
+
+    @Test fun discoveryPagesMergeWithoutLosingEarlierSummaries() {
+        val first = WireThread(id = "first", title = "First").toSummary()
+        val second = WireThread(id = "second", title = "Second").toSummary()
+        state.value = state.value.copy(directBridge = true, discoveryRequestId = "pages")
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 0, nextOffset = 40, chats = listOf(first)))
+        assertTrue(state.value.conversations.any { it.id == first.id })
+
+        WatchRepository::class.java.getDeclaredField("discoveryOffset").apply { isAccessible = true }.setInt(null, 40)
+        state.value = state.value.copy(discoveryRequestId = "pages")
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 40, chats = listOf(second)))
+        assertEquals(setOf(first.id, second.id), state.value.conversations.map { it.id }.toSet())
+        assertNull(state.value.discoveryRequestId)
+    }
+
+    @Test fun boundedPhoneSyncPreservesPreviouslyDiscoveredDirectoryEntries() {
+        val all = List(95) { index -> WireThread(id = "directory-$index", title = "Chat $index",
+            updatedAt = 10_000L - index).toSummary() }
+        pending.clear()
+        state.value = state.value.copy(directBridge = true, discoveryRequestId = "pages",
+            threads = emptyMap(), queuedSends = emptyList(), sendingThreads = emptySet())
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 0, nextOffset = 40, chats = all.take(40)))
+        WatchRepository::class.java.getDeclaredField("discoveryOffset").apply { isAccessible = true }.setInt(null, 40)
+        state.value = state.value.copy(discoveryRequestId = "pages")
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 40, nextOffset = 80, chats = all.drop(40).take(40)))
+        WatchRepository::class.java.getDeclaredField("discoveryOffset").apply { isAccessible = true }.setInt(null, 80)
+        state.value = state.value.copy(discoveryRequestId = "pages")
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 80, chats = all.takeLast(15)))
+        assertEquals(95, state.value.conversations.size)
+
+        WatchRepository.onSync(SyncPayload(generatedAt = 2_000L, phoneName = "Phone", bridgeVersion = "2.1.2",
+            notificationAccess = true, conversations = all.take(60)), fromCache = true)
+        assertEquals(95, state.value.conversations.size)
+        assertTrue(state.value.conversations.map { it.id }.containsAll(all.map { it.id }))
+    }
+
+    @Test fun staleDiscoveryPageCannotReplaceCurrentPage() {
+        val current = WireThread(id = "current", title = "Current").toSummary()
+        val stale = WireThread(id = "stale", title = "Stale").toSummary()
+        state.value = state.value.copy(conversations = listOf(current), discoveryRequestId = "pages")
+        WatchRepository::class.java.getDeclaredField("discoveryOffset").apply { isAccessible = true }.setInt(null, 40)
+        WatchRepository.onGroups(GroupsResult(requestId = "pages", offset = 0, chats = listOf(stale)))
+        assertEquals(listOf(current), state.value.conversations)
+        assertEquals("pages", state.value.discoveryRequestId)
     }
 
     @Test fun groupDiscoveryErrorKeepsSavedChats() {

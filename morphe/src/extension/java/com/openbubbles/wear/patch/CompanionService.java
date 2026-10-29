@@ -87,13 +87,18 @@ public final class CompanionService extends Service {
                 return error(request.optString("requestId", null), "Unsupported Wear bridge API version.");
             }
             String op = request.optString("op", "");
+            if (!op.equals("status") && !PatchSettings.isEnabled(this)) {
+                return new JSONObject(error(request.optString("requestId", null),
+                        "Wear companion bridge is disabled in OpenBubbles Settings → Morphe patches."))
+                        .put("enabled", false).toString();
+            }
             if (op.equals("status") || op.equals("chats") || op.equals("thread") ||
                     op.equals("send") || op.equals("markRead")) {
                 prepareBackend(!op.equals("status"));
             }
             switch (op) {
                 case "status":
-                    return BridgeOps.status(this).toString();
+                    return BridgeOps.status(this).put("enabled", PatchSettings.isEnabled(this)).toString();
                 case "chats":
                     return BridgeOps.chats(request).toString();
                 case "thread":

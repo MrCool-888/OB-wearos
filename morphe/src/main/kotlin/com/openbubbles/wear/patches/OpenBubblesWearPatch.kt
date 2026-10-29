@@ -50,6 +50,7 @@ val openBubblesWearBridgePatch = bytecodePatch(
     dependsOn(bridgeManifestPatch)
     extendWith("openbubbles-wear.mpe")
     execute {
+        addSettingsMenu()
         val service = classDefByOrNull(SERVICE_CLASS)
             ?: throw PatchException("Extension CompanionService is missing")
         if (service.superclass != "Landroid/app/Service;" || service.methods.none {

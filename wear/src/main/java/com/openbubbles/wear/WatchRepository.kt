@@ -156,6 +156,7 @@ object WatchRepository {
     private const val MEDIA_DIR = "watch_media"
     private const val MAX_MESSAGES = 220
     private const val MAX_THREADS = 40
+    private const val MAX_DIRECTORY_SUMMARIES = 5000
     private const val MAX_MEDIA_FILES = 60
     private const val MAX_MEDIA_BYTES = 40L * 1024 * 1024
     private const val MEDIA_TIMEOUT_MS = 45_000L
@@ -171,6 +172,7 @@ object WatchRepository {
 
     private var initialized = false
     private var lastSyncRequestAt = 0L
+    @Volatile private var discoveryOffset = 0
     private var dataLayerRestoreStarted = false
     @Volatile
     private var queueFlushing = false
@@ -296,11 +298,15 @@ object WatchRepository {
         val localSummaries = existingThreads.values.filter { thread ->
             thread.id !in byId && (_state.value.queuedFor(thread.id) || pendingSends.containsValue(thread.id))
         }.map { it.toSummary() }
+        val retainedSummaries = _state.value.conversations.filter { it.id !in byId }
         _state.update { current ->
             val unlocked = current.phoneLocked && !payload.phoneLocked
             current.copy(
                 loading = false,
-                conversations = (summaries + localSummaries).sortedByDescending { it.lastTimestamp },
+                conversations = (summaries + localSummaries + retainedSummaries)
+                    .distinctBy { it.id }
+                    .sortedByDescending { it.lastTimestamp }
+                    .take(MAX_DIRECTORY_SUMMARIES),
                 threads = existingThreads,
                 phoneName = payload.phoneName,
                 bridgeVersion = payload.bridgeVersion,
@@ -1017,22 +1023,41 @@ object WatchRepository {
         }
         if (state.discoveryRequestId != null) return
         val id = UUID.randomUUID().toString()
+        discoveryOffset = 0
         _state.update { it.copy(discoveryRequestId = id, discoveryNotice = null) }
-        PhoneLink.send(context, Protocol.PATH_GROUPS_REQUEST,
-            Wire.encodeBytes(com.openbubbles.wear.protocol.GroupsRequest(requestId = id))) { sent ->
-            if (!sent) _state.update { if (it.discoveryRequestId != id) it else it.copy(discoveryRequestId = null,
-                discoveryNotice = "Phone unreachable. Open the phone bridge, then retry.") }
-        }
+        requestGroupsPage(context, id, 0)
+    }
+
+    private fun requestGroupsPage(context: Context, requestId: String, offset: Int) {
         scope.launch {
             delay(30_000L)
-            _state.update { if (it.discoveryRequestId != id) it else it.copy(discoveryRequestId = null,
+            _state.update { if (it.discoveryRequestId != requestId || discoveryOffset != offset) it else it.copy(
+                discoveryRequestId = null,
                 discoveryNotice = "No chat list received. Open OpenBubbles and check the Wear patch or Shizuku on the phone.") }
+        }
+        PhoneLink.send(context, Protocol.PATH_GROUPS_REQUEST,
+            Wire.encodeBytes(com.openbubbles.wear.protocol.GroupsRequest(requestId = requestId, offset = offset))) { sent ->
+            if (!sent) _state.update {
+                if (it.discoveryRequestId != requestId || discoveryOffset != offset) it else it.copy(
+                    discoveryRequestId = null,
+                    discoveryNotice = "Phone unreachable. Open the phone bridge, then retry.")
+            }
         }
     }
 
     @Synchronized
     fun onGroups(result: com.openbubbles.wear.protocol.GroupsResult) {
         if (result.requestId != _state.value.discoveryRequestId) return
+        // Legacy replies default to offset zero, which is valid only for the first page.
+        if (result.offset != discoveryOffset) return
+        val responseOffset = result.offset
+        val requestedNext = result.nextOffset
+        val nextOffset = requestedNext?.takeIf { it > responseOffset && it < MAX_DIRECTORY_SUMMARIES }
+        if (requestedNext != null && (requestedNext <= responseOffset || requestedNext > MAX_DIRECTORY_SUMMARIES)) {
+            _state.update { it.copy(discoveryRequestId = null,
+                discoveryNotice = "OpenBubbles returned an invalid chat-list page. Retry discovery.") }
+            return
+        }
         val discovered = (result.groups + result.chats)
             .filter { it.id.isNotBlank() }
             .distinctBy { it.id }
@@ -1065,16 +1090,24 @@ object WatchRepository {
                 .mapNotNull { Protocol.normalizeAddress(it.address) }
                 .toSet()
             state.copy(
-                discoveryRequestId = null,
-                discoveryNotice = result.error ?: result.note,
+                discoveryRequestId = if (result.error == null && nextOffset != null) result.requestId else null,
+                discoveryNotice = if (result.nextOffset == MAX_DIRECTORY_SUMMARIES) "Showing the first $MAX_DIRECTORY_SUMMARIES chats."
+                    else if (result.error != null || nextOffset == null) result.error ?: result.note else null,
                 conversations = if (result.error != null) state.conversations else {
                     (state.conversations.filterNot { old ->
                         old.id in mergedIds ||
                             (!old.isGroup &&
                                 Protocol.normalizeAddress(old.address)?.let { it in mergedAddresses } == true)
-                    } + merged).sortedByDescending { it.lastTimestamp }
+                    } + merged).sortedByDescending { it.lastTimestamp }.take(MAX_DIRECTORY_SUMMARIES)
                 }
             )
+        }
+        if (result.error == null && nextOffset != null) {
+            discoveryOffset = nextOffset
+            appContext?.let { requestGroupsPage(it, result.requestId, nextOffset) }
+                ?: _state.update { it.copy(discoveryRequestId = null, discoveryNotice = "Watch bridge is unavailable. Retry discovery.") }
+        } else {
+            discoveryOffset = 0
         }
         persist()
     }

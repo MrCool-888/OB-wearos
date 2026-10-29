@@ -57,18 +57,28 @@ class WearBridgeService : WearableListenerService() {
                 Protocol.PATH_CONTACTS_REQUEST -> handleContactsRequest(nodeId, data)
                 Protocol.PATH_GROUPS_REQUEST -> {
                     val request = Wire.decodeBytes<com.openbubbles.wear.protocol.GroupsRequest>(data) ?: return
-                    if (PatchBridgeClient.isAvailable(applicationContext)) {
-                        NotificationCenter.discoverChatsDirect(request.requestId) { result ->
-                            WatchLink.sendToNode(
-                                applicationContext,
+                    PatchBridgeClient.probe(applicationContext, force = true) { available ->
+                        when {
+                            available -> NotificationCenter.discoverChatsDirect(request.requestId, request.offset) { result ->
+                                sendGroupsResult(nodeId, result)
+                            }
+                            PatchBridgeClient.patchInstalled && !PatchBridgeClient.bridgeEnabled -> sendGroupsResult(
                                 nodeId,
-                                Protocol.PATH_GROUPS_RESULT,
-                                Wire.encodeBytes(Wire.groupsForTransport(result))
+                                com.openbubbles.wear.protocol.GroupsResult(
+                                    requestId = request.requestId,
+                                    offset = request.offset,
+                                    error = "Wear bridge is disabled in OpenBubbles settings. Enable it, then retry chat discovery."
+                                )
                             )
+                            else -> {
+                                val result = Wire.groupsPage(
+                                    NotificationCenter.discoverChats(applicationContext, request.requestId),
+                                    request.offset.coerceAtLeast(0),
+                                    40
+                                )
+                                sendGroupsResult(nodeId, result)
+                            }
                         }
-                    } else {
-                        val result = NotificationCenter.discoverChats(applicationContext, request.requestId)
-                        WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT, Wire.encodeBytes(Wire.groupsForTransport(result)))
                     }
                 }
             }
@@ -78,6 +88,7 @@ class WearBridgeService : WearableListenerService() {
             val requestId = runCatching { Wire.decode<ReplyRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<SendRequest>(json)?.requestId }.getOrNull()
                 ?: runCatching { Wire.decode<MediaRequest>(json)?.requestId }.getOrNull()
+                ?: runCatching { Wire.decode<com.openbubbles.wear.protocol.GroupsRequest>(json)?.requestId }.getOrNull()
             WatchLink.sendToNode(
                 applicationContext,
                 nodeId,
@@ -87,6 +98,11 @@ class WearBridgeService : WearableListenerService() {
                 )
             )
         }
+    }
+
+    private fun sendGroupsResult(nodeId: String, result: com.openbubbles.wear.protocol.GroupsResult) {
+        WatchLink.sendToNode(applicationContext, nodeId, Protocol.PATH_GROUPS_RESULT,
+            Wire.encodeBytes(Wire.groupsForTransport(result)))
     }
 
     private fun handlePing(nodeId: String, data: ByteArray) {

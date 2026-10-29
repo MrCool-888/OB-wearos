@@ -265,6 +265,10 @@ object NotificationCenter {
 
     fun syncNow(context: Context) {
         init(context)
+        PatchBridgeClient.probe(context, force = true) { direct ->
+            if (direct) maybeAutoDiscoverChats(context)
+            scheduleSync()
+        }
         maybeAutoDiscoverChats(context)
         service?.let { rescan(it) }
         val threads = store.snapshot().map(::decorate)
@@ -685,25 +689,34 @@ object NotificationCenter {
      * notification required. Falls back to the published shortcut/channel
      * directory when the patch is absent.
      */
-    fun discoverChatsDirect(requestId: String, callback: (com.openbubbles.wear.protocol.GroupsResult) -> Unit) {
+    fun discoverChatsDirect(
+        requestId: String,
+        offset: Int = 0,
+        callback: (com.openbubbles.wear.protocol.GroupsResult) -> Unit
+    ) {
         if (!initialized) {
-            callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = "The bridge is still starting."))
+            callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, offset = offset, error = "The bridge is still starting."))
             return
         }
         if (!prefs.relayEnabled) {
-            callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = "Relay is paused on the phone."))
+            callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, offset = offset, error = "Relay is paused on the phone."))
             return
         }
         if (!PatchBridgeClient.isAvailable(appContext)) {
             callback(com.openbubbles.wear.protocol.GroupsResult(
                 requestId = requestId,
-                error = "Direct bridge is disabled in Wear patches settings."
+                offset = offset,
+                error = if (PatchBridgeClient.patchInstalled && !PatchBridgeClient.bridgeEnabled) {
+                    "Wear bridge is disabled in OpenBubbles settings. Enable it, then retry chat discovery."
+                } else {
+                    "OpenBubbles Wear patch is unavailable. Check the patch and try again."
+                }
             ))
             return
         }
-        PatchBridgeClient.request(appContext, "chats", JSONObject().put("limit", 100), 12_000) { reply ->
+        PatchBridgeClient.request(appContext, "chats", JSONObject().put("limit", 40).put("offset", offset), 12_000) { reply ->
             if (!prefs.relayEnabled) {
-                callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, error = "Relay is paused on the phone."))
+                callback(com.openbubbles.wear.protocol.GroupsResult(requestId = requestId, offset = offset, error = "Relay is paused on the phone."))
                 return@request
             }
             val array = if (reply.ok) reply.json?.optJSONArray("chats") else null
@@ -711,6 +724,7 @@ object NotificationCenter {
                 callback(
                     com.openbubbles.wear.protocol.GroupsResult(
                         requestId = requestId,
+                        offset = offset,
                         error = reply.error ?: "OpenBubbles did not return its chat list."
                     )
                 )
@@ -719,9 +733,7 @@ object NotificationCenter {
             val jsonChats = (0 until array.length()).mapNotNull { array.optJSONObject(it) }
             // Import oldest first so the bounded directory keeps the newest chats.
             val imported = jsonChats.mapNotNull(BridgeJson::thread).asReversed().map(::storeBridgeThread)
-            val retained = store.snapshot().map { it.id }.toSet()
             val visible = imported.map(::decorate).map { it.toSummary() }
-                .filter { it.id in retained }
                 .distinctBy { it.id }
                 .sortedByDescending { it.lastTimestamp }
             prefs.lastChatDiscoveryAt = System.currentTimeMillis()
@@ -729,6 +741,8 @@ object NotificationCenter {
             callback(
                 com.openbubbles.wear.protocol.GroupsResult(
                     requestId = requestId,
+                    offset = reply.json?.optInt("offset", offset) ?: offset,
+                    nextOffset = reply.json?.takeIf { it.has("nextOffset") }?.optInt("nextOffset"),
                     groups = visible.filter { it.isGroup },
                     chats = visible.filterNot { it.isGroup },
                     note = "Read directly from OpenBubbles with the Wear patch. Open a chat to load its history."
@@ -753,26 +767,42 @@ object NotificationCenter {
                 discoveryRunning = true
                 prefs.lastChatDiscoveryAt = now
             }
-            PatchBridgeClient.request(appContext, "chats", JSONObject().put("limit", 100), 12_000) { reply ->
-                try {
-                    if (!prefs.relayEnabled) return@request
-                    val array = if (reply.ok) reply.json?.optJSONArray("chats") else null
-                    if (array != null) {
+            fun loadPage(offset: Int) {
+                PatchBridgeClient.request(appContext, "chats", JSONObject().put("limit", 40).put("offset", offset), 12_000) { reply ->
+                    var pagePending = false
+                    try {
+                        if (!prefs.relayEnabled) return@request
+                        val json = if (reply.ok) reply.json else null
+                        val array = json?.optJSONArray("chats")
+                        if (array == null) {
+                            prefs.lastChatDiscoveryAt = 0L
+                            return@request
+                        }
                         (0 until array.length())
                             .mapNotNull { array.optJSONObject(it) }
                             .mapNotNull(BridgeJson::thread)
                             .asReversed()
                             .forEach(::storeBridgeThread)
-                        scheduleSync()
-                    } else {
+                        val nextOffset = json.optInt("nextOffset", -1)
+                        if (nextOffset > offset && nextOffset <= 5000) {
+                            pagePending = true
+                            loadPage(nextOffset)
+                        } else if (json.has("nextOffset")) {
+                            prefs.lastChatDiscoveryAt = 0L
+                            Log.w(TAG, "Direct chat discovery returned a non-advancing offset: $nextOffset after $offset")
+                        } else {
+                            prefs.lastChatDiscoveryAt = System.currentTimeMillis()
+                            scheduleSync()
+                        }
+                    } catch (t: Throwable) {
                         prefs.lastChatDiscoveryAt = 0L
+                        Log.w(TAG, "Direct chat discovery failed", t)
+                    } finally {
+                        if (!pagePending) synchronized(discoveryLock) { discoveryRunning = false }
                     }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Direct chat discovery failed", t)
-                } finally {
-                    synchronized(discoveryLock) { discoveryRunning = false }
                 }
             }
+            loadPage(0)
             return
         }
         if (!ShizukuSetup.hasPermission()) return

@@ -45,10 +45,32 @@ object Wire {
     }
 
     fun groupsForTransport(result: GroupsResult, maxBytes: Int = 90_000): GroupsResult {
-        var summaries = (result.groups + result.chats).sortedByDescending { it.lastTimestamp }.map { it.forTransport() }
-        fun resultWith(chats: List<ThreadSummary>) = result.copy(groups = chats.filter { it.isGroup }, chats = chats.filterNot { it.isGroup })
+        val original = (result.groups + result.chats).sortedWith(
+            compareByDescending<ThreadSummary> { it.lastTimestamp }.thenBy { it.id }
+        )
+        var summaries = original.map { it.forTransport() }
+        fun resultWith(chats: List<ThreadSummary>) = result.copy(
+            groups = chats.filter { it.isGroup },
+            chats = chats.filterNot { it.isGroup },
+            nextOffset = if (chats.size < original.size) result.offset + chats.size else result.nextOffset
+        )
         while (summaries.size > 1 && encodeBytes(resultWith(summaries)).size > maxBytes) summaries = summaries.dropLast(1)
         return resultWith(summaries)
+    }
+
+    fun groupsPage(result: GroupsResult, offset: Int, limit: Int): GroupsResult {
+        val sorted = (result.groups + result.chats).sortedWith(
+            compareByDescending<ThreadSummary> { it.lastTimestamp }.thenBy { it.id }
+        )
+        val start = offset.coerceIn(0, sorted.size)
+        val end = minOf(sorted.size, start + limit.coerceAtLeast(1))
+        val page = sorted.subList(start, end)
+        return result.copy(
+            groups = page.filter { it.isGroup },
+            chats = page.filterNot { it.isGroup },
+            offset = offset,
+            nextOffset = end.takeIf { it < sorted.size }
+        )
     }
 
     private fun ThreadSummary.forTransport(): ThreadSummary = copy(
