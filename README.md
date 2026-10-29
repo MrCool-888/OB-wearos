@@ -10,15 +10,16 @@ Apple's servers directly and never handles your account or encryption keys.
 
 ### Experimental Morphe version
 
-The **2.1.7 release** fixes group titles that still showed an OpenBubbles identifier such as
-`chat125428204935`; unnamed groups now list their participants' saved contact names. It keeps Morphe
-chat discovery and history for native
+The **2.1.8 release** fixes photos and GIFs in chats that the patched OpenBubbles bridge had not
+downloaded yet: the patch now exposes every image attachment and downloads it on the watch's first
+request. The watch tile is redesigned with card rows, ellipsis on every line, and a single footer so
+text no longer clips on a 432×432 display. It keeps Morphe chat discovery and history for native
 OpenBubbles 2.0.0 (20002289), including UUID and exact 72-character hexadecimal conversation IDs with explicit
-group metadata. It requires the patched OpenBubbles APK update, which contains Morphe patch 1.2.4, and both
-companion apps 2.1.7. The patch adds paginated chat discovery/history, contact names for chats and group
+group metadata. It requires the patched OpenBubbles APK update, which contains Morphe patch 1.2.5, and both
+companion apps 2.1.8. The patch adds paginated chat discovery/history, contact names for chats and group
 senders, sending without a notification, and new one-to-one chats from the watch. OB Settings → Morphe patches
-controls the runtime bridge. See [Install 2.1.7](docs/INSTALL-2.1.7.md), the
-[2.1.7 release notes](docs/RELEASE-2.1.7.md), and the [Morphe build notes](docs/MORPHE.md).
+controls the runtime bridge. See [Install 2.1.8](docs/INSTALL-2.1.8.md), the
+[2.1.8 release notes](docs/RELEASE-2.1.8.md), and the [Morphe build notes](docs/MORPHE.md).
 
 ## How it works
 
@@ -387,7 +388,7 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-Source builds now produce phone/watch **2.1.7** (versionCode 20), using backward-compatible protocol
+Source builds now produce phone/watch **2.1.8** (versionCode 21), using backward-compatible protocol
 version 3. Update both apps together. Without the optional patch, sending still requires a live or
 retained notification reply action. [Morphe notes](docs/MORPHE.md) describe the direct path.
 

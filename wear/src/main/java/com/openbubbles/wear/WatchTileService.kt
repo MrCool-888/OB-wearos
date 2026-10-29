@@ -43,7 +43,7 @@ class WatchTileService : TileService() {
 
     private fun buildLayout(state: WatchState): LayoutElementBuilders.LayoutElement {
         val unread = state.conversations.filter { it.unread }
-        val latest = unread.take(3)
+        val latest = unread.take(MAX_ROWS)
         val column = LayoutElementBuilders.Column.Builder()
             .setWidth(DimensionBuilders.expand())
             .setHeight(DimensionBuilders.expand())
@@ -54,14 +54,14 @@ class WatchTileService : TileService() {
                             .setColor(ColorBuilders.argb(BACKGROUND))
                             .setCorner(
                                 ModifiersBuilders.Corner.Builder()
-                                    .setRadius(DimensionBuilders.dp(18f))
+                                    .setRadius(DimensionBuilders.dp(20f))
                                     .build()
                             )
                             .build()
                     )
                     .setPadding(
                         ModifiersBuilders.Padding.Builder()
-                            .setAll(DimensionBuilders.dp(12f))
+                            .setAll(DimensionBuilders.dp(10f))
                             .build()
                     )
                     .build()
@@ -69,36 +69,19 @@ class WatchTileService : TileService() {
             .addContent(header(state, unread.size))
 
         if (latest.isEmpty()) {
+            column.addContent(spacer(8f))
             column.addContent(emptyState(state))
         } else {
             latest.forEach { summary ->
-                column.addContent(spacer(6f))
-                column.addContent(row(summary))
-            }
-            if (unread.size > latest.size) {
                 column.addContent(spacer(4f))
-                column.addContent(
-                    text(
-                        text = "+${unread.size - latest.size} more unread",
-                        size = 12f,
-                        color = TERTIARY,
-                        maxLines = 1
-                    )
-                )
+                column.addContent(row(summary))
             }
         }
 
-        val queued = state.queuedCount
-        if (queued > 0) {
+        val footer = footer(state, unread.size - latest.size)
+        if (footer != null) {
             column.addContent(spacer(4f))
-            column.addContent(
-                text(
-                    text = "$queued queued to send",
-                    size = 12f,
-                    color = TERTIARY,
-                    maxLines = 1
-                )
-            )
+            column.addContent(footer)
         }
         return column.build()
     }
@@ -120,9 +103,10 @@ class WatchTileService : TileService() {
             LayoutElementBuilders.Text.Builder()
                 .setText("OpenBubbles")
                 .setMaxLines(1)
+                .setOverflow(LayoutElementBuilders.TEXT_OVERFLOW_ELLIPSIZE_END)
                 .setFontStyle(
                     LayoutElementBuilders.FontStyle.Builder()
-                        .setSize(DimensionBuilders.sp(14f))
+                        .setSize(DimensionBuilders.sp(13f))
                         .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                         .setColor(ColorBuilders.argb(PRIMARY))
                         .build()
@@ -134,15 +118,12 @@ class WatchTileService : TileService() {
             row.addContent(
                 text(
                     text = if (unread == 1) "1 unread" else "$unread unread",
-                    size = 12f,
-                    color = ACCENT,
-                    maxLines = 1
+                    size = 11f,
+                    color = ACCENT
                 )
             )
         } else if (!state.phoneOnline) {
-            row.addContent(
-                text(text = "Offline", size = 12f, color = ACCENT, maxLines = 1)
-            )
+            row.addContent(text(text = "Offline", size = 11f, color = ACCENT))
         }
         return row.build()
     }
@@ -165,9 +146,10 @@ class WatchTileService : TileService() {
                     text = "All caught up",
                     size = 16f,
                     color = SECONDARY,
-                    maxLines = 1
+                    weight = LayoutElementBuilders.FONT_WEIGHT_MEDIUM
                 )
             )
+            .addContent(spacer(2f))
             .addContent(
                 text(
                     text = if (state.phoneOnline) {
@@ -175,9 +157,8 @@ class WatchTileService : TileService() {
                     } else {
                         "Phone offline · showing saved chats"
                     },
-                    size = 12f,
-                    color = TERTIARY,
-                    maxLines = 1
+                    size = 11f,
+                    color = TERTIARY
                 )
             )
             .build()
@@ -188,10 +169,28 @@ class WatchTileService : TileService() {
         } else {
             launchTo(summary.id)
         }
-        val column = LayoutElementBuilders.Column.Builder()
+        return LayoutElementBuilders.Column.Builder()
             .setWidth(DimensionBuilders.expand())
             .setModifiers(
                 ModifiersBuilders.Modifiers.Builder()
+                    .setBackground(
+                        ModifiersBuilders.Background.Builder()
+                            .setColor(ColorBuilders.argb(CARD))
+                            .setCorner(
+                                ModifiersBuilders.Corner.Builder()
+                                    .setRadius(DimensionBuilders.dp(12f))
+                                    .build()
+                            )
+                            .build()
+                    )
+                    .setPadding(
+                        ModifiersBuilders.Padding.Builder()
+                            .setStart(DimensionBuilders.dp(8f))
+                            .setEnd(DimensionBuilders.dp(8f))
+                            .setTop(DimensionBuilders.dp(5f))
+                            .setBottom(DimensionBuilders.dp(5f))
+                            .build()
+                    )
                     .setClickable(
                         ModifiersBuilders.Clickable.Builder()
                             .setId("chat-${summary.id}")
@@ -204,9 +203,10 @@ class WatchTileService : TileService() {
                 LayoutElementBuilders.Text.Builder()
                     .setText(summary.title.ifBlank { "Conversation" })
                     .setMaxLines(1)
+                    .setOverflow(LayoutElementBuilders.TEXT_OVERFLOW_ELLIPSIZE_END)
                     .setFontStyle(
                         LayoutElementBuilders.FontStyle.Builder()
-                            .setSize(DimensionBuilders.sp(14f))
+                            .setSize(DimensionBuilders.sp(13f))
                             .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                             .setColor(ColorBuilders.argb(PRIMARY))
                             .build()
@@ -216,12 +216,17 @@ class WatchTileService : TileService() {
             .addContent(
                 text(
                     text = preview(summary),
-                    size = 12f,
-                    color = SECONDARY,
-                    maxLines = 1
+                    size = 11f,
+                    color = SECONDARY
                 )
             )
-        return column.build()
+            .build()
+    }
+
+    /** One combined line so the footer never pushes rows past the tile edge. */
+    private fun footer(state: WatchState, hiddenUnread: Int): LayoutElementBuilders.Text? {
+        val label = tileFooter(hiddenUnread, state.queuedCount) ?: return null
+        return text(text = label, size = 11f, color = TERTIARY)
     }
 
     private fun preview(summary: ThreadSummary): String = when {
@@ -246,14 +251,16 @@ class WatchTileService : TileService() {
         text: String,
         size: Float,
         color: Int,
-        maxLines: Int
+        weight: Int = LayoutElementBuilders.FONT_WEIGHT_NORMAL
     ): LayoutElementBuilders.Text =
         LayoutElementBuilders.Text.Builder()
             .setText(text)
-            .setMaxLines(maxLines)
+            .setMaxLines(1)
+            .setOverflow(LayoutElementBuilders.TEXT_OVERFLOW_ELLIPSIZE_END)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
                     .setSize(DimensionBuilders.sp(size))
+                    .setWeight(weight)
                     .setColor(ColorBuilders.argb(color))
                     .build()
             )
@@ -268,10 +275,20 @@ class WatchTileService : TileService() {
     private companion object {
         const val RESOURCES_VERSION = "1"
         const val FRESHNESS_MS = 15 * 60 * 1000L
+        const val MAX_ROWS = 3
         const val BACKGROUND = 0xFF10151C.toInt()
+        const val CARD = 0xFF1A222C.toInt()
         const val PRIMARY = 0xFFFFFFFF.toInt()
         const val SECONDARY = 0xFFB8C4D4.toInt()
         const val TERTIARY = 0xFF8A97A8.toInt()
         const val ACCENT = 0xFF7FB2FF.toInt()
     }
+}
+
+internal fun tileFooter(hiddenUnread: Int, queued: Int): String? {
+    val parts = buildList {
+        if (hiddenUnread > 0) add("+$hiddenUnread more unread")
+        if (queued > 0) add("$queued queued to send")
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
