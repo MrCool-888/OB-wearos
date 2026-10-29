@@ -44,7 +44,7 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
  * service's worker thread, so waiting for a coroutine continuation is safe.
  */
 final class BridgeOps {
-    static final String PATCH_VERSION = "1.2.1";
+    static final String PATCH_VERSION = "1.2.2";
     static final int API_VERSION = 1;
 
     private static final String TAG = "OBWearPatch";
@@ -61,6 +61,7 @@ final class BridgeOps {
     private static final Pattern CHAT_GUID = Pattern.compile("^(iMessage|SMS|RCS);[+-];[^;\\s\\p{Cntrl}]{1,512}$");
     private static final Pattern NATIVE_CHAT_GUID = Pattern.compile(
             "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+    private static final Pattern NATIVE_GROUP_GUID = Pattern.compile("(?i)^[0-9a-f]{72}$");
     private static final Pattern PHONE = Pattern.compile("\\+?[0-9 ().-]+");
     private static final Pattern EMAIL = Pattern.compile(
             "[A-Z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+",
@@ -337,7 +338,8 @@ final class BridgeOps {
     }
 
     static boolean validChatGuid(String value) {
-        return value != null && (CHAT_GUID.matcher(value).matches() || NATIVE_CHAT_GUID.matcher(value).matches());
+        return value != null && (CHAT_GUID.matcher(value).matches() || NATIVE_CHAT_GUID.matcher(value).matches()
+                || NATIVE_GROUP_GUID.matcher(value).matches());
     }
 
     static String guidFromThreadId(String threadId) {
@@ -403,7 +405,7 @@ final class BridgeOps {
         } catch (Throwable t) {
             Log.w(TAG, "Unable to read participants for " + chat.getGuid(), t);
         }
-        boolean group = chat.isGroup();
+        boolean group = participants.length() > 1 || chat.isGroup();
         String title = firstNonBlank(chat.getDisplayName(), chat.getTitle(),
                 group ? null : address, chat.getChatIdentifier(), chat.getGuid());
         out.put("title", bounded(title, 160));
@@ -536,11 +538,19 @@ final class BridgeOps {
         if (attachment) out.put("attachment", true);
         if (fromMe) {
             try {
-                DeliveryState state = message.getDeliveryStateFlow().getValue();
-                String status = state instanceof DeliveryState.Failed ? "failed" :
-                        state instanceof DeliveryState.Read ? "read" :
-                        state instanceof DeliveryState.Delivered || state instanceof DeliveryState.DeliveredQuietly ? "delivered" :
-                        state instanceof DeliveryState.Sending ? "sending" : state instanceof DeliveryState.Sent ? "sent" : null;
+                String status;
+                if (message instanceof com.localob.messaging.backend.db.Message) {
+                    // ObjectBox hydrates fields before OB initializes the entity's delivery flow.
+                    com.localob.messaging.backend.db.Message entity = (com.localob.messaging.backend.db.Message) message;
+                    status = entity.getDateRead() != null ? "read" : entity.getDateDelivered() != null ? "delivered" :
+                            entity.getErrorMessage() != null ? "failed" : entity.getSendingServiceId() != null ? "sending" : "sent";
+                } else {
+                    DeliveryState state = message.getDeliveryStateFlow().getValue();
+                    status = state instanceof DeliveryState.Failed ? "failed" :
+                            state instanceof DeliveryState.Read ? "read" :
+                            state instanceof DeliveryState.Delivered || state instanceof DeliveryState.DeliveredQuietly ? "delivered" :
+                            state instanceof DeliveryState.Sending ? "sending" : state instanceof DeliveryState.Sent ? "sent" : null;
+                }
                 if (status != null) out.put("status", status);
             } catch (Throwable t) {
                 Log.d(TAG, "Message delivery status unavailable", t);
