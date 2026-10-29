@@ -99,8 +99,8 @@ jobs:
       - name: Stage release assets
         run: |
           mkdir -p release-assets
-          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.2.apk
-          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.2.apk
+          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.3.apk
+          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.3.apk
 
           if [ -d morphe/build/installable ]; then
             mkdir -p release-assets/phone
@@ -122,44 +122,37 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') && env.HAS_RELEASE_SIGNING == 'true'
         with:
-          tag_name: 2.1.2-${{ github.run_number }}
-          name: OpenBubbles Wear 2.1.2 (build ${{ github.run_number }})
+          tag_name: 2.1.3-${{ github.run_number }}
+          name: OpenBubbles Wear 2.1.3 (build ${{ github.run_number }})
           prerelease: true
           body: |
-            ## OpenBubbles Wear 2.1.2
+            ## OpenBubbles Wear 2.1.3
 
             Automatic release built from `main`.
+
+            Preserves backend delivery status and failed-attempt labels instead of treating every accepted request as sent. Apple rate limits are unchanged. The reported missing group-message bubble still needs device validation; this release does not claim to fix its root cause.
 
             ### Install
 
             **Phone (companion bridge):**
             ```bash
-            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.2.apk
+            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.3.apk
             ```
 
             **Watch (companion app):**
             ```bash
-            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.2.apk
+            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.3.apk
             ```
 
-            **Patched OpenBubbles 2.0.0 (optional, for direct bridge features):**
-            Install all four APKs together:
-            ```bash
-            adb -s PHONE_SERIAL install-multiple -r \
-              phone/openbubbles-wear-patched-base.apk \
-              phone/config.arm64_v8a.apk \
-              phone/config.en.apk \
-              phone/config.mdpi.apk
-            ```
+            This is a companion-only update for existing 2.1.2 users: install both APKs with `-r` and the same signing key. Keep OpenBubbles and Morphe patch 1.2.0 installed as they are; no replacement or repatch is needed. Do not uninstall.
 
-            See [docs/INSTALL-2.1.2.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.2.md) for full installation instructions and important warnings about signing keys and data loss when replacing stock OpenBubbles.
+            See [docs/INSTALL-2.1.3.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.3.md) for full instructions. Users on a patch older than 1.2.0 should use the [2.1.2 full setup guide](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.2.md).
 
             ### What's included
 
-            - `OpenBubblesWear-Phone-2.1.2.apk` — Wear bridge companion for phone
-            - `OpenBubblesWear-Watch-2.1.2.apk` — Wear bridge companion for watch
-            - `phone/` — complete patched OpenBubbles 2.0.0 ARM64 APK set (4 files, install together)
-            - `OpenBubblesWear-Morphe-1.2.0.mpp` — rebuildable Morphe patch bundle
+            - `OpenBubblesWear-Phone-2.1.3.apk` and `OpenBubblesWear-Watch-2.1.3.apk` — companion update
+            - `phone/` — unchanged patched OpenBubbles 2.0.0 ARM64 APK set, when built
+            - `OpenBubblesWear-Morphe-1.2.0.mpp` — unchanged Morphe patch bundle
             - `SHA256SUMS.txt` — checksums for all assets
           files: |
             release-assets/*

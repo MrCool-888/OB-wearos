@@ -378,6 +378,24 @@ private fun MessageBubble(
                         color = scheme.error
                     )
 
+                    "sent" -> Text(
+                        text = " · Sent",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.7f)
+                    )
+
+                    "delivered" -> Text(
+                        text = " · Delivered",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.7f)
+                    )
+
+                    "read" -> Text(
+                        text = " · Read",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.7f)
+                    )
+
                     "unconfirmed" -> Text(
                         text = " · Not confirmed",
                         style = MaterialTheme.typography.labelSmall,

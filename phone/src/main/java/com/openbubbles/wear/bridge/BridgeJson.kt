@@ -14,6 +14,7 @@ import org.json.JSONObject
  */
 internal object BridgeJson {
     private const val PREFIX = "chat_"
+    private val DELIVERY_STATUSES = setOf("sending", "sent", "delivered", "read", "failed")
 
     fun canonicalId(raw: String?): String? {
         val value = raw?.trim().orEmpty()
@@ -88,6 +89,9 @@ internal object BridgeJson {
             timestamp = timestamp,
             sender = sender,
             fromMe = json.optBoolean("fromMe"),
+            status = json.optString("status").takeIf {
+                json.optBoolean("fromMe") && it in DELIVERY_STATUSES
+            },
             attachment = attachment,
             mediaId = if (uri != null && mime != null) Protocol.mediaId(id, mime) else null,
             mediaMime = if (uri != null) mime else null,
