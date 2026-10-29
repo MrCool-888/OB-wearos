@@ -20,6 +20,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 
 import kotlinx.coroutines.flow.StateFlow;
@@ -216,5 +217,18 @@ public class BridgeOpsTest {
         assertEquals(1234L, json.getLong("lastTimestamp"));
         assertEquals("Alex", json.getString("title"));
         assertEquals("+15551234567", json.getString("address"));
+    }
+
+    @Test public void chatDirectoryKeepsRowWhenLatestMessageMetadataIsUnreadable() throws Exception {
+        Message unreadable = proxy(Message.class, (self, method, args) -> {
+            if (method.getName().equals("getTimestamp") || method.getName().equals("getContentFlow")) {
+                throw new IllegalStateException("optional message metadata unavailable");
+            }
+            throw new AssertionError(method.getName());
+        });
+        JSONObject json = new JSONObject();
+        BridgeOps.putChatActivity(json, unreadable, new Date(1234L));
+        assertEquals(1234L, json.getLong("lastTimestamp"));
+        assertEquals("", json.getString("lastPreview"));
     }
 }

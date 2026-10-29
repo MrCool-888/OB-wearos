@@ -11,6 +11,7 @@ data class BridgeUiState(
     val notificationAccess: Boolean = false,
     val directBridge: Boolean = false,
     val directBridgeEnabled: Boolean = true,
+    val patchInstalled: Boolean = false,
     val backendState: String = "Not connected",
     val openBubblesInstalled: Boolean = false,
     val openBubblesVersion: String = "",
@@ -41,7 +42,8 @@ fun readBridgeUiState(context: Context): BridgeUiState {
     return BridgeUiState(
         notificationAccess = BridgeInfo.hasNotificationAccess(context),
         directBridge = PatchBridgeClient.isAvailable(context),
-        directBridgeEnabled = preferences.directBridgeEnabled,
+        directBridgeEnabled = PatchBridgeClient.bridgeEnabled,
+        patchInstalled = PatchBridgeClient.patchInstalled,
         backendState = PatchBridgeClient.backendState,
         openBubblesInstalled = BridgeInfo.isOpenBubblesInstalled(context),
         openBubblesVersion = BridgeInfo.openBubblesVersion(context),

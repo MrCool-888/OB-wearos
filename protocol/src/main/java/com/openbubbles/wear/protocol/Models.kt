@@ -300,12 +300,14 @@ data class ContactsPage(
 )
 
 @Serializable
-data class GroupsRequest(val version: Int = Protocol.VERSION, val requestId: String)
+data class GroupsRequest(val version: Int = Protocol.VERSION, val requestId: String, val offset: Int = 0)
 
 @Serializable
 data class GroupsResult(
     val version: Int = Protocol.VERSION,
     val requestId: String,
+    val offset: Int = 0,
+    val nextOffset: Int? = null,
     /** Groups only, kept for 1.5.0 watches. */
     val groups: List<ThreadSummary> = emptyList(),
     /** One-to-one chats found without a notification. */

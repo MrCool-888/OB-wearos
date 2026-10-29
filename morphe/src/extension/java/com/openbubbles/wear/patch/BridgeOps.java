@@ -44,13 +44,14 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
  * service's worker thread, so waiting for a coroutine continuation is safe.
  */
 final class BridgeOps {
-    static final String PATCH_VERSION = "1.1.0";
+    static final String PATCH_VERSION = "1.2.0";
     static final int API_VERSION = 1;
 
     private static final String TAG = "OBWearPatch";
     private static final long OP_TIMEOUT_MS = 20_000L;
     private static final int DEFAULT_CHAT_LIMIT = 80;
     private static final int MAX_CHAT_LIMIT = 200;
+    private static final int MAX_CHAT_OFFSET = 5000;
     private static final int DEFAULT_MESSAGE_LIMIT = 80;
     private static final int MAX_MESSAGE_LIMIT = 240;
     static final int MAX_TEXT_LENGTH = 800;
@@ -87,28 +88,53 @@ final class BridgeOps {
         BackendService backend = backend();
         if (backend == null) return notReady(out);
         int limit = clamp(request.optInt("limit", DEFAULT_CHAT_LIMIT), 1, MAX_CHAT_LIMIT);
+        int offset = clamp(request.optInt("offset", 0), 0, MAX_CHAT_OFFSET);
         List<com.localob.messaging.backend.db.Chat> entities = Database.INSTANCE.getChats().getAll();
         List<JSONObject> chats = new ArrayList<>();
+        int deleted = 0;
+        int routingStubs = 0;
+        int invalidGuids = 0;
+        int unreadableRows = 0;
         for (com.localob.messaging.backend.db.Chat chat : entities) {
             try {
-                if (chat.getDateDeleted() != null || chat.isRoutingStub()) continue;
-                if (!validChatGuid(chat.getGuid())) continue;
+                if (chat.getDateDeleted() != null) {
+                    deleted++;
+                    continue;
+                }
+                if (chat.isRoutingStub()) {
+                    routingStubs++;
+                    continue;
+                }
+                if (!validChatGuid(chat.getGuid())) {
+                    invalidGuids++;
+                    continue;
+                }
                 chats.add(chatJson(chat));
             } catch (Throwable t) {
-                Log.w(TAG, "Skipping unreadable chat", t);
+                unreadableRows++;
             }
         }
-        Collections.sort(chats, (left, right) ->
-                Long.compare(right.optLong("lastTimestamp", 0L), left.optLong("lastTimestamp", 0L)));
+        if (deleted + routingStubs + invalidGuids + unreadableRows > 0) {
+            Log.w(TAG, "Skipped chat rows: deleted=" + deleted + ", routing-stub=" + routingStubs +
+                    ", invalid-guid=" + invalidGuids + ", unreadable=" + unreadableRows);
+        }
+        Collections.sort(chats, (left, right) -> {
+            int byActivity = Long.compare(right.optLong("lastTimestamp", 0L), left.optLong("lastTimestamp", 0L));
+            return byActivity != 0 ? byActivity : left.optString("id").compareTo(right.optString("id"));
+        });
         JSONArray array = new JSONArray();
         int chars = 0;
-        for (int i = 0; i < chats.size() && i < limit; i++) {
-            JSONObject chat = chats.get(i);
+        int end = Math.min(chats.size(), offset + limit);
+        int index = Math.min(offset, chats.size());
+        for (; index < end; index++) {
+            JSONObject chat = chats.get(index);
             chars += chat.toString().length() + 1;
             if (chars > MAX_COLLECTION_CHARS) break;
             array.put(chat);
         }
         out.put("ok", true);
+        out.put("offset", offset);
+        if (index < chats.size()) out.put("nextOffset", offset + array.length());
         out.put("chats", array);
         return out;
     }
@@ -383,15 +409,37 @@ final class BridgeOps {
         if (!group && address != null) out.put("address", address);
         out.put("participants", participants);
         out.put("unread", Boolean.TRUE.equals(chat.getHasUnreadMessage()));
-        Message last = chat.getDbLatestMessage().getTarget();
-        if (last != null) {
-            out.put("lastTimestamp", last.getTimestamp().toEpochMilliseconds());
-            out.put("lastPreview", preview(last));
-        } else {
-            Date date = chat.getDbOnlyLatestMessageDate();
-            out.put("lastTimestamp", date == null ? 0L : date.getTime());
+        Date fallbackDate = null;
+        try {
+            fallbackDate = chat.getDbOnlyLatestMessageDate();
+        } catch (Throwable ignored) {
         }
+        Message last = null;
+        try {
+            io.objectbox.relation.ToOne<com.localob.messaging.backend.db.Message> latest = chat.getDbLatestMessage();
+            if (latest != null) last = latest.getTarget();
+        } catch (Throwable ignored) {
+        }
+        putChatActivity(out, last, fallbackDate);
         return out;
+    }
+
+    static void putChatActivity(JSONObject out, Message last, Date fallbackDate) throws Exception {
+        long timestamp = fallbackDate == null ? 0L : fallbackDate.getTime();
+        String lastPreview = "";
+        if (last != null) {
+            try {
+                kotlinx.datetime.Instant messageTimestamp = last.getTimestamp();
+                if (messageTimestamp != null) timestamp = messageTimestamp.toEpochMilliseconds();
+            } catch (Throwable ignored) {
+            }
+            try {
+                lastPreview = preview(last);
+            } catch (Throwable ignored) {
+            }
+        }
+        out.put("lastTimestamp", timestamp);
+        out.put("lastPreview", bounded(lastPreview, MAX_TEXT_LENGTH));
     }
 
     private static JSONObject threadJson(Chat chat, int limit) throws Exception {

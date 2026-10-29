@@ -14,10 +14,38 @@ class GroupsProtocolTest {
         assertFalse(Protocol.isChatGuid("iMessage;+;"))
     }
     @Test fun discoveryRequestAndResultRoundTrip() {
-        val request = GroupsRequest(requestId = "r")
+        val request = GroupsRequest(requestId = "r", offset = 40)
         assertEquals(request, Wire.decodeBytes<GroupsRequest>(Wire.encodeBytes(request)))
-        val result = GroupsResult(requestId = "r", groups = listOf(WireThread(id = "iMessage;+;chat1", title = "Family", isGroup = true).toSummary()), note = "Partial")
+        assertEquals(0, Wire.decode<GroupsRequest>("{\"requestId\":\"legacy\"}")!!.offset)
+        val result = GroupsResult(requestId = "r", offset = 40, nextOffset = 80,
+            groups = listOf(WireThread(id = "iMessage;+;chat1", title = "Family", isGroup = true).toSummary()), note = "Page")
         assertEquals(result, Wire.decodeBytes<GroupsResult>(Wire.encodeBytes(result)))
+        assertNull(Wire.decode<GroupsResult>("{\"requestId\":\"legacy\"}")!!.nextOffset)
+    }
+
+    @Test fun wireSizeTrimReturnsTheFirstUnsentOffset() {
+        val summaries = List(100) { index ->
+            WireThread(id = "chat-$index", title = "Person $index", lastPreview = "p".repeat(160),
+                participants = List(12) { "p".repeat(80) }, updatedAt = 10_000L - index).toSummary()
+        }
+        val page = Wire.groupsForTransport(GroupsResult(requestId = "r", offset = 40, nextOffset = 140, chats = summaries))
+        assertTrue(page.chats.isNotEmpty())
+        assertTrue(page.chats.size < summaries.size)
+        assertEquals(40 + page.chats.size, page.nextOffset)
+        assertEquals(summaries.take(page.chats.size).map { it.id }, page.chats.map { it.id })
+    }
+
+    @Test fun legacyDirectoryPagingAdvancesAndStopsAtTheEnd() {
+        val all = List(95) { index -> WireThread(id = "chat-$index", title = "Chat $index", updatedAt = 95L - index).toSummary() }
+        val source = GroupsResult(requestId = "r", chats = all)
+        val first = Wire.groupsPage(source, 0, 40)
+        val second = Wire.groupsPage(source, first.nextOffset!!, 40)
+        val last = Wire.groupsPage(source, second.nextOffset!!, 40)
+        assertEquals(40, first.chats.size)
+        assertEquals(40, second.chats.size)
+        assertEquals(15, last.chats.size)
+        assertNull(last.nextOffset)
+        assertEquals(all.map { it.id }, (first.chats + second.chats + last.chats).map { it.id })
     }
     @Test fun sendRequestRequiresThreadAndRoundTrips() {
         val request = SendRequest(requestId = "r", threadId = "iMessage;+;chat1", text = "Hi")

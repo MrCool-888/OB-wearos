@@ -51,17 +51,9 @@ class BridgePreferences(context: Context) {
         prefs.edit().remove(KEY_LAST_PUBLISH).apply()
     }
 
-    /** Whether the companion may use the injected Wear patch inside patched OpenBubbles. */
-    var directBridgeEnabled: Boolean
-        get() = prefs.getBoolean(KEY_DIRECT_BRIDGE_ENABLED, true)
-        set(value) {
-            prefs.edit().putBoolean(KEY_DIRECT_BRIDGE_ENABLED, value).apply()
-        }
-
     private companion object {
         const val PREFS_NAME = "openbubbles_wear_bridge"
         const val KEY_RELAY_ENABLED = "relay_enabled"
-        const val KEY_DIRECT_BRIDGE_ENABLED = "direct_bridge_enabled"
         const val KEY_LAST_PUBLISH = "last_publish"
         const val KEY_LAST_WATCH = "last_watch"
         const val KEY_LAST_NOTIFICATION = "last_notification"

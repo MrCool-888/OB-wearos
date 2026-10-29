@@ -52,10 +52,15 @@ class PatchBridgeIntegrationTest {
         )
         PatchBridgeClient::class.java.getDeclaredField("available").apply { isAccessible = true }
             .setBoolean(null, true)
+        PatchBridgeClient::class.java.getDeclaredField("patchInstalled").apply { isAccessible = true }
+            .setBoolean(null, true)
+        PatchBridgeClient::class.java.getDeclaredField("bridgeEnabled").apply { isAccessible = true }
+            .setBoolean(null, true)
         PatchBridgeClient::class.java.getDeclaredField("checkedAt").apply { isAccessible = true }
             .setLong(null, System.currentTimeMillis())
         NotificationCenter::class.java.getDeclaredField("initialized").apply { isAccessible = true }
             .setBoolean(null, false)
+        BridgePreferences(context).lastChatDiscoveryAt = Long.MAX_VALUE
         NotificationCenter.init(context)
         NotificationCenter.clearCache(context)
         BridgePreferences(context).relayEnabled = true
@@ -69,7 +74,16 @@ class PatchBridgeIntegrationTest {
     @After fun cleanup() {
         PatchBridgeClient::class.java.getDeclaredField("available").apply { isAccessible = true }
             .setBoolean(null, false)
+        PatchBridgeClient::class.java.getDeclaredField("patchInstalled").apply { isAccessible = true }
+            .setBoolean(null, false)
+        PatchBridgeClient::class.java.getDeclaredField("bridgeEnabled").apply { isAccessible = true }
+            .setBoolean(null, true)
+        PatchBridgeClient::class.java.getDeclaredField("checkedAt").apply { isAccessible = true }
+            .setLong(null, 0L)
+        PatchBridgeClient::class.java.getDeclaredField("backendState").apply { isAccessible = true }
+            .set(null, "Not connected")
         BridgePreferences(context).relayEnabled = true
+        BridgePreferences(context).lastChatDiscoveryAt = 0L
         NotificationCenter.clearCache(context)
         NotificationCenter::class.java.getDeclaredField("initialized").apply { isAccessible = true }
             .setBoolean(null, false)
@@ -106,7 +120,7 @@ class PatchBridgeIntegrationTest {
         assertEquals(listOf("send"), requests.map { it.getString("op") })
     }
 
-    @Test fun discoveryKeepsBackendMetadataAndNewestChatsWithinTheCacheBudget() {
+    @Test fun directDiscoveryReturnsPageEvenWhenPhoneCacheTrimsOlderPlaceholders() {
         val chats = JSONArray()
         repeat(100) { index ->
             chats.put(JSONObject().put("id", "iMessage;-;person$index@example.com")
@@ -119,15 +133,48 @@ class PatchBridgeIntegrationTest {
         NotificationCenter.discoverChatsDirect("directory") { result = it }
         ShadowLooper.idleMainLooper()
         assertNull(result!!.error)
-        assertEquals(BridgeStore.MAX_PLACEHOLDERS, result!!.chats.size)
+        assertEquals(100, result!!.chats.size)
         assertEquals("Person 0", result!!.chats.first().title)
-        assertFalse(result!!.chats.any { it.title == "Person 99" })
+        assertEquals("Person 99", result!!.chats.last().title)
+        assertEquals(BridgeStore.MAX_PLACEHOLDERS, store().snapshot().count { it.messages.isEmpty() })
         val summary = NotificationCenter.threadFor(result!!.chats.first().id)!!.toSummary()
         assertTrue(summary.unread)
         assertTrue(summary.canReply)
         assertEquals(10_000L, summary.lastTimestamp)
         assertEquals("Preview 0", summary.lastPreview)
         assertEquals(listOf("person0@example.com"), summary.participants)
+    }
+
+    @Test fun directDiscoveryRequestsAndReturnsAdvancingPages() {
+        val ids = (0 until 95).map { "iMessage;-;page$it@example.com" }
+        respond = { request ->
+            val offset = request.optInt("offset")
+            val chats = JSONArray()
+            ids.drop(offset).take(40).forEachIndexed { index, id ->
+                chats.put(JSONObject().put("id", id).put("title", "Page ${offset + index}")
+                    .put("address", id.substringAfter(";-;")).put("lastTimestamp", 10_000L - offset - index))
+            }
+            val next = (offset + chats.length()).takeIf { it < ids.size }
+            JSONObject().put("apiVersion", 1).put("ok", true).put("offset", offset)
+                .put("chats", chats).also { if (next != null) it.put("nextOffset", next) }.toString()
+        }
+
+        val returned = mutableListOf<GroupsResult>()
+        fun requestPage(offset: Int) {
+            NotificationCenter.discoverChatsDirect("paged", offset) { returned += it }
+            ShadowLooper.idleMainLooper()
+        }
+        requestPage(0)
+        assertEquals(40, returned.single().chats.size)
+        assertEquals(40, returned.single().nextOffset)
+        requestPage(returned.last().nextOffset!!)
+        assertEquals(40, returned.last().chats.size)
+        assertEquals(80, returned.last().nextOffset)
+        requestPage(returned.last().nextOffset!!)
+        assertEquals(15, returned.last().chats.size)
+        assertNull(returned.last().nextOffset)
+        assertEquals(listOf(0, 40, 80), requests.map { it.getInt("offset") })
+        assertEquals(95, returned.flatMap { it.chats }.map { it.id }.distinct().size)
     }
 
     @Test fun historyMigratesTheAliasAndRewritesEveryMessageThreadId() {
@@ -182,14 +229,57 @@ class PatchBridgeIntegrationTest {
         assertTrue(requests.isEmpty())
     }
 
-    @Test fun directBridgeDisabledStopsProbingAndFallsBack() {
-        BridgePreferences(context).directBridgeEnabled = false
+    @Test fun disabledStatusKeepsPatchInstalledButMarksBridgeUnavailable() {
+        respond = { """{"apiVersion":1,"ok":true,"enabled":false,"backendState":"Ready"}""" }
+        var available: Boolean? = null
+        PatchBridgeClient.probe(context, force = true) { available = it }
+        ShadowLooper.idleMainLooper()
+        assertFalse(available!!)
+        assertTrue(PatchBridgeClient.patchInstalled)
+        assertFalse(PatchBridgeClient.bridgeEnabled)
         assertFalse(PatchBridgeClient.isAvailable(context))
-        assertTrue(requests.isEmpty())
     }
 
-    @Test fun directBridgeDefaultsToEnabled() {
-        assertTrue(BridgePreferences(context).directBridgeEnabled)
+    @Test fun forcedProbeRefreshesDisabledStatusEvenAtTheSameClockTime() {
+        respond = { """{"apiVersion":1,"ok":true,"enabled":false,"backendState":"Ready"}""" }
+        PatchBridgeClient.probe(context, force = true) {}
+        ShadowLooper.idleMainLooper()
+        PatchBridgeClient::class.java.getDeclaredField("checkedAt").apply { isAccessible = true }
+            .setLong(null, System.currentTimeMillis())
+
+        respond = { """{"apiVersion":1,"ok":true,"enabled":true,"backendState":"Ready"}""" }
+        var available: Boolean? = null
+        PatchBridgeClient.probe(context, force = true) { available = it }
+        ShadowLooper.idleMainLooper()
+        assertTrue(available!!)
+        assertTrue(PatchBridgeClient.patchInstalled)
+        assertTrue(PatchBridgeClient.bridgeEnabled)
+        assertTrue(PatchBridgeClient.isAvailable(context))
+        assertEquals(listOf("status", "status"), requests.map { it.getString("op") })
+    }
+
+    @Test fun missingEnabledStatusFieldKeepsOlderPatchCompatible() {
+        respond = { """{"apiVersion":1,"ok":true,"backendState":"Ready"}""" }
+        var available: Boolean? = null
+        PatchBridgeClient.probe(context, force = true) { available = it }
+        ShadowLooper.idleMainLooper()
+        assertTrue(available!!)
+        assertTrue(PatchBridgeClient.patchInstalled)
+        assertTrue(PatchBridgeClient.bridgeEnabled)
+        assertTrue(PatchBridgeClient.isAvailable(context))
+    }
+
+    @Test fun directDiscoveryExplainsKnownDisabledPatch() {
+        PatchBridgeClient::class.java.getDeclaredField("available").apply { isAccessible = true }
+            .setBoolean(null, false)
+        PatchBridgeClient::class.java.getDeclaredField("patchInstalled").apply { isAccessible = true }
+            .setBoolean(null, true)
+        PatchBridgeClient::class.java.getDeclaredField("bridgeEnabled").apply { isAccessible = true }
+            .setBoolean(null, false)
+        var result: GroupsResult? = null
+        NotificationCenter.discoverChatsDirect("disabled") { result = it }
+        assertTrue(result!!.error!!.contains("disabled in OpenBubbles"))
+        assertTrue(requests.isEmpty())
     }
 
     @Test fun backendHistoryIsMarkedAuthoritativeAndSendIsNotRetriedAfterTimeout() {

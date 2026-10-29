@@ -32,6 +32,10 @@ class BridgeManifestTest {
         assertEquals("2", evaluate("count(/manifest/application/service)"))
         assertEquals("false", evaluate("string(/manifest/application/receiver/@*[local-name()='exported'])"))
         assertEquals("false", evaluate("string(/manifest/application/service[@*[local-name()='name']='private.Service']/@*[local-name()='exported'])"))
+        val settings = "/manifest/application/activity[@*[local-name()='name']='$SETTINGS_ACTIVITY']"
+        assertEquals("1", evaluate("count($settings)"))
+        assertEquals("false", evaluate("string($settings/@*[local-name()='exported'])"))
+        assertEquals("0", evaluate("count($settings/intent-filter)"))
         val bridge = "/manifest/application/service[@*[local-name()='name']='$SERVICE_NAME']"
         assertEquals("true", evaluate("string($bridge/@*[local-name()='exported'])"))
         assertEquals(BRIDGE_ACTION, evaluate("string($bridge/intent-filter/action/@*[local-name()='name'])"))

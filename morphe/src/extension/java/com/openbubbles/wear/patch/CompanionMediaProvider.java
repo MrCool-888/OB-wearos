@@ -40,6 +40,9 @@ public final class CompanionMediaProvider extends ContentProvider {
         if (!CallerTrust.isTrusted(getContext(), Binder.getCallingUid())) {
             throw new SecurityException("The media caller is not trusted.");
         }
+        if (!PatchSettings.isEnabled(getContext())) {
+            throw new SecurityException("Wear companion bridge is disabled in OpenBubbles.");
+        }
     }
 
     @Override

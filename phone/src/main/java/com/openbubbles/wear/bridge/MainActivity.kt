@@ -278,19 +278,41 @@ private fun BridgeScreen() {
                             else "Open OpenBubbles once so it can publish recent chats, then start Shizuku and grant bridge access above. A chat can send while the phone is locked only after OpenBubbles has posted a notification for it, because that notification supplies the reply action.",
                             style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !setupBusy, onClick = {
-                            if (state.directBridge) {
-                                setupBusy = true
-                                NotificationCenter.discoverChatsDirect(java.util.UUID.randomUUID().toString()) { result ->
-                                    setupNotice = result.error ?: "Imported ${result.groups.size + result.chats.size} chats. Sync the watch."
-                                    setupNoticeFailed = result.error != null
+                            setupBusy = true
+                            PatchBridgeClient.probe(context, force = true) { direct ->
+                                if (direct) {
+                                    val requestId = java.util.UUID.randomUUID().toString()
+                                    var count = 0
+                                    fun loadPage(offset: Int) {
+                                        NotificationCenter.discoverChatsDirect(requestId, offset) { result ->
+                                            count += result.groups.size + result.chats.size
+                                            val next = result.nextOffset
+                                            if (result.error == null && next != null && next > offset && next <= 5000) {
+                                                loadPage(next)
+                                            } else {
+                                                val error = result.error ?: if (next != null) "OpenBubbles returned an invalid chat page. Retry discovery." else null
+                                                setupNotice = error ?: "Found $count chats. On the watch, tap Find chats in OpenBubbles to load the full directory."
+                                                setupNoticeFailed = error != null
+                                                setupBusy = false
+                                                refreshState()
+                                            }
+                                        }
+                                    }
+                                    loadPage(0)
+                                } else if (PatchBridgeClient.patchInstalled && !PatchBridgeClient.bridgeEnabled) {
+                                    setupNotice = "Enable Wear companion bridge in OpenBubbles → Settings → Morphe patches."
+                                    setupNoticeFailed = true
                                     setupBusy = false
                                     refreshState()
+                                } else {
+                                    setupBusy = false
+                                    runSetup { ctx ->
+                                        val result = NotificationCenter.discoverChats(ctx, java.util.UUID.randomUUID().toString())
+                                        val found = result.groups.size + result.chats.size
+                                        ShizukuSetup.StepResult(result.error == null, result.error
+                                            ?: "Imported $found ${if (found == 1) "chat" else "chats"} (${result.groups.size} ${if (result.groups.size == 1) "group" else "groups"}). Sync the watch. ${result.note.orEmpty()}")
+                                    }
                                 }
-                            } else runSetup { ctx ->
-                                val result = NotificationCenter.discoverChats(ctx, java.util.UUID.randomUUID().toString())
-                                val found = result.groups.size + result.chats.size
-                                ShizukuSetup.StepResult(result.error == null, result.error
-                                    ?: "Imported $found ${if (found == 1) "chat" else "chats"} (${result.groups.size} ${if (result.groups.size == 1) "group" else "groups"}). Sync the watch. ${result.note.orEmpty()}")
                             }
                         }) { Text(if (state.directBridge) "Find chats in OpenBubbles" else "Find chats with Shizuku") }
                     }
@@ -303,21 +325,6 @@ private fun BridgeScreen() {
                         scope.launch {
                             withContext(Dispatchers.IO) {
                                 NotificationCenter.setRelayEnabled(context, enabled)
-                            }
-                            state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
-                        }
-                    }
-                )
-            }
-            item {
-                PatchesCard(
-                    enabled = state.directBridgeEnabled,
-                    patchDetected = state.directBridge,
-                    backendState = state.backendState,
-                    onToggle = { enabled ->
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                BridgePreferences(context).directBridgeEnabled = enabled
                             }
                             state = withContext(Dispatchers.IO) { readBridgeUiState(context) }
                         }
@@ -823,7 +830,11 @@ private fun SyncCard(
                     else -> "Notification access off"
                 }
             )
-            InfoRow("Wear patch", if (state.directBridge) "Connected · ${state.backendState}" else "Not detected (notification mode)")
+            InfoRow("Wear patch", when {
+                state.patchInstalled && !state.directBridgeEnabled -> "Disabled in OpenBubbles · Settings → Morphe patches"
+                state.directBridge -> "Connected · ${state.backendState}"
+                else -> "Not detected (notification mode)"
+            })
             InfoRow(
                 "Last OpenBubbles alert",
                 if (state.lastNotificationAt > 0L) {
@@ -939,61 +950,6 @@ private fun Footer(state: BridgeUiState) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun PatchesCard(
-    enabled: Boolean,
-    patchDetected: Boolean,
-    backendState: String,
-    onToggle: (Boolean) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-        )
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                "Wear patches",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                "Use the injected Wear bridge inside patched OpenBubbles for direct chat directory, recent history, sending, and mark-read. Turn off to fall back to notification actions.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    if (enabled) "Direct bridge enabled" else "Direct bridge disabled",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = onToggle
-                )
-            }
-            if (!patchDetected && enabled) {
-                Text(
-                    "Patched OpenBubbles not detected. Install the Morphe-patched OpenBubbles APK and open it once.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else if (patchDetected && !enabled) {
-                Text(
-                    "Patched OpenBubbles detected ($backendState). Direct bridge is turned off.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
     }
 }
 

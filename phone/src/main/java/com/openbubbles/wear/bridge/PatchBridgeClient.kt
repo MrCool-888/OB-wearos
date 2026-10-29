@@ -43,32 +43,35 @@ object PatchBridgeClient {
 
     @Volatile private var available = false
     @Volatile private var checkedAt = 0L
+    @Volatile var patchInstalled: Boolean = false
+        private set
+    @Volatile var bridgeEnabled: Boolean = true
+        private set
     @Volatile var backendState: String = "Not connected"
         private set
     internal var onAvailabilityChanged: (() -> Unit)? = null
 
     /** Cached status; triggers a throttled probe when the answer is stale. */
     fun isAvailable(context: Context): Boolean {
-        if (!BridgePreferences(context).directBridgeEnabled) {
-            available = false
-            return false
-        }
         val interval = if (backendState == "Ready") CACHE_MS else PROBE_INTERVAL_MS
         if (System.currentTimeMillis() - checkedAt > interval) probe(context)
         return available
     }
 
-    fun probe(context: Context, callback: ((Boolean) -> Unit)? = null) {
+    fun probe(context: Context, force: Boolean = false, callback: ((Boolean) -> Unit)? = null) {
         val now = System.currentTimeMillis()
-        if (now - checkedAt < PROBE_INTERVAL_MS) {
+        if (!force && now - checkedAt < PROBE_INTERVAL_MS) {
             callback?.invoke(available)
             return
         }
         checkedAt = now
         request(context, "status", JSONObject(), 6_000) { reply ->
-            val found = reply.ok
+            patchInstalled = reply.ok
+            bridgeEnabled = reply.json?.optBoolean("enabled", true) ?: true
+            val found = reply.ok && bridgeEnabled
             val previousState = backendState
-            backendState = reply.json?.optString("backendState")?.takeIf { it.isNotBlank() }
+            backendState = if (patchInstalled && !bridgeEnabled) "Disabled in OpenBubbles" else
+                reply.json?.optString("backendState")?.takeIf { it.isNotBlank() }
                 ?: if (found) "Connected" else "Not connected"
             val changed = available != found
             updateAvailability(found)
@@ -110,7 +113,14 @@ object PatchBridgeClient {
                 runCatching { app.unbindService(connection!!) }
                     .onFailure { Log.d(TAG, "Unable to unbind from the patch", it) }
             }
-            if (reply.json == null) updateAvailability(false)
+            if (reply.json?.has("enabled") == true) {
+                bridgeEnabled = reply.json.optBoolean("enabled", true)
+                if (!bridgeEnabled) updateAvailability(false)
+            }
+            if (reply.json == null) {
+                patchInstalled = false
+                updateAvailability(false)
+            }
             callback(reply)
         }
 

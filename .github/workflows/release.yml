@@ -99,8 +99,8 @@ jobs:
       - name: Stage release assets
         run: |
           mkdir -p release-assets
-          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.1.apk
-          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.1.apk
+          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.2.apk
+          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.2.apk
 
           if [ -d morphe/build/installable ]; then
             mkdir -p release-assets/phone
@@ -110,7 +110,7 @@ jobs:
             cp morphe/build/installable/config.mdpi.apk release-assets/phone/
             cp morphe/build/installable/SHA256SUMS release-assets/phone/SHA256SUMS
             cp morphe/build/installable/INSTALL.txt release-assets/phone/INSTALL.txt
-            cp morphe/build/libs/openbubbles-wear-patches-1.1.0.mpp release-assets/OpenBubblesWear-Morphe-1.1.0.mpp
+            cp morphe/build/libs/openbubbles-wear-patches-1.2.0.mpp release-assets/OpenBubblesWear-Morphe-1.2.0.mpp
           fi
 
           # Generate combined checksums
@@ -122,11 +122,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') && env.HAS_RELEASE_SIGNING == 'true'
         with:
-          tag_name: 2.1.1-${{ github.run_number }}
-          name: OpenBubbles Wear 2.1.1 (build ${{ github.run_number }})
+          tag_name: 2.1.2-${{ github.run_number }}
+          name: OpenBubbles Wear 2.1.2 (build ${{ github.run_number }})
           prerelease: true
           body: |
-            ## OpenBubbles Wear 2.1.1
+            ## OpenBubbles Wear 2.1.2
 
             Automatic release built from `main`.
 
@@ -134,12 +134,12 @@ jobs:
 
             **Phone (companion bridge):**
             ```bash
-            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.1.apk
+            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.2.apk
             ```
 
             **Watch (companion app):**
             ```bash
-            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.1.apk
+            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.2.apk
             ```
 
             **Patched OpenBubbles 2.0.0 (optional, for direct bridge features):**
@@ -152,14 +152,14 @@ jobs:
               phone/config.mdpi.apk
             ```
 
-            See [docs/INSTALL-2.1.1.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.1.md) for full installation instructions and important warnings about signing keys and data loss when replacing stock OpenBubbles.
+            See [docs/INSTALL-2.1.2.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.2.md) for full installation instructions and important warnings about signing keys and data loss when replacing stock OpenBubbles.
 
             ### What's included
 
-            - `OpenBubblesWear-Phone-2.1.1.apk` — Wear bridge companion for phone
-            - `OpenBubblesWear-Watch-2.1.1.apk` — Wear bridge companion for watch
+            - `OpenBubblesWear-Phone-2.1.2.apk` — Wear bridge companion for phone
+            - `OpenBubblesWear-Watch-2.1.2.apk` — Wear bridge companion for watch
             - `phone/` — complete patched OpenBubbles 2.0.0 ARM64 APK set (4 files, install together)
-            - `OpenBubblesWear-Morphe-1.1.0.mpp` — rebuildable Morphe patch bundle
+            - `OpenBubblesWear-Morphe-1.2.0.mpp` — rebuildable Morphe patch bundle
             - `SHA256SUMS.txt` — checksums for all assets
           files: |
             release-assets/*
