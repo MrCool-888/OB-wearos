@@ -7,32 +7,33 @@ It is not a Google Messages client and does not independently connect the watch 
 
 ## Before removing the Play Store app
 
-**Uninstalling OpenBubbles erases its local data.** Export/back up using OpenBubbles' supported
-tools and confirm how you will restore messages and set up your account/Mac registration again.
-This project cannot recover app-private keys or data after uninstalling. Do not proceed if you
-cannot complete normal OpenBubbles setup again.
+**Uninstalling OpenBubbles erases its local data. OpenBubbles 2.0 removed the local Messages
+Backups option.** This project does not provide a verified way to preserve and restore your
+existing 2.0 messages, account state, or private keys when replacing stock with the patched app.
+Keep your working stock installation if you need to preserve that data. Use a spare test device
+for the direct patch, and confirm you can complete normal OpenBubbles setup there.
 
 The patched app uses a different signing key. It cannot update over Play Store OpenBubbles.
 Once you choose to remove stock and install this build, future patched updates must use the same
 local release key. Switching back to the Play Store version can require another uninstall.
 No build or verification task uninstalls, clears data, bypasses signatures, or changes your account.
 
-### Back up OpenBubbles first
+### OpenBubbles 2.0 backup limitation
 
-The [official backup guide](https://openbubbles.app/docs/backupandrestore.html) and
-[FAQ](https://openbubbles.app/docs/faq.html) describe **Settings → Backup & Restore → Messages
-Backups**. While the stock app is still installed, export your messages and, if offered,
-settings/themes. Copy the resulting files to your PC or another location outside the app and
-confirm they exist. Restore through **Restore local**, selecting the saved file.
+Earlier versions of this guide incorrectly applied the website's legacy **Messages Backups /
+Restore local** instructions to native 2.0. Those steps do not apply to 2.0.
 
-The official docs also describe **⋮ → Profile → Messages in iCloud** for message sync/recovery.
-Let syncing finish before relying on it. These docs do not guarantee the same menus in every
-native 2.0.0 build, or backup of Apple login sessions, activation identities, private keys, or
-Android Keystore data. Keep access to your Apple account and original setup/activation method;
-plan to complete setup again. An APK copy alone does not back up app-private data.
+No complete 2.0 backup/restore method has been verified for this build. Do not assume Messages in
+iCloud, Android/Google backup, Samsung Smart Switch, an APK copy, or a copied attachments folder
+will preserve every local message, account/activation state, private key, or Android Keystore item
+through a signature change. In particular, [Android restricts ADB app-data backups for modern
+release apps](https://developer.android.com/about/versions/12/behavior-changes-12#adb-backup-restrictions).
 
-If your installed version has no working export option, or you cannot confirm recovery, keep
-stock installed and use notification mode or a spare test device for the patch.
+The phone/watch companions can be installed while retaining stock OpenBubbles and used in
+notification mode. Only the optional patched OpenBubbles APK requires replacing stock. Use that
+patch on a spare device unless you have independently verified recovery or accept losing the
+current installation's local data and completing setup again. Keep access to your Apple account
+and original activation method; this is a setup precaution, not a backup.
 
 ## Files and requirements
 
@@ -63,7 +64,7 @@ Enable USB/wireless debugging as appropriate, connect both devices, and identify
 serials using `adb devices -l`. Replace `PHONE_SERIAL` and `WATCH_SERIAL` below. Never send the
 phone APKs to the watch or vice versa.
 
-After you have backed up and handled removal of the stock installation yourself, run **either**
+On a spare test device, after you have handled any existing installation yourself, run **either**
 the standalone install or the four-split install from `dist/OpenBubblesWear-2.1.1/`:
 
 ```powershell
@@ -131,4 +132,5 @@ transport are outside this build. Missing attachments must first be downloaded b
 The watch/phone applications and the patch must be kept together as a matching signed set.
 
 Automated and packaging checks do not prove Apple delivery or physical Wear Data Layer behavior.
-Those require your signed-in phone/watch test; keep the stock app's backup until that succeeds.
+Those require your signed-in phone/watch test; keep the working stock installation intact while
+testing the direct patch on a spare device.

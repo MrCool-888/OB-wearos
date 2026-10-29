@@ -32,7 +32,10 @@ companions and the verified ARM64 patched OpenBubbles installation options.
 No phone or watch was connected. Signed-in backend startup, real delivery, secure-lock sends,
 process death/rebinding, incoming alerts, media transfer, and physical Wear Data Layer transport
 still require the device checklist in `INSTALL-2.1.1.md`. Automated checks cannot guarantee these.
-Replacing stock OpenBubbles requires the backup/recovery precautions in that guide.
+OpenBubbles 2.0 removed the legacy local Messages Backups option. Earlier installation guidance
+incorrectly recommended that menu and has been corrected. No complete, data-preserving 2.0
+migration to the differently signed patch has been verified. Keep stock installed and test the
+direct patch on a spare device; the separate companions can use stock in notification mode.
 
 This report covers the files in the verified bundle, identified by `SHA256SUMS.txt`.
 The verified standalone hash is `0b8f3e600e2c4f80eac08f1a1c14c30c3031b761ea28486f131039ca4ad3617c`.

@@ -126,8 +126,9 @@ tested locally; importing/applying the bundle in Morphe Manager on Android has n
 
 **Do not uninstall your working OpenBubbles installation just to try this preview.** A patched
 APK needs a new signing key, so Android normally refuses an update over the official app.
-Uninstalling may erase messages, account state and keys. Export/back up with OpenBubbles' own
-supported tools and confirm recovery before considering any replacement. Prefer a spare device.
+Uninstalling erases local messages, account state and keys. Native OpenBubbles 2.0 removed the
+legacy local Messages Backups option; this project has no verified complete backup/restore path
+for replacing that installation. Keep stock intact and use a spare device for this patch.
 The supplied XAPK also has an architecture split: preserve/sign the matching required splits
 consistently; the unsigned base APK is not a complete one-file installation recipe.
 
