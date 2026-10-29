@@ -194,7 +194,9 @@ object NotificationCenter {
             directRefreshes.remove(notification.id)
             if (!prefs.relayEnabled) return@request
             val direct = if (reply.ok) BridgeJson.thread(reply.json?.optJSONObject("thread")) else null
-            val incoming = direct ?: notification
+            val incoming = direct?.copy(title = Protocol.preferredConversationTitle(
+                direct.title, notification.title, direct.id, direct.address
+            )) ?: notification
             // Keep notification media, but never mix its derived text IDs into backend history.
             if (direct != null) {
                 store.get(notification.id)?.let { previous ->

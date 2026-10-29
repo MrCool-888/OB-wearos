@@ -42,6 +42,9 @@ class BridgeStore(context: Context) {
                 ?.takeIf { it != incoming.id }
                 ?.let { threads[it] }
             val oldMessages = mergeMessages(legacy?.messages.orEmpty(), existing?.messages.orEmpty())
+            val address = incoming.address ?: existing?.address ?: legacy?.address
+            val previousTitle = listOfNotNull(existing?.title, legacy?.title)
+                .firstOrNull { Protocol.isMeaningfulConversationTitle(it, incoming.id, address) }
             val oldest = incoming.messages.minOfOrNull { it.timestamp }
             val retained = if (incoming.directHistory) oldMessages.filter { message ->
                 message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX) ||
@@ -59,8 +62,9 @@ class BridgeStore(context: Context) {
             }
             val merged = mergeMessages(retained, messages).map { it.copy(threadId = incoming.id) }
             val updated = incoming.copy(
+                title = Protocol.preferredConversationTitle(incoming.title, previousTitle, incoming.id, address),
                 messages = merged,
-                address = incoming.address ?: existing?.address ?: legacy?.address,
+                address = address,
                 updatedAt = maxOf(incoming.updatedAt, merged.lastOrNull()?.timestamp ?: 0L),
                 directHistory = incoming.directHistory || existing?.directHistory == true || legacy?.directHistory == true
             )
@@ -85,9 +89,12 @@ class BridgeStore(context: Context) {
             ?: fallback?.copy(id = threadId, messages = emptyList())
             ?: return@synchronized null
         val merged = mergeMessages(existing.messages, messages)
+        val address = existing.address ?: fallback?.address
         val updated = existing.copy(
-            title = existing.title.ifBlank { fallback?.title ?: "Conversation" },
-            address = existing.address ?: fallback?.address,
+            title = Protocol.preferredConversationTitle(
+                fallback?.title.orEmpty(), existing.title, threadId, address
+            ).ifBlank { "Conversation" },
+            address = address,
             messages = merged,
             updatedAt = maxOf(
                 existing.updatedAt,
@@ -145,8 +152,8 @@ class BridgeStore(context: Context) {
             )
         } else {
             base.copy(
-                title = chat.title.trim().take(160).ifBlank { base.title }
-                    .ifBlank { normalizedAddress ?: "Conversation" },
+                title = Protocol.preferredConversationTitle(chat.title, base.title, chat.id, normalizedAddress)
+                    .take(160).ifBlank { normalizedAddress ?: "Conversation" },
                 isGroup = base.isGroup || group,
                 address = if (base.isGroup || group) null else base.address ?: normalizedAddress
             )
