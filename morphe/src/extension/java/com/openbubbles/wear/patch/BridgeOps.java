@@ -47,7 +47,7 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
  * service's worker thread, so waiting for a coroutine continuation is safe.
  */
 final class BridgeOps {
-    static final String PATCH_VERSION = "1.2.3";
+    static final String PATCH_VERSION = "1.2.4";
     static final int API_VERSION = 1;
 
     private static final String TAG = "OBWearPatch";
@@ -66,6 +66,7 @@ final class BridgeOps {
     private static final Pattern NATIVE_CHAT_GUID = Pattern.compile(
             "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     private static final Pattern NATIVE_GROUP_GUID = Pattern.compile("(?i)^[0-9a-f]{72}$");
+    private static final Pattern CHAT_IDENTIFIER = Pattern.compile("(?i)^chat[_-]?[0-9a-f-]{5,}$");
     private static final Pattern PHONE = Pattern.compile("\\+?[0-9 ().-]+");
     private static final Pattern EMAIL = Pattern.compile(
             "[A-Z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+",
@@ -363,6 +364,11 @@ final class BridgeOps {
         if (recipient != null) return address.equals(recipient);
         List<String> handles = chat.getHandlesFlow().getValue();
         return handles != null && handles.size() == 1 && address.equals(normalizeAddress(handles.get(0)));
+    }
+
+    /** OpenBubbles' own chat identifier, e.g. chat125428204935, is not a display name. */
+    static boolean isChatIdentifier(String value) {
+        return value != null && CHAT_IDENTIFIER.matcher(value.trim()).matches();
     }
 
     static boolean validChatGuid(String value) {

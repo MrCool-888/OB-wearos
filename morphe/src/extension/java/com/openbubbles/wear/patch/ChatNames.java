@@ -67,6 +67,7 @@ final class ChatNames {
 
     private static boolean meaningful(String title, String id) {
         if (title.isEmpty() || title.equals(id) || BridgeOps.validChatGuid(title) ||
+                BridgeOps.isChatIdentifier(title) ||
                 title.equalsIgnoreCase("Conversation") || title.equalsIgnoreCase("Group") ||
                 title.equalsIgnoreCase("Chat") || title.equalsIgnoreCase("Unknown") || rawAddress(title)) return false;
         String[] parts = title.split(",");

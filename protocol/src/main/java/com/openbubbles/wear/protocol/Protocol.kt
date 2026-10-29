@@ -179,6 +179,7 @@ object Protocol {
     private val nativeChatGuid = Regex("^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
     private val nativeHexChatGuid = Regex("^[0-9a-fA-F]{72}$")
     private val legacyChatGuid = Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl};:/?#]{1,512}$")
+    private val chatIdentifier = Regex("(?i)^chat[_-]?[0-9a-f-]{5,}$")
     private val addressTitlePhone = Regex("(?i)^(?:tel:|sms:|smsto:)?[+0-9 ().-]+$")
     private val addressTitleEmail = Regex("(?i)^(?:mailto:)?[^\\s@<>]+@[^\\s@<>]+$")
     private val genericTitles = setOf("conversation", "group", "chat", "unknown")
@@ -192,7 +193,7 @@ object Protocol {
     fun isMeaningfulConversationTitle(title: String, id: String, address: String?): Boolean {
         val value = title.trim()
         if (value.isEmpty() || value.lowercase(Locale.ROOT) in genericTitles) return false
-        if (value == id || value == id.removePrefix("chat_") || isChatGuid(value)) return false
+        if (value == id || value == id.removePrefix("chat_") || isChatGuid(value) || chatIdentifier.matches(value)) return false
         if (value == address || isAddressTitle(value)) return false
         val parts = value.split(',').map(String::trim)
         return parts.size == 1 || !parts.all(::isAddressTitle)
