@@ -9,6 +9,7 @@ import com.localob.messaging.app.service.BackendState;
 import com.localob.messaging.app.LocalObApplication;
 import com.localob.messaging.app.messaging.AndroidContactsRepository;
 import com.localob.messaging.backend.contacts.Contact;
+import com.localob.messaging.backend.db.Attachment;
 import com.localob.messaging.backend.db.Chat_;
 import com.localob.messaging.backend.db.Database;
 import com.localob.messaging.backend.db.Message_;
@@ -47,7 +48,7 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
  * service's worker thread, so waiting for a coroutine continuation is safe.
  */
 final class BridgeOps {
-    static final String PATCH_VERSION = "1.2.4";
+    static final String PATCH_VERSION = "1.2.5";
     static final int API_VERSION = 1;
 
     private static final String TAG = "OBWearPatch";
@@ -602,6 +603,18 @@ final class BridgeOps {
         return out;
     }
 
+    /** Downloads one attachment on demand for the trusted watch companion. */
+    static boolean downloadAttachment(Attachment attachment, long timeoutMs) {
+        if (attachment == null) return false;
+        try {
+            Object result = Await.await(continuation -> attachment.download(continuation), timeoutMs);
+            return Boolean.TRUE.equals(result) || Boolean.TRUE.equals(attachment.isDownloaded());
+        } catch (Throwable t) {
+            Log.w(TAG, "Unable to download attachment", t);
+            return false;
+        }
+    }
+
     private static String preview(Message message) {
         String text = messageText(message);
         if (!blank(text)) return bounded(text.trim(), MAX_TEXT_LENGTH);
@@ -669,7 +682,7 @@ final class BridgeOps {
 
     /**
      * Runs a Kotlin suspend call outside a coroutine and waits for its result.
-     * Only safe on the service worker thread.
+     * Only safe on a background thread, never the main thread.
      */
     private interface SuspendCall<T> {
         Object invoke(Continuation<Object> continuation) throws Exception;

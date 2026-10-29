@@ -1,11 +1,11 @@
-# Morphe Wear bridge (companion 2.1.7 / patch 1.2.4 testing build)
+# Morphe Wear bridge (companion 2.1.8 / patch 1.2.5 testing build)
 
 Experimental build. Read-only group history and failed-message display were verified on a paired
 phone/watch. Successful Apple delivery remains unverified while throttled. Notification-only
 integration remains available without this patch.
 
-For the companion update and device setup, follow [Install 2.1.7](INSTALL-2.1.7.md). The required
-Morphe patch is **1.2.4**.
+For the companion update and device setup, follow [Install 2.1.8](INSTALL-2.1.8.md). The required
+Morphe patch is **1.2.5**.
 
 ## What the patch adds
 
@@ -19,7 +19,8 @@ Morphe patch is **1.2.4**.
   entries; phone-side discovery drains the available count and later sync remains bounded.
 - Accept native OpenBubbles UUID and exact 72-character hexadecimal chat IDs as well as legacy IDs,
   and carry group status explicitly because opaque IDs do not encode whether a conversation is a group.
-- View images/GIFs already downloaded in OpenBubbles through an authenticated read-only provider.
+- View images/GIFs in chats, including attachments OpenBubbles has not downloaded yet. The
+  authenticated read-only provider downloads a missing image on the watch's first request.
 - Journal send IDs inside OpenBubbles as well as the companion, failing closed on uncertain replays.
 - Surface history-refresh failures instead of silently leaving stale cached history looking current.
 
@@ -29,8 +30,9 @@ account credentials to the companion.
 
 **Privacy change:** direct history includes message text even when notification previews are hidden.
 Live incoming alerts still use the notification listener. Quiet chats refresh while visible or on
-request, not through a permanent database subscription. Direct media reads only already-downloaded
-files inside OpenBubbles' attachments directory; it cannot fetch missing attachments from Apple.
+request, not through a permanent database subscription. Direct media reads only files inside
+OpenBubbles' attachments directory; a missing image is downloaded from Apple on the first trusted
+watch request, and non-image attachments are never exposed.
 Backend history is authoritative: notification-derived message hashes are removed rather than
 duplicating the backend's GUID messages. Distinct repeated messages keep their distinct real IDs.
 
@@ -119,12 +121,12 @@ D8 bundled with SDK build tools 35 is not used to compile the patch bundle.
 
 Outputs:
 
-- `morphe/build/libs/openbubbles-wear-patches-1.2.4.mpp`: JVM patch classes, Android patch DEX,
+- `morphe/build/libs/openbubbles-wear-patches-1.2.5.mpp`: JVM patch classes, Android patch DEX,
   injected extension DEX and patch metadata in one bundle.
 - `morphe/build/patched/openbubbles-wear-unsigned.apk`: patched **base APK**, aligned but unsigned.
 - `morphe/build/installable/`: complete release-signed four-APK ARM64 set and checksums.
-- `phone/build/outputs/apk/release/phone-release.apk`: companion 2.1.7 (version code 20).
-- `wear/build/outputs/apk/release/wear-release.apk`: companion 2.1.7 (version code 20).
+- `phone/build/outputs/apk/release/phone-release.apk`: companion 2.1.8 (version code 21).
+- `wear/build/outputs/apk/release/wear-release.apk`: companion 2.1.8 (version code 21).
 
 The packaging task explicitly signs the patched base and matching splits with the existing release
 key; it never installs/uninstalls or changes app data. Morphe Desktop application has been
@@ -137,9 +139,9 @@ APK needs a new signing key, so Android normally refuses an update over the offi
 Uninstalling erases local messages, account state and keys. Native OpenBubbles 2.0 removed the
 legacy local Messages Backups option; this project has no verified complete backup/restore path
 for replacing that installation. Keep stock intact and use a spare device for this patch.
-Install the **patched OpenBubbles update and both 2.1.7 companions**. The supplied OB APKs already
-contain Morphe patch 1.2.4; the MPP is not an additional installation step. Follow the device sequence in
-[Install 2.1.7](INSTALL-2.1.7.md). Keep the installed universal APK or base plus configuration
+Install the **patched OpenBubbles update and both 2.1.8 companions**. The supplied OB APKs already
+contain Morphe patch 1.2.5; the MPP is not an additional installation step. Follow the device sequence in
+[Install 2.1.8](INSTALL-2.1.8.md). Keep the installed universal APK or base plus configuration
 splits, and use `adb install -r` on the same complete
 set, signed with the existing key. Do not uninstall, clear app data, or bypass a signature mismatch.
 
@@ -149,16 +151,17 @@ it may already have been accepted. Check OpenBubbles before manually retrying an
 
 ## Verification and remaining checks
 
-Current automated checks are recorded in [2.1.7 release notes](RELEASE-2.1.7.md). Contact names are
+Current automated checks are recorded in [2.1.8 release notes](RELEASE-2.1.8.md). Contact names are
 resolved from the Android address book, and the companions keep a previously cached human name when
 metadata is generic or raw. Live name display was verified on a Galaxy S25 and Galaxy Watch7 in 2.1.7: unnamed groups show
-participant names and custom group names are preserved. No network send test was run.
+participant names and custom group names are preserved. The 2.1.8 tile redesign and first-read image
+download were built but not yet checked on hardware. No network send test was run.
 
-The local testing set is copied into ignored `dist/OpenBubblesWear-2.1.7/`:
+The local testing set is copied into ignored `dist/OpenBubblesWear-2.1.8/`:
 
-- `OpenBubblesWear-Phone-2.1.7.apk` and `OpenBubblesWear-Watch-2.1.7.apk`
+- `OpenBubblesWear-Phone-2.1.8.apk` and `OpenBubblesWear-Watch-2.1.8.apk`
 - `phone/` with the complete patched OpenBubbles APK set and its checksums
-- `OpenBubblesWear-Morphe-1.2.4.mpp` and combined `SHA256SUMS.txt`
+- `OpenBubblesWear-Morphe-1.2.5.mpp` and combined `SHA256SUMS.txt`
 
 The native OpenBubbles version remains 2.0.0 (20002289); this release updates its patched APK and
 companions without changing its upstream version.

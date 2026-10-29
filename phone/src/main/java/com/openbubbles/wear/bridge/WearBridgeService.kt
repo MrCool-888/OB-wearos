@@ -298,25 +298,29 @@ class WearBridgeService : WearableListenerService() {
 
     private fun handleMediaRequest(nodeId: String, data: ByteArray) {
         val request = Wire.decodeBytes<MediaRequest>(data) ?: return
-        NotificationCenter.media(request.mediaId) { info, error ->
-            WatchLink.sendToNode(
-                applicationContext,
-                nodeId,
-                Protocol.PATH_MEDIA_RESULT,
-                Wire.encodeBytes(
-                    MediaPayload(
-                        requestId = request.requestId,
-                        mediaId = request.mediaId,
-                        ok = info != null && error == null,
-                        mimeType = info?.mimeType,
-                        width = info?.width ?: 0,
-                        height = info?.height ?: 0,
-                        size = info?.size ?: 0L,
-                        error = error
+        // A direct-bridge image may need downloading in OpenBubbles first, so
+        // keep the provider read off the service's main thread.
+        Thread({
+            NotificationCenter.media(request.mediaId) { info, error ->
+                WatchLink.sendToNode(
+                    applicationContext,
+                    nodeId,
+                    Protocol.PATH_MEDIA_RESULT,
+                    Wire.encodeBytes(
+                        MediaPayload(
+                            requestId = request.requestId,
+                            mediaId = request.mediaId,
+                            ok = info != null && error == null,
+                            mimeType = info?.mimeType,
+                            width = info?.width ?: 0,
+                            height = info?.height ?: 0,
+                            size = info?.size ?: 0L,
+                            error = error
+                        )
                     )
                 )
-            )
-        }
+            }
+        }, "OBWearMedia").start()
     }
 
     private fun handleOpenPhone(nodeId: String, data: ByteArray) {

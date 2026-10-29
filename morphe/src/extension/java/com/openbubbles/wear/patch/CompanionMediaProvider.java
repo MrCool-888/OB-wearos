@@ -25,9 +25,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-/** Only the pinned companion can read already-downloaded backend images. */
+/** Only the pinned companion can read backend images; a first read downloads them. */
 public final class CompanionMediaProvider extends ContentProvider {
     static final String AUTHORITY = "com.openbubbles.messaging.wear.media";
+    private static final long DOWNLOAD_TIMEOUT_MS = 25_000L;
     private static final Pattern ATTACHMENT_GUID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,199}");
 
     @Override
@@ -51,6 +52,9 @@ public final class CompanionMediaProvider extends ContentProvider {
         requireReadMode(mode);
         try {
             Attachment attachment = findAttachment(attachmentGuid(uri));
+            if (!Boolean.TRUE.equals(attachment.isDownloaded())) {
+                BridgeOps.downloadAttachment(attachment, DOWNLOAD_TIMEOUT_MS);
+            }
             return ParcelFileDescriptor.open(localFile(attachment), ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (FileNotFoundException e) {
             throw e;
@@ -63,9 +67,7 @@ public final class CompanionMediaProvider extends ContentProvider {
     public String getType(Uri uri) {
         enforceCaller();
         try {
-            Attachment attachment = findAttachment(attachmentGuid(uri));
-            localFile(attachment);
-            return imageMime(attachment.getMimeType());
+            return imageMime(findAttachment(attachmentGuid(uri)).getMimeType());
         } catch (Exception e) {
             return null;
         }
@@ -170,15 +172,20 @@ public final class CompanionMediaProvider extends ContentProvider {
     static void putMedia(JSONObject out, Message message) {
         try (Query<Attachment> query = Database.INSTANCE.getAttachments().query()
                 .equal(Attachment_.messageId, message.getId()).build()) {
-            // shortcut: one downloaded image per message; extend the wire model for galleries.
+            // shortcut: one image per message; extend the wire model for galleries.
             for (Attachment attachment : query.find(0, 16)) {
                 try {
-                    localFile(attachment);
+                    String mime = imageMime(attachment.getMimeType());
+                    if (mime == null) continue;
+                    Message owner = attachment.getMessage().getTarget();
+                    if (owner == null || owner.getDateDeleted() != null) continue;
+                    // Expose the image even before it is downloaded; the provider
+                    // fetches it on the first watch read.
                     out.put("mediaUri", uriFor(attachment.getGuid()).toString());
-                    out.put("mediaMime", imageMime(attachment.getMimeType()));
+                    out.put("mediaMime", mime);
                     return;
                 } catch (Exception ignored) {
-                    // Undownloaded and non-image attachments stay placeholders.
+                    // Non-image or detached attachments stay placeholders.
                 }
             }
         } catch (Throwable t) {
