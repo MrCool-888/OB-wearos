@@ -17,12 +17,30 @@ Once you choose to remove stock and install this build, future patched updates m
 local release key. Switching back to the Play Store version can require another uninstall.
 No build or verification task uninstalls, clears data, bypasses signatures, or changes your account.
 
+### Back up OpenBubbles first
+
+The [official backup guide](https://openbubbles.app/docs/backupandrestore.html) and
+[FAQ](https://openbubbles.app/docs/faq.html) describe **Settings → Backup & Restore → Messages
+Backups**. While the stock app is still installed, export your messages and, if offered,
+settings/themes. Copy the resulting files to your PC or another location outside the app and
+confirm they exist. Restore through **Restore local**, selecting the saved file.
+
+The official docs also describe **⋮ → Profile → Messages in iCloud** for message sync/recovery.
+Let syncing finish before relying on it. These docs do not guarantee the same menus in every
+native 2.0.0 build, or backup of Apple login sessions, activation identities, private keys, or
+Android Keystore data. Keep access to your Apple account and original setup/activation method;
+plan to complete setup again. An APK copy alone does not back up app-private data.
+
+If your installed version has no working export option, or you cannot confirm recovery, keep
+stock installed and use notification mode or a spare test device for the patch.
+
 ## Files and requirements
 
 Use the **entire** `dist/OpenBubblesWear-2.1.1/` testing directory:
 
 | File | Install on |
 | --- | --- |
+| `phone/openbubbles-wear-patched-universal.apk` | Phone, one-file alternative to the four APKs below |
 | `phone/openbubbles-wear-patched-base.apk` | Phone, together with all three splits below |
 | `phone/config.arm64_v8a.apk` | Phone |
 | `phone/config.en.apk` | Phone |
@@ -45,19 +63,27 @@ Enable USB/wireless debugging as appropriate, connect both devices, and identify
 serials using `adb devices -l`. Replace `PHONE_SERIAL` and `WATCH_SERIAL` below. Never send the
 phone APKs to the watch or vice versa.
 
-After you have backed up and handled removal of the stock installation yourself, run these commands
-from `dist/OpenBubblesWear-2.1.1/`:
+After you have backed up and handled removal of the stock installation yourself, run **either**
+the standalone install or the four-split install from `dist/OpenBubblesWear-2.1.1/`:
 
 ```powershell
+# One-file standalone (ARM64)
+adb -s PHONE_SERIAL install -r phone/openbubbles-wear-patched-universal.apk
+
+# Or the four split APKs in one transaction
 adb -s PHONE_SERIAL install-multiple -r phone/openbubbles-wear-patched-base.apk phone/config.arm64_v8a.apk phone/config.en.apk phone/config.mdpi.apk
+
 adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.1.apk
 adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.1.apk
 ```
 
-Install all four OpenBubbles APKs in one transaction. Do not install just the base or mix in any
-stock-signed splits. `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means a differently signed installation
-is still present; it is not a reason to disable Android security or delete unrelated app data.
-An old debug-signed Wear companion may also conflict with its release-signed replacement.
+The standalone APK is built from the same four files with the same release key; it is ARM64 and
+carries the same English/MDPI resources. Pick one format and keep using it for updates; switching
+formats may require an uninstall that erases app data. Do not install just the base, and never mix
+these APKs with stock-signed splits. `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means a differently
+signed installation is still present; it is not a reason to disable Android security or delete
+unrelated app data. An old debug-signed Wear companion may also conflict with its release-signed
+replacement.
 
 ## Setup
 
@@ -71,11 +97,11 @@ An old debug-signed Wear companion may also conflict with its release-signed rep
 4. Optionally allow **Contacts** to browse the Android address book from the watch.
 5. Open **OpenBubbles Wear** → **Wear patches** on the phone to enable or disable direct bridge use. It is on by default; turning it off falls back to notification actions while keeping the patched OpenBubbles installation intact.
 6. Open **OpenBubbles Wear** on the watch, tap **Sync now**, then **Find chats in OpenBubbles**.
-6. Open a chat. Recent backend history loads even if the chat has never posted a notification.
-7. **Reply** offers quick replies and voice/keyboard input. **Find a chat** lets you choose a contact
+7. Open a chat. Recent backend history loads even if the chat has never posted a notification.
+8. **Reply** offers quick replies and voice/keyboard input. **Find a chat** lets you choose a contact
    or enter a phone number/email. Selecting a new recipient sends nothing; the first explicit send
    creates the one-to-one conversation.
-8. Allow watch notifications for extra alerts, or disable **Extra alerts** to avoid duplicates with
+9. Allow watch notifications for extra alerts, or disable **Extra alerts** to avoid duplicates with
    Android's mirrored OpenBubbles alerts.
 
 ## What to test

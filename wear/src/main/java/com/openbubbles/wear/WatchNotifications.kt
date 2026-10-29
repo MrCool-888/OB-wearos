@@ -187,10 +187,14 @@ object WatchNotifications {
             .addAction(markReadAction)
             .build()
 
-        runCatching {
+        try {
             NotificationManagerCompat.from(context).notify(thread.id, id, notification)
-        }.onFailure {
-            Log.w(TAG, "Unable to post notification for ${thread.id}", it)
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Notification permission was revoked for ${thread.id}", error)
+            return
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to post notification for ${thread.id}", error)
+            return
         }
         markNotified(context, thread.id, latest.timestamp)
     }

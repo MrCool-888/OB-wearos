@@ -160,7 +160,7 @@ prove Apple delivery or physical Wear Data Layer transport.
 
 The latest local testing set is copied into ignored `dist/OpenBubblesWear-2.1.1/`:
 
-- `phone/` (all four signed OpenBubbles APKs, installed together)
+- `phone/` (four signed OpenBubbles APKs, plus an optional one-file universal build)
 - `OpenBubblesWear-Phone-2.1.1.apk`
 - `OpenBubblesWear-Watch-2.1.1.apk`
 - `OpenBubblesWear-Morphe-1.1.0.mpp`

@@ -28,7 +28,9 @@ import kotlinx.datetime.Instant;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 32, manifest = Config.NONE, application = Application.class)
+// Instrumentation rebuilds JVM stack frames missing from the DEX-derived fixtures.
+@Config(sdk = 32, manifest = Config.NONE, application = Application.class,
+        instrumentedPackages = {"com.localob.messaging", "kotlinx.datetime"})
 public class BridgeOpsTest {
     private static final String GUID = "iMessage;+;group-id";
 

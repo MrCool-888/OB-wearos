@@ -1,6 +1,7 @@
 package com.openbubbles.wear
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.Context
@@ -26,6 +27,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowNotificationManager
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32], application = Application::class)
@@ -153,6 +157,24 @@ class WatchRepositoryTest {
         }
         WatchNotifications.cancel(context, "Aa")
         assertEquals("BB", manager.activeNotifications.single().tag)
+    }
+
+    @Test
+    @Config(shadows = [PermissionRevokedNotificationManager::class])
+    fun revokedNotificationPermissionDoesNotDiscardTheAlert() {
+        val incoming = WireThread(id = "incoming", title = "Alex", unread = true,
+            messages = listOf(local.copy(id = "incoming-message", threadId = "incoming", fromMe = false)))
+        assertTrue(WatchNotifications.areSystemNotificationsAllowed(context))
+        WatchNotifications.syncThread(context, incoming, WatchState(), allowNotify = true)
+        assertEquals(0L, WatchNotifications.lastNotified(context, incoming.id))
+    }
+
+    @Implements(NotificationManager::class)
+    class PermissionRevokedNotificationManager : ShadowNotificationManager() {
+        @Implementation
+        override fun notify(tag: String?, id: Int, notification: Notification?) {
+            throw SecurityException("Notification permission revoked after the availability check")
+        }
     }
 
     @Test fun summaryOnlyConversationCanBeMarkedRead() {
