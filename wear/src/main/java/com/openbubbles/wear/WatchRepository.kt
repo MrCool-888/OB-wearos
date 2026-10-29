@@ -449,7 +449,12 @@ object WatchRepository {
                     val confirmed = current.copy(messages = current.messages.filterNot { it.id == localId })
                     replaceThread(confirmed)
                     onThread(confirmed.copy(
-                        messages = listOf(backendMessage.copy(threadId = current.id, status = "sent")),
+                        // A successful action result means the phone accepted the request;
+                        // only its message status tells us whether it was delivered.
+                        messages = listOf(backendMessage.copy(
+                            threadId = current.id,
+                            status = backendMessage.status ?: "unconfirmed"
+                        )),
                         updatedAt = maxOf(confirmed.updatedAt, backendMessage.timestamp),
                         directHistory = false
                     ), connected = false)
@@ -1529,9 +1534,11 @@ object WatchRepository {
                 if (optimistic != null) remote.remove(optimistic.id)
             }
             val previous = remote[message.id] ?: oldMessages[message.id]
-            remote[message.id] = previous?.let(message::mergeMediaFrom) ?: message
+            remote[message.id] = previous?.let {
+                message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
+            } ?: message
         }
-        val mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
+        var mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
 
         val locals = (old?.messages.orEmpty() + incoming.messages)
             .filter { it.id.startsWith(LOCAL_PREFIX) }
@@ -1546,6 +1553,11 @@ object WatchRepository {
             }
             if (match != null) {
                 unmatched.remove(match)
+                // Keep a failed local attempt visible until the phone reports an actual status.
+                if (local.status == "failed" && match.status == null) {
+                    remote[match.id] = match.copy(status = "failed")
+                    mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
+                }
             } else {
                 keptLocals += local
             }

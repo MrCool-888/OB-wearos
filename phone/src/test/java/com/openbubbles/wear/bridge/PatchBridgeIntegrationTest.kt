@@ -209,6 +209,52 @@ class PatchBridgeIntegrationTest {
         assertNull(NotificationCenter.threadFor("new:+15551234567"))
     }
 
+    @Test fun refreshedFailedGroupMessageKeepsItsBodyAndStatusOnTheWire() {
+        val groupId = "chat_iMessage;+;group-id"
+        val rawId = groupId.removePrefix("chat_")
+        store().upsertIncoming(WireThread(id = groupId, title = "Group", isGroup = true,
+            messages = listOf(WireMessage("old", groupId, "Earlier message", 1))))
+        respond = { """{"apiVersion":1,"ok":true,"thread":{"id":"$rawId","title":"Group",
+            "isGroup":true,"messages":[{"id":"failed-group","text":"Group message",
+            "timestamp":2,"fromMe":true,"status":"failed"}]}}""" }
+        var payload: ThreadPayload? = null
+        NotificationCenter.threadPayload(groupId) { payload = it }
+        ShadowLooper.idleMainLooper()
+        assertNull(payload!!.error)
+        val decoded = com.openbubbles.wear.protocol.Wire.decode<ThreadPayload>(
+            com.openbubbles.wear.protocol.Wire.encode(payload!!))!!
+        val failed = decoded.thread!!.messages.single { it.id == "failed-group" }
+        assertEquals("Group message", failed.text)
+        assertEquals("failed", failed.status)
+        assertEquals(groupId, failed.threadId)
+        assertEquals("failed", NotificationCenter.threadFor(groupId)!!.messages.last().status)
+        assertEquals(listOf("thread"), requests.map { it.getString("op") })
+    }
+
+    @Test fun directSendAndRefreshPreserveAnAsynchronousGroupFailure() {
+        val groupId = "chat_iMessage;+;group-id"
+        val rawId = groupId.removePrefix("chat_")
+        var status = "sending"
+        respond = { JSONObject().put("apiVersion", 1).put("ok", true)
+            .put("threadId", rawId).put("message", JSONObject().put("id", "backend-group")
+                .put("text", "Group message").put("timestamp", 2).put("fromMe", true).put("status", status))
+            .put("thread", JSONObject().put("id", rawId).put("isGroup", true)
+                .put("messages", JSONArray().put(JSONObject().put("id", "backend-group")
+                    .put("text", "Group message").put("timestamp", 2).put("fromMe", true).put("status", status))))
+            .toString() }
+        var result: NotificationCenter.SendResult? = null
+        NotificationCenter.send("group-request", groupId, "Group message") { result = it }
+        ShadowLooper.idleMainLooper()
+        assertNull(result!!.error)
+        assertEquals("sending", result!!.message!!.status)
+        status = "failed"
+        var refreshed: ThreadPayload? = null
+        NotificationCenter.threadPayload(groupId) { refreshed = it }
+        ShadowLooper.idleMainLooper()
+        assertEquals("failed", refreshed!!.thread!!.messages.single().status)
+        assertEquals(listOf("send", "thread"), requests.map { it.getString("op") })
+    }
+
     @Test fun failedSendIsNotRetriedAndDoesNotRecordASentMessage() {
         respond = { """{"apiVersion":1,"ok":false,"error":"Backend unavailable"}""" }
         var result: NotificationCenter.SendResult? = null

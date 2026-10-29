@@ -67,6 +67,7 @@ class WatchRepositoryTest {
     }
 
     private fun status() = state.value.threads.getValue("chat").messages.single().status
+    private fun status(id: String) = state.value.threads.getValue("chat").messages.single { it.id == id }.status
     private fun message(id: String, time: Long = 1000, text: String = "Hello") = WireMessage(id, "chat", text, time)
     private fun confirm() = WatchRepository.onActionResult(ActionResult(
         requestId = "request", action = Protocol.ACTION_SEND, ok = true, threadId = "chat"))
@@ -77,6 +78,37 @@ class WatchRepositoryTest {
         assertEquals("sent", status())
         assertTrue(state.value.queuedSends.isEmpty())
         assertTrue(state.value.sendingThreads.isEmpty())
+    }
+
+    @Test fun acceptedSendPreservesBackendSendingStatus() {
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND, ok = true,
+            threadId = "chat", message = local.copy(id = "backend", status = "sending")))
+        assertEquals("sending", status("backend"))
+        assertFalse(state.value.threads.getValue("chat").messages.any { it.id == local.id })
+    }
+
+    @Test fun acceptedSendPreservesBackendFailedStatus() {
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND, ok = true,
+            threadId = "chat", message = local.copy(id = "backend", status = "failed")))
+        assertEquals("failed", status("backend"))
+    }
+
+    @Test fun acceptedSendWithoutBackendStatusRemainsUnconfirmed() {
+        WatchRepository.onActionResult(ActionResult(requestId = "request", action = Protocol.ACTION_SEND, ok = true,
+            threadId = "chat", message = local.copy(id = "backend", status = null)))
+        assertEquals("unconfirmed", status("backend"))
+    }
+
+    @Test fun matchingHistoryKeepsFailureWithoutStatusAndUpdatesWhenPhoneReportsOne() {
+        val failed = local.copy(status = "failed")
+        val thread = WireThread("chat", "Alex", messages = listOf(failed))
+        state.value = state.value.copy(threads = mapOf("chat" to thread))
+        val remote = message("backend").copy(fromMe = true)
+        WatchRepository.onThread(thread.copy(messages = listOf(remote)), connected = false)
+        assertEquals("failed", status("backend"))
+        WatchRepository.onThread(thread.copy(directHistory = true,
+            messages = listOf(remote.copy(status = "delivered"))), connected = false)
+        assertEquals("delivered", status("backend"))
     }
 
     @Test fun fastResultCannotBeRequeuedByLateTransportFailure() {

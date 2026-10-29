@@ -58,6 +58,29 @@ class BridgeJsonTest {
     }
 
     @Test
+    fun outgoingHistoryPreservesBackendDeliveryStatus() {
+        for (status in listOf("sending", "sent", "delivered", "read", "failed")) {
+            val json = JSONObject().put("id", "iMessage;+;group")
+                .put("messages", org.json.JSONArray().put(JSONObject()
+                    .put("id", "failed-group-message").put("text", "Group message")
+                    .put("timestamp", 1000L).put("fromMe", true).put("status", status)))
+            val message = BridgeJson.thread(json)!!.messages.single()
+            assertEquals("Group message", message.text)
+            assertEquals(status, message.status)
+        }
+    }
+
+    @Test
+    fun incomingAndUnknownDeliveryStatusesAreIgnored() {
+        val json = JSONObject().put("text", "Message").put("status", "failed")
+        assertNull(BridgeJson.message(json, "chat")!!.status)
+        json.put("fromMe", true).put("status", "unexpected")
+        assertNull(BridgeJson.message(json, "chat")!!.status)
+        json.remove("status")
+        assertNull(BridgeJson.message(json, "chat")!!.status)
+    }
+
+    @Test
     fun summaryKeepsPreviewAndCanonicalId() {
         val summary = BridgeJson.summary(
             JSONObject(
