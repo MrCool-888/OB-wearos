@@ -88,7 +88,17 @@ dependencies {
     testImplementation(files(appClassesJar))
     testImplementation("org.robolectric:robolectric:4.14.1")
 }
-tasks.test { maxHeapSize = "2g" }
+tasks.test {
+    maxHeapSize = "2g"
+    doFirst {
+        // This JVM build must expose the classes inside Robolectric's Android AARs.
+        classpath = files(classpath.map {
+            if (it.extension == "aar") zipTree(it).matching { include("classes.jar") } else it
+        })
+        // The stock/CLI fat jars embed older Guava classes that break Robolectric.
+        classpath = classpath.filter { it.name.startsWith("guava-") } + classpath
+    }
+}
 
 val extensionClasses by tasks.registering(JavaCompile::class) {
     source = fileTree("src/extension/java") { include("**/*.java") }
