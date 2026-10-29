@@ -374,7 +374,12 @@ object WatchRepository {
             _state.update { it.copy(requestingThreads = it.requestingThreads - requestedId) }
             migrateThreadIds(thread.id, setOf(requestedId) - thread.id)
         }
-        onThread(thread, connected = true)
+        // A failed refresh's cache cannot authoritatively delete newer history.
+        onThread(thread.copy(directHistory = thread.directHistory && payload.error == null),
+            connected = payload.error == null)
+        if (payload.error != null) {
+            _state.update { it.copy(error = payload.error) }
+        }
     }
 
     @Synchronized

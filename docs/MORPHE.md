@@ -1,10 +1,10 @@
-# Morphe Wear bridge (companion 2.1.3 / patch 1.2.0 testing build)
+# Morphe Wear bridge (companion 2.1.4 / patch 1.2.1 testing build)
 
 Experimental, local build. **Not yet validated against a signed-in OpenBubbles backend on a
 physical phone/watch.** The notification-only integration remains available without this patch.
 
-For the companion update and device setup, follow [Install 2.1.3](INSTALL-2.1.3.md). The Morphe
-patch remains **1.2.0**.
+For the companion update and device setup, follow [Install 2.1.4](INSTALL-2.1.4.md). The required
+Morphe patch is **1.2.1**.
 
 ## What the patch adds
 
@@ -16,8 +16,11 @@ patch remains **1.2.0**.
 - Refresh a visible chat/list while the watch UI is resumed, without permanent background polling.
 - Discover the chat directory in 40-entry pages. Watch directory loading can continue up to 5,000
   entries; phone-side discovery drains the available count and later sync remains bounded.
+- Accept native OpenBubbles UUID chat IDs as well as legacy IDs, and carry group status explicitly
+  because a UUID does not encode whether a conversation is a group.
 - View images/GIFs already downloaded in OpenBubbles through an authenticated read-only provider.
 - Journal send IDs inside OpenBubbles as well as the companion, failing closed on uncertain replays.
+- Surface history-refresh failures instead of silently leaving stale cached history looking current.
 
 OpenBubbles still owns sign-in, encryption and delivery. The patch injects one bound Android
 service; it does not export existing private components, add accessibility automation, or copy
@@ -115,12 +118,12 @@ D8 bundled with SDK build tools 35 is not used to compile the patch bundle.
 
 Outputs:
 
-- `morphe/build/libs/openbubbles-wear-patches-1.2.0.mpp`: JVM patch classes, Android patch DEX,
+- `morphe/build/libs/openbubbles-wear-patches-1.2.1.mpp`: JVM patch classes, Android patch DEX,
   injected extension DEX and patch metadata in one bundle.
 - `morphe/build/patched/openbubbles-wear-unsigned.apk`: patched **base APK**, aligned but unsigned.
 - `morphe/build/installable/`: complete release-signed four-APK ARM64 set and checksums.
-- `phone/build/outputs/apk/release/phone-release.apk`: companion 2.1.3 (version code 16).
-- `wear/build/outputs/apk/release/wear-release.apk`: companion 2.1.3 (version code 16).
+- `phone/build/outputs/apk/release/phone-release.apk`: companion 2.1.4 (version code 17).
+- `wear/build/outputs/apk/release/wear-release.apk`: companion 2.1.4 (version code 17).
 
 The packaging task explicitly signs the patched base and matching splits with the existing release
 key; it never installs/uninstalls or changes app data. Morphe Desktop application has been
@@ -133,26 +136,11 @@ APK needs a new signing key, so Android normally refuses an update over the offi
 Uninstalling erases local messages, account state and keys. Native OpenBubbles 2.0 removed the
 legacy local Messages Backups option; this project has no verified complete backup/restore path
 for replacing that installation. Keep stock intact and use a spare device for this patch.
-For an existing patched 2.1.2 installation, update **both companions** in place with `install -r`
-using the same signing key. Leave OpenBubbles installed as-is; this companion-only update does not
-need an OpenBubbles replacement or repatch. Do not uninstall. Users older than patch 1.2.0 should
-follow the prior full setup guide in [Install 2.1.2](INSTALL-2.1.2.md).
-
-For a fresh setup or an installation using a patch older than 1.2.0, follow the full setup in
-[Install 2.1.2](INSTALL-2.1.2.md). For an existing 2.1.2 setup, update only both companions as
-described in [Install 2.1.3](INSTALL-2.1.3.md):
-
-1. Install the phone companion 2.1.3 and watch companion 2.1.3 using `install -r` and the same
-   signing key. See [Install 2.1.3](INSTALL-2.1.3.md).
-2. Keep the existing **Morphe 1.2.0** patch and OpenBubbles installation in place.
-3. Open the phone companion. Diagnostics should show **Connected · Ready** when the service is
-   reachable. Keep **Relay to watch** enabled and grant notification access for live alerts.
-4. On the watch, choose **Find chats in OpenBubbles**. It loads 40-entry pages through the
-   available directory, up to the watch's 5,000-entry cap. Phone-side discovery drains the count;
-   later syncs stay bounded.
-5. Open a quiet or older chat and refresh recent history. Test sending and mark-read while locked.
-6. To test a new conversation, choose a contact or enter an address; only an explicit send creates it.
-7. Direct media reads files already downloaded by OpenBubbles through the authenticated provider.
+Install the **patched OpenBubbles update and both 2.1.4 companions**. The supplied OB APKs already
+contain Morphe patch 1.2.1; the MPP is not an additional installation step. Follow the device sequence in
+[Install 2.1.4](INSTALL-2.1.4.md). The patched APK set may include a universal APK or a base plus
+configuration splits; keep the installed APK format and use `adb install -r` on the same complete
+set, signed with the existing key. Do not uninstall, clear app data, or bypass a signature mismatch.
 
 If the patch is absent the companion uses existing notification actions, with optional Shizuku
 discovery as before. A backend send failure/timeout is **not** retried through another send path:
@@ -160,17 +148,18 @@ it may already have been accepted. Check OpenBubbles before manually retrying an
 
 ## Verification and remaining checks
 
-Current automated test results and limitations are recorded in [2.1.3 release notes](RELEASE-2.1.3.md).
+Current automated test results and limitations are recorded in [2.1.4 release notes](RELEASE-2.1.4.md).
 Automated checks do not prove Apple delivery or physical Wear Data Layer transport. No physical
 phone/watch validation is claimed here.
 
-The local testing set is copied into ignored `dist/OpenBubblesWear-2.1.3/`:
+The local testing set is copied into ignored `dist/OpenBubblesWear-2.1.4/`:
 
-- `OpenBubblesWear-Phone-2.1.3.apk`
-- `OpenBubblesWear-Watch-2.1.3.apk`
-- `SHA256SUMS.txt` and installation instructions
+- `OpenBubblesWear-Phone-2.1.4.apk` and `OpenBubblesWear-Watch-2.1.4.apk`
+- `phone/` with the complete patched OpenBubbles APK set and its checksums
+- `OpenBubblesWear-Morphe-1.2.1.mpp` and combined `SHA256SUMS.txt`
 
-The unchanged OpenBubbles APKs and Morphe 1.2.0 bundle remain in the [2.1.2 full release](https://github.com/MrCool-888/OB-wearos/releases/tag/2.1.2).
+The native OpenBubbles version remains 2.0.0 (20002289); this release updates its patched APK and
+companions without changing its upstream version.
 
 Before a public release, test on a spare phone/watch:
 

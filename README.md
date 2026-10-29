@@ -10,13 +10,12 @@ Apple's servers directly and never handles your account or encryption keys.
 
 ### Experimental Morphe version
 
-The **2.1.3 companion update** improves delivery-status handling when used with the optional Morphe
-patch on native OpenBubbles 2.0.0 (20002289). The patch adds paginated chat discovery/history,
-sending without a notification, and new one-to-one chats from the watch. OB Settings → Morphe
-patches controls the runtime bridge. See
-[Install 2.1.3](docs/INSTALL-2.1.3.md), the [2.1.3 release notes](docs/RELEASE-2.1.3.md), and the
-[Morphe build notes](docs/MORPHE.md). Existing 2.1.2 users update both companions in place; keep
-OpenBubbles installed as-is.
+The **2.1.4 release** fixes Morphe chat discovery for native OpenBubbles 2.0.0 (20002289), including
+UUID conversation IDs and explicit group metadata. It requires the patched OpenBubbles APK update,
+which contains Morphe patch 1.2.1, and both companion apps 2.1.4. The patch adds paginated chat discovery/history,
+sending without a notification, and new one-to-one chats from the watch. OB Settings → Morphe patches
+controls the runtime bridge. See [Install 2.1.4](docs/INSTALL-2.1.4.md), the
+[2.1.4 release notes](docs/RELEASE-2.1.4.md), and the [Morphe build notes](docs/MORPHE.md).
 
 ## How it works
 
@@ -385,9 +384,9 @@ If `keystore.properties` is absent, Gradle produces unsigned release APKs. `keys
 `*.keystore`, and `*.jks` are ignored by git. Never use the development key from `dist/` for a
 public release; generate your own and keep it backed up.
 
-Source builds now produce phone/watch **2.1.3** (versionCode 16), using backward-compatible protocol
+Source builds now produce phone/watch **2.1.4** (versionCode 17), using backward-compatible protocol
 version 3. Update both apps together. Without the optional patch, sending still requires a live or
-retained notification reply action. [Morphe preview notes](docs/MORPHE.md) describe the direct path.
+retained notification reply action. [Morphe notes](docs/MORPHE.md) describe the direct path.
 
 ### Project layout
 

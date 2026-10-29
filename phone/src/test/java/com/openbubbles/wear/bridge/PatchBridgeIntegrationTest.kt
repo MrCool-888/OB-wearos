@@ -231,6 +231,33 @@ class PatchBridgeIntegrationTest {
         assertEquals(listOf("thread"), requests.map { it.getString("op") })
     }
 
+    @Test fun failedGroupRefreshReturnsCachedBodyAndTheActualLookupError() {
+        val groupId = "chat_iMessage;+;group-id"
+        store().upsertIncoming(WireThread(id = groupId, title = "Group", isGroup = true,
+            messages = listOf(WireMessage("cached", groupId, "Earlier group message", 1))))
+        respond = { """{"apiVersion":1,"ok":false,"error":"Conversation not found."}""" }
+        var payload: ThreadPayload? = null
+        NotificationCenter.threadPayload(groupId) { payload = it }
+        ShadowLooper.idleMainLooper()
+        assertEquals("Earlier group message", payload!!.thread!!.messages.single().text)
+        assertEquals("Conversation not found.", payload!!.error)
+        assertEquals(listOf("thread"), requests.map { it.getString("op") })
+    }
+
+    @Test fun malformedSuccessfulHistoryCannotSilentlyReturnTheCache() {
+        store().upsertIncoming(WireThread(id = id, title = "Alex", messages = listOf(
+            WireMessage("cached", id, "Cached message", 1))))
+        for (body in listOf("{}", """{"id":"iMessage;-;+15551234567"}""",
+            """{"id":"iMessage;-;+15551234567","messages":"invalid"}""")) {
+            respond = { """{"apiVersion":1,"ok":true,"thread":$body}""" }
+            var payload: ThreadPayload? = null
+            NotificationCenter.threadPayload(id) { payload = it }
+            ShadowLooper.idleMainLooper()
+            assertEquals("Cached message", payload!!.thread!!.messages.single().text)
+            assertEquals("OpenBubbles returned no message history. Cached messages may be incomplete.", payload!!.error)
+        }
+    }
+
     @Test fun directSendAndRefreshPreserveAnAsynchronousGroupFailure() {
         val groupId = "chat_iMessage;+;group-id"
         val rawId = groupId.removePrefix("chat_")

@@ -166,11 +166,22 @@ object Protocol {
         }
     }
 
-    /** OpenBubbles/BlueBubbles conversation GUIDs, not arbitrary shortcut labels. */
-    fun isChatGuid(id: String): Boolean =
-        Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl}]{1,512}$").matches(id)
+    /** OpenBubbles conversation IDs, not arbitrary shortcut labels. */
+    fun isChatGuid(id: String): Boolean {
+        val raw = id.removePrefix("chat_")
+        return nativeChatGuid.matches(raw) || legacyChatGuid.matches(raw)
+    }
 
-    fun isGroupGuid(id: String): Boolean = isChatGuid(id) && id.substringAfter(';').startsWith("+;")
+    // Native OB 2.x stores Chat.guid as UUID.randomUUID().toString(). Merged
+    // chats use UUID+UUID, which is intentionally unsupported by this validator.
+    private val nativeChatGuid = Regex("^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+    private val legacyChatGuid = Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl};:/?#]{1,512}$")
+
+    /** A UUID alone carries no group metadata; only legacy GUIDs encode it. */
+    fun isGroupGuid(id: String): Boolean {
+        val raw = id.removePrefix("chat_")
+        return legacyChatGuid.matches(raw) && raw.substringAfter(';').startsWith("+;")
+    }
 
     /**
      * Stable ID for a message discovered inside a notification. OpenBubbles does

@@ -69,6 +69,28 @@ public class BridgeOpsTest {
         }
     }
 
+    @Test public void nativeUuidChatResolvesByExactIdWithoutAddressFallback() throws Exception {
+        for (String guid : new String[]{"12345678-1234-5678-9ABC-123456789ABC", "12345678-1234-5678-9abc-123456789abc"}) {
+            assertTrue(BridgeOps.validChatGuid(guid));
+            assertEquals(guid, BridgeOps.guidFromThreadId("chat_" + guid));
+            assertNull(BridgeOps.normalizeAddress(guid));
+            Chat chat = proxy(Chat.class, (self, method, args) -> {
+                assertEquals("getGuid", method.getName());
+                return guid;
+            });
+            BackendService backend = proxy(BackendService.class, (self, method, args) -> {
+                assertEquals("chatById", method.getName());
+                assertEquals(guid, args[0]);
+                return chat;
+            });
+            assertSame(chat, BridgeOps.resolve(backend, "chat_" + guid, "+15551234567", true));
+        }
+        for (String malformed : new String[]{"12345678-1234-5678-9ABC-123456789AB", "12345678-1234-5678-9ABC-123456789ABG",
+                "12345678-1234-5678-9ABC-123456789ABC;extra", "12345678-1234-5678-9ABC-123456789ABC\n"}) {
+            assertFalse(malformed, BridgeOps.validChatGuid(malformed));
+        }
+    }
+
     @Test public void missingOrFailedGuidLookupNeverFindsOrCreatesByAddress() throws Exception {
         for (boolean fail : new boolean[]{false, true}) {
             List<String> calls = new ArrayList<>();

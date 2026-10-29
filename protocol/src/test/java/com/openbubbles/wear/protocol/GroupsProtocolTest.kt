@@ -4,6 +4,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GroupsProtocolTest {
+    @Test fun acceptsNativeUuidAndLegacyConversationIdsWithoutGuessingGroups() {
+        val uuid = "550e8400-e29b-41d4-a716-446655440000"
+        assertTrue(Protocol.isChatGuid(uuid))
+        assertTrue(Protocol.isChatGuid("chat_${uuid.uppercase()}"))
+        assertTrue(Protocol.isChatGuid("chat_iMessage;+;chat123"))
+        assertTrue(Protocol.isChatGuid("SMS;-;+15551234567"))
+        assertFalse(Protocol.isGroupGuid(uuid))
+        assertFalse(Protocol.isGroupGuid("chat_$uuid"))
+        assertTrue(Protocol.isGroupGuid("chat_iMessage;+;chat123"))
+    }
+
+    @Test fun rejectsMalformedNativeAndInjectedLegacyConversationIds() {
+        assertFalse(Protocol.isChatGuid("550e8400-e29b-41d4-a716-44665544000"))
+        assertFalse(Protocol.isChatGuid("550e8400-e29b-41d4-a716-446655440000+550e8400-e29b-41d4-a716-446655440000"))
+        assertFalse(Protocol.isChatGuid("550e8400-e29b-41d4-a716-446655440000 "))
+        assertFalse(Protocol.isChatGuid("iMessage;+;chat123;SMS;-;12345"))
+        assertFalse(Protocol.isChatGuid("iMessage;+;https://example.com"))
+        assertFalse(Protocol.isChatGuid("iMessage;+;bad\nvalue"))
+    }
+
     @Test fun groupGuidValidationDoesNotInferGroupsFromNames() {
         assertTrue(Protocol.isGroupGuid("iMessage;+;chat123"))
         assertTrue(Protocol.isGroupGuid("SMS;+;1234"))
