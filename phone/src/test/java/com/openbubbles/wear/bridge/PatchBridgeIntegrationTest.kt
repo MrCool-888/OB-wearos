@@ -210,7 +210,7 @@ class PatchBridgeIntegrationTest {
     }
 
     @Test fun refreshedFailedGroupMessageKeepsItsBodyAndStatusOnTheWire() {
-        val groupId = "chat_iMessage;+;group-id"
+        val groupId = "chat_" + "abcdef01".repeat(9)
         val rawId = groupId.removePrefix("chat_")
         store().upsertIncoming(WireThread(id = groupId, title = "Group", isGroup = true,
             messages = listOf(WireMessage("old", groupId, "Earlier message", 1))))

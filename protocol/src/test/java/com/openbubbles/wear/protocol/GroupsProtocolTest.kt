@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GroupsProtocolTest {
+    @Test fun nativeConversationIdsCannotBecomeRecipientAddresses() {
+        for (id in listOf("550e8400-e29b-41d4-a716-446655440000", "abcdef01".repeat(9), "1".repeat(72))) {
+            assertNull(Protocol.normalizeAddress(id))
+            assertNull(Protocol.normalizeAddress("chat_$id"))
+            assertNull(Protocol.normalizeAddress("tel:$id"))
+        }
+    }
     @Test fun acceptsNativeUuidAndLegacyConversationIdsWithoutGuessingGroups() {
         val uuid = "550e8400-e29b-41d4-a716-446655440000"
         assertTrue(Protocol.isChatGuid(uuid))
@@ -22,6 +29,20 @@ class GroupsProtocolTest {
         assertFalse(Protocol.isChatGuid("iMessage;+;chat123;SMS;-;12345"))
         assertFalse(Protocol.isChatGuid("iMessage;+;https://example.com"))
         assertFalse(Protocol.isChatGuid("iMessage;+;bad\nvalue"))
+    }
+
+    @Test fun acceptsOnlyExactNativeHexChatIdsWithoutInferringGroups() {
+        val lower = "abcdef01".repeat(9)
+        assertEquals(72, lower.length)
+        assertTrue(Protocol.isChatGuid(lower))
+        assertTrue(Protocol.isChatGuid("chat_${lower.uppercase()}"))
+        assertFalse(Protocol.isGroupGuid(lower))
+        assertFalse(Protocol.isGroupGuid("chat_$lower"))
+        assertFalse(Protocol.isChatGuid(lower.dropLast(1)))
+        assertFalse(Protocol.isChatGuid("${lower}0"))
+        assertFalse(Protocol.isChatGuid(lower.dropLast(1) + "g"))
+        assertFalse(Protocol.isChatGuid("${lower.dropLast(1)}\n"))
+        assertFalse(Protocol.isChatGuid("https://example.com/$lower"))
     }
 
     @Test fun groupGuidValidationDoesNotInferGroupsFromNames() {

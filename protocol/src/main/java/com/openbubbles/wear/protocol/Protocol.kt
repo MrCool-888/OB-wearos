@@ -157,6 +157,8 @@ object Protocol {
         }
         if (address.contains(";-;")) address = address.substringAfterLast(";-;")
         address = address.substringBefore('?').substringBefore(';').trim()
+        val chatId = address.removePrefix("chat_")
+        if (nativeChatGuid.matches(chatId) || nativeHexChatGuid.matches(chatId)) return null
         return when {
             address.contains('@') && address.length >= 3 ->
                 address.lowercase(Locale.ROOT)
@@ -169,15 +171,16 @@ object Protocol {
     /** OpenBubbles conversation IDs, not arbitrary shortcut labels. */
     fun isChatGuid(id: String): Boolean {
         val raw = id.removePrefix("chat_")
-        return nativeChatGuid.matches(raw) || legacyChatGuid.matches(raw)
+        return nativeChatGuid.matches(raw) || nativeHexChatGuid.matches(raw) || legacyChatGuid.matches(raw)
     }
 
     // Native OB 2.x stores Chat.guid as UUID.randomUUID().toString(). Merged
     // chats use UUID+UUID, which is intentionally unsupported by this validator.
     private val nativeChatGuid = Regex("^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+    private val nativeHexChatGuid = Regex("^[0-9a-fA-F]{72}$")
     private val legacyChatGuid = Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl};:/?#]{1,512}$")
 
-    /** A UUID alone carries no group metadata; only legacy GUIDs encode it. */
+    /** Opaque native IDs carry no group metadata; only legacy GUIDs encode it. */
     fun isGroupGuid(id: String): Boolean {
         val raw = id.removePrefix("chat_")
         return legacyChatGuid.matches(raw) && raw.substringAfter(';').startsWith("+;")

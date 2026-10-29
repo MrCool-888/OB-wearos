@@ -91,6 +91,29 @@ public class BridgeOpsTest {
         }
     }
 
+    @Test public void nativeHexGroupResolvesByExactIdWithoutAddressFallback() throws Exception {
+        for (String guid : new String[]{"abcdef01".repeat(9), "ABCDEF01".repeat(9)}) {
+            assertTrue(BridgeOps.validChatGuid(guid));
+            assertEquals(guid, BridgeOps.guidFromThreadId("chat_" + guid));
+            assertNull(BridgeOps.normalizeAddress(guid));
+            Chat chat = proxy(Chat.class, (self, method, args) -> {
+                assertEquals("getGuid", method.getName());
+                return guid;
+            });
+            BackendService backend = proxy(BackendService.class, (self, method, args) -> {
+                assertEquals("chatById", method.getName());
+                assertEquals(guid, args[0]);
+                return chat;
+            });
+            assertSame(chat, BridgeOps.resolve(backend, "chat_" + guid, null, false));
+            assertSame(chat, BridgeOps.resolve(backend, "chat_" + guid, "+15551234567", true));
+        }
+        for (String bad : new String[]{"a".repeat(71), "a".repeat(73), "a".repeat(71) + "z",
+                "a".repeat(72) + ";extra", "a".repeat(72) + "\n"}) {
+            assertFalse(BridgeOps.validChatGuid(bad));
+        }
+    }
+
     @Test public void missingOrFailedGuidLookupNeverFindsOrCreatesByAddress() throws Exception {
         for (boolean fail : new boolean[]{false, true}) {
             List<String> calls = new ArrayList<>();

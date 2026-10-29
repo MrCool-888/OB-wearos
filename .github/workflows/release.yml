@@ -99,8 +99,8 @@ jobs:
       - name: Stage release assets
         run: |
           mkdir -p release-assets
-          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.4.apk
-          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.4.apk
+          cp phone/build/outputs/apk/release/phone-release.apk release-assets/OpenBubblesWear-Phone-2.1.5.apk
+          cp wear/build/outputs/apk/release/wear-release.apk release-assets/OpenBubblesWear-Watch-2.1.5.apk
 
           if [ -d morphe/build/installable ]; then
             mkdir -p release-assets/phone
@@ -110,7 +110,7 @@ jobs:
             cp morphe/build/installable/config.mdpi.apk release-assets/phone/
             cp morphe/build/installable/SHA256SUMS release-assets/phone/SHA256SUMS
             cp morphe/build/installable/INSTALL.txt release-assets/phone/INSTALL.txt
-            cp morphe/build/libs/openbubbles-wear-patches-1.2.1.mpp release-assets/OpenBubblesWear-Morphe-1.2.1.mpp
+            cp morphe/build/libs/openbubbles-wear-patches-1.2.2.mpp release-assets/OpenBubblesWear-Morphe-1.2.2.mpp
           fi
 
           # Generate combined checksums
@@ -122,37 +122,37 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') && env.HAS_RELEASE_SIGNING == 'true'
         with:
-          tag_name: 2.1.4-${{ github.run_number }}
-          name: OpenBubbles Wear 2.1.4 (build ${{ github.run_number }})
+          tag_name: 2.1.5-${{ github.run_number }}
+          name: OpenBubbles Wear 2.1.5 (build ${{ github.run_number }})
           prerelease: true
           body: |
-            ## OpenBubbles Wear 2.1.4
+            ## OpenBubbles Wear 2.1.5
 
             Automatic release built from `main`.
 
-            Fixes the observed native OpenBubbles UUID conversation-ID rejection in Morphe discovery and thread operations, and sends group status explicitly. History refresh errors are surfaced instead of silently leaving stale cache. Apple rate limits are unchanged; physical read-only refresh validation remains pending, and no send tests are claimed.
+            Supports the observed 72-character hexadecimal native group IDs and reads group/delivery metadata from persisted fields. A read-only group refresh returned the missing failed messages, and the user confirmed their correct display on the watch. Apple rate limits are unchanged; no send test was performed.
 
             ### Install
 
             **Phone (companion bridge):**
             ```bash
-            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.4.apk
+            adb -s PHONE_SERIAL install -r OpenBubblesWear-Phone-2.1.5.apk
             ```
 
             **Watch (companion app):**
             ```bash
-            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.4.apk
+            adb -s WATCH_SERIAL install -r OpenBubblesWear-Watch-2.1.5.apk
             ```
 
-            Update patched OpenBubbles (already containing patch 1.2.1) and both 2.1.4 companions. The MPP is an alternative build input, not an extra installation step. Preserve the installed universal-versus-split APK format and update in place with the same signing keys. Do not uninstall or clear data.
+            Update patched OpenBubbles (already containing patch 1.2.2) and both 2.1.5 companions. The MPP is an alternative build input, not an extra installation step. Preserve the installed universal-versus-split APK format and update in place with the same signing keys. Do not uninstall or clear data.
 
-            See [docs/INSTALL-2.1.4.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.4.md) for full instructions.
+            See [docs/INSTALL-2.1.5.md](https://github.com/MrCool-888/OB-wearos/blob/main/docs/INSTALL-2.1.5.md) for full instructions.
 
             ### What's included
 
-            - `OpenBubblesWear-Phone-2.1.4.apk` and `OpenBubblesWear-Watch-2.1.4.apk` — companions
-            - `phone/` — complete patched OpenBubbles 2.0.0 APK set (universal or base plus splits), when built
-            - `OpenBubblesWear-Morphe-1.2.1.mpp` — Morphe patch bundle
+            - `OpenBubblesWear-Phone-2.1.5.apk` and `OpenBubblesWear-Watch-2.1.5.apk` — companions
+            - `phone/` — patched OpenBubbles 2.0.0 base APK plus configuration splits, when built
+            - `OpenBubblesWear-Morphe-1.2.2.mpp` — Morphe patch bundle, when built
             - `SHA256SUMS.txt` — checksums for all assets
           files: |
             release-assets/*
