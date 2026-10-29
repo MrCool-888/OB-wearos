@@ -22,7 +22,7 @@ public class ChatNamesTest {
     }
 
     @Test public void resolvesDirectNamesWithoutChangingRoutingFields() throws Exception {
-        for (String fallback : new String[]{ID, "Conversation", "+15551234567"}) {
+        for (String fallback : new String[]{ID, "Conversation", "+15551234567", "chat125428204935"}) {
             JSONObject row = chat(fallback, false, "+15551234567");
             new ChatNames(address -> "Alex").apply(row);
             assertEquals("Alex", row.getString("title"));
@@ -37,7 +37,7 @@ public class ChatNamesTest {
         JSONObject named = chat("Class 2026", true, "alex@example.com", "+15557654321");
         new ChatNames(address -> { throw new AssertionError("Custom title must be preserved"); }).apply(named);
         assertEquals("Class 2026", named.getString("title"));
-        for (String fallback : new String[]{"a".repeat(72), "Group", "alex@example.com, +15557654321"}) {
+        for (String fallback : new String[]{"a".repeat(72), "Group", "alex@example.com, +15557654321", "chat125428204935"}) {
             JSONObject row = chat(fallback, true, "alex@example.com", "+15557654321");
             names.apply(row);
             assertEquals("Alex, Sam", row.getString("title"));

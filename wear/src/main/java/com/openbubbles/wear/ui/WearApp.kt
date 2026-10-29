@@ -30,7 +30,7 @@ import com.openbubbles.wear.refreshVisibleConversations
 import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "2.1.0"
+const val WATCH_APP_VERSION = "2.1.7"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
