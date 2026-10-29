@@ -188,6 +188,26 @@ class PublishedChatDiscoveryTest {
         assertEquals(imported, BridgeStore(RuntimeEnvironment.getApplication()).get(groupId))
     }
 
+    @Test fun genericIncomingTitleKeepsPreviousHumanTitleButHumanRenameWins() {
+        val store = BridgeStore(RuntimeEnvironment.getApplication())
+        store.update(WireThread(id = directId, title = "Family", isGroup = true))
+
+        val retained = store.upsertIncoming(WireThread(id = directId, title = "Group", isGroup = true))
+        assertEquals("Family", retained.title)
+
+        val renamed = store.upsertIncoming(WireThread(id = directId, title = "Weekend plans", isGroup = true))
+        assertEquals("Weekend plans", renamed.title)
+    }
+
+    @Test fun publishedMetadataGenericTitleKeepsCachedHumanTitle() {
+        val store = BridgeStore(RuntimeEnvironment.getApplication())
+        store.update(WireThread(id = groupId, title = "Family", isGroup = true))
+
+        val imported = store.importPublishedChat(WireThread(id = groupId, title = "Group", isGroup = true))
+
+        assertEquals("Family", imported.title)
+    }
+
     @Test fun importingContactKeyedChatDoesNotRequireAGuid() {
         val store = BridgeStore(RuntimeEnvironment.getApplication())
         val imported = store.importPublishedChat(

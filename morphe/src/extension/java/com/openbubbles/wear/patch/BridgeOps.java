@@ -6,6 +6,9 @@ import android.util.Log;
 
 import com.localob.messaging.app.service.BackendForegroundService;
 import com.localob.messaging.app.service.BackendState;
+import com.localob.messaging.app.LocalObApplication;
+import com.localob.messaging.app.messaging.AndroidContactsRepository;
+import com.localob.messaging.backend.contacts.Contact;
 import com.localob.messaging.backend.db.Chat_;
 import com.localob.messaging.backend.db.Database;
 import com.localob.messaging.backend.db.Message_;
@@ -44,7 +47,7 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
  * service's worker thread, so waiting for a coroutine continuation is safe.
  */
 final class BridgeOps {
-    static final String PATCH_VERSION = "1.2.2";
+    static final String PATCH_VERSION = "1.2.3";
     static final int API_VERSION = 1;
 
     private static final String TAG = "OBWearPatch";
@@ -57,6 +60,7 @@ final class BridgeOps {
     static final int MAX_TEXT_LENGTH = 800;
     static final int MAX_COLLECTION_CHARS = 120_000;
     private static final int MAX_PARTICIPANTS = 32;
+    private static volatile AndroidContactsRepository contacts;
 
     private static final Pattern CHAT_GUID = Pattern.compile("^(iMessage|SMS|RCS);[+-];[^;\\s\\p{Cntrl}]{1,512}$");
     private static final Pattern NATIVE_CHAT_GUID = Pattern.compile(
@@ -68,6 +72,28 @@ final class BridgeOps {
             Pattern.CASE_INSENSITIVE);
 
     private BridgeOps() {
+    }
+
+    static void initializeNames(Context context) {
+        try {
+            Context app = context.getApplicationContext();
+            if (app instanceof LocalObApplication) contacts = ((LocalObApplication) app).getContacts();
+        } catch (Throwable ignored) { }
+    }
+
+    private static ChatNames names() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        return new ChatNames(address -> {
+            AndroidContactsRepository repository = contacts;
+            if (repository == null) return null;
+            long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (remaining <= 0) {
+                Contact cached = repository.peek(address);
+                return cached == null ? null : cached.getDisplayName();
+            }
+            Contact found = (Contact) Await.await(continuation -> repository.resolve(address, continuation), remaining);
+            return found == null ? null : found.getDisplayName();
+        });
     }
 
     static JSONObject status(Context context) throws Exception {
@@ -126,11 +152,13 @@ final class BridgeOps {
             return byActivity != 0 ? byActivity : left.optString("id").compareTo(right.optString("id"));
         });
         JSONArray array = new JSONArray();
+        ChatNames names = names();
         int chars = 0;
         int end = Math.min(chats.size(), offset + limit);
         int index = Math.min(offset, chats.size());
         for (; index < end; index++) {
             JSONObject chat = chats.get(index);
+            names.apply(chat);
             chars += chat.toString().length() + 1;
             if (chars > MAX_COLLECTION_CHARS) break;
             array.put(chat);
@@ -447,6 +475,7 @@ final class BridgeOps {
     }
 
     private static JSONObject threadJson(Chat chat, int limit) throws Exception {
+        ChatNames names = names();
         JSONObject out = new JSONObject();
         String guid = chat.getGuid();
         out.put("id", guid);
@@ -461,6 +490,7 @@ final class BridgeOps {
             out = threadMetadata(chat);
         }
         JSONArray messages = new JSONArray();
+        names.apply(out);
         if (entity != null) {
             List<com.localob.messaging.backend.db.Message> found;
             try (Query<com.localob.messaging.backend.db.Message> query = Database.INSTANCE.getMessages()
@@ -475,7 +505,7 @@ final class BridgeOps {
             for (com.localob.messaging.backend.db.Message message : found) {
                 if (message.getDateDeleted() != null) continue;
                 if (message.getAssociatedMessageType() != null) continue;
-                JSONObject json = messageJson(message);
+                JSONObject json = messageJson(message, names);
                 if (json == null) continue;
                 chars += json.toString().length() + 1;
                 if (chars > MAX_COLLECTION_CHARS) break;
@@ -511,6 +541,10 @@ final class BridgeOps {
     }
 
     static JSONObject messageJson(Message message) throws Exception {
+        return messageJson(message, null);
+    }
+
+    private static JSONObject messageJson(Message message, ChatNames names) throws Exception {
         if (message == null || blank(message.getGuid()) || message.getGuid().length() > 512) return null;
         String text = messageText(message);
         boolean attachment = false;
@@ -534,7 +568,7 @@ final class BridgeOps {
         out.put("text", bounded(text, MAX_TEXT_LENGTH));
         out.put("timestamp", timestamp);
         out.put("fromMe", fromMe);
-        if (sender != null) out.put("sender", bounded(sender, 254));
+        if (sender != null) out.put("sender", bounded(names == null ? sender : names.sender(sender), 254));
         if (attachment) out.put("attachment", true);
         if (fromMe) {
             try {

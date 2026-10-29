@@ -276,7 +276,12 @@ object WatchRepository {
     @Synchronized
     private fun applySync(payload: SyncPayload, connected: Boolean) {
         payload.conversations.forEach { migrateThreadIds(it.id, aliasesFor(it.id, it.address, it.isGroup)) }
-        val summaries = payload.conversations.map(::respectLocalRead).sortedByDescending { it.lastTimestamp }
+        val summaries = payload.conversations.map { incoming ->
+            val old = _state.value.conversations.firstOrNull { it.id == incoming.id }
+            incoming.copy(title = Protocol.preferredConversationTitle(
+                incoming.title, old?.title, incoming.id, incoming.address
+            ))
+        }.map(::respectLocalRead).sortedByDescending { it.lastTimestamp }
         val byId = summaries.associateBy { it.id }
         val existingThreads = _state.value.threads.mapValues { (id, thread) ->
             val summary = byId[id] ?: return@mapValues thread
@@ -1083,8 +1088,10 @@ object WatchRepository {
                 val foundAddress = Protocol.normalizeAddress(found.address)
                 val old = state.conversations.firstOrNull { it.id == found.id }
                     ?: foundAddress?.let { byAddress[it] }
-                if (old == null || state.directBridge) found else found.copy(
-                    title = old.title.ifBlank { found.title },
+                if (old == null || state.directBridge) found.copy(
+                    title = Protocol.preferredConversationTitle(found.title, old?.title, found.id, found.address)
+                ) else found.copy(
+                    title = Protocol.preferredConversationTitle(found.title, old.title, found.id, found.address),
                     isGroup = found.isGroup || old.isGroup,
                     unread = old.unread,
                     lastTimestamp = old.lastTimestamp,
@@ -1475,6 +1482,15 @@ object WatchRepository {
         val summary = state.conversations.firstOrNull { it.id == threadId }
             ?: state.conversations.filter { it.id in aliases }.maxByOrNull { it.lastTimestamp }?.copy(id = threadId)
             ?: migrated?.toSummary()
+        val priorTitle = state.conversations
+            .filter { it.id == threadId || it.id in aliases }
+            .map { it.title }
+            .firstOrNull {
+                Protocol.isMeaningfulConversationTitle(it, threadId, summary?.address ?: migrated?.address)
+            }
+        val mergedSummary = summary?.copy(title = Protocol.preferredConversationTitle(
+            summary.title, priorTitle, threadId, summary.address ?: migrated?.address
+        ))
         val readAt = (aliases + threadId).maxOf { readAt(it) }
         if (readAt > 0L) markReadAt(threadId, readAt)
         appContext?.let { context ->
@@ -1488,7 +1504,7 @@ object WatchRepository {
             current.copy(
                 threads = (current.threads - aliases) + if (migrated == null) emptyMap() else mapOf(threadId to migrated),
                 conversations = (current.conversations.filterNot { it.id in aliases || it.id == threadId } +
-                    listOfNotNull(summary)).sortedByDescending { it.lastTimestamp },
+                    listOfNotNull(mergedSummary)).sortedByDescending { it.lastTimestamp },
                 queuedSends = current.queuedSends.map { if (it.threadId in aliases) it.copy(threadId = threadId) else it },
                 sendingThreads = (current.sendingThreads - aliases).let {
                     if (current.sendingThreads.any { id -> id in aliases }) it + threadId else it
@@ -1573,7 +1589,11 @@ object WatchRepository {
             .sortedBy { it.timestamp }
         val readAt = readAt(incoming.id)
         val unread = incoming.unread && incoming.lastActivity() > readAt
-        return incoming.copy(messages = allMessages, unread = unread,
+        return incoming.copy(
+            title = Protocol.preferredConversationTitle(incoming.title, old?.title
+                ?: _state.value.conversations.firstOrNull { it.id == incoming.id }?.title,
+                incoming.id, incoming.address ?: old?.address),
+            messages = allMessages, unread = unread,
             directHistory = incoming.directHistory || old?.directHistory == true)
     }
 

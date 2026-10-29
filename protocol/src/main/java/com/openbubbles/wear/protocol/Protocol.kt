@@ -179,12 +179,34 @@ object Protocol {
     private val nativeChatGuid = Regex("^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
     private val nativeHexChatGuid = Regex("^[0-9a-fA-F]{72}$")
     private val legacyChatGuid = Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl};:/?#]{1,512}$")
+    private val addressTitlePhone = Regex("(?i)^(?:tel:|sms:|smsto:)?[+0-9 ().-]+$")
+    private val addressTitleEmail = Regex("(?i)^(?:mailto:)?[^\\s@<>]+@[^\\s@<>]+$")
+    private val genericTitles = setOf("conversation", "group", "chat", "unknown")
 
     /** Opaque native IDs carry no group metadata; only legacy GUIDs encode it. */
     fun isGroupGuid(id: String): Boolean {
         val raw = id.removePrefix("chat_")
         return legacyChatGuid.matches(raw) && raw.substringAfter(';').startsWith("+;")
     }
+
+    fun isMeaningfulConversationTitle(title: String, id: String, address: String?): Boolean {
+        val value = title.trim()
+        if (value.isEmpty() || value.lowercase(Locale.ROOT) in genericTitles) return false
+        if (value == id || value == id.removePrefix("chat_") || isChatGuid(value)) return false
+        if (value == address || isAddressTitle(value)) return false
+        val parts = value.split(',').map(String::trim)
+        return parts.size == 1 || !parts.all(::isAddressTitle)
+    }
+
+    fun preferredConversationTitle(incoming: String, previous: String?, id: String, address: String?): String = when {
+        isMeaningfulConversationTitle(incoming, id, address) -> incoming.trim()
+        previous != null && isMeaningfulConversationTitle(previous, id, address) -> previous.trim()
+        else -> incoming.trim().ifBlank { previous.orEmpty() }
+    }
+
+    private fun isAddressTitle(value: String): Boolean =
+        addressTitlePhone.matches(value) && value.count(Char::isDigit) >= 5 ||
+            addressTitleEmail.matches(value)
 
     /**
      * Stable ID for a message discovered inside a notification. OpenBubbles does

@@ -41,6 +41,7 @@ public final class CompanionService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        BridgeOps.initializeNames(getApplicationContext());
         worker = new HandlerThread("OpenBubblesWearPatch");
         worker.start();
         messenger = new Messenger(new Handler(worker.getLooper(), this::handleRequest));

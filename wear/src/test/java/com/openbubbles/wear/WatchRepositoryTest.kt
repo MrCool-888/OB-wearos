@@ -217,6 +217,42 @@ class WatchRepositoryTest {
         assertFalse(state.value.conversations.single().unread)
     }
 
+    @Test fun genericAndRawTitlesDoNotReplaceMeaningfulNames() {
+        val alex = WireThread(id = "chat", title = "Alex", address = "+15551234567")
+        state.value = state.value.copy(threads = mapOf("chat" to alex), conversations = listOf(alex.toSummary()))
+
+        WatchRepository.onThread(alex.copy(title = "Conversation"), connected = false)
+        WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = true, relayEnabled = true,
+            conversations = listOf(alex.toSummary().copy(title = "a".repeat(72)))))
+
+        assertEquals("Alex", state.value.threads.getValue("chat").title)
+        assertEquals("Alex", state.value.conversations.single { it.id == "chat" }.title)
+    }
+
+    @Test fun meaningfulIncomingTitleUpdatesExistingName() {
+        val alex = WireThread(id = "chat", title = "Alex", address = "+15551234567")
+        state.value = state.value.copy(threads = mapOf("chat" to alex), conversations = listOf(alex.toSummary()))
+
+        WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
+            notificationAccess = true, relayEnabled = true,
+            conversations = listOf(alex.toSummary().copy(title = "Alex Work"))))
+
+        assertEquals("Alex Work", state.value.threads.getValue("chat").title)
+        assertEquals("Alex Work", state.value.conversations.single { it.id == "chat" }.title)
+    }
+
+    @Test fun aliasMigrationKeepsTheExistingNameWhenCanonicalTitleIsRawId() {
+        val old = WireThread(id = "old-id", title = "Alex", address = "alex@example.com")
+        state.value = state.value.copy(threads = mapOf(old.id to old), conversations = listOf(old.toSummary()))
+
+        WatchRepository.onThread(WireThread(id = "canonical-id", title = "canonical-id",
+            address = old.address), connected = false)
+
+        assertEquals("Alex", state.value.threads.getValue("canonical-id").title)
+        assertEquals("Alex", state.value.conversations.single { it.id == "canonical-id" }.title)
+    }
+
     @Test fun visibleConversationDoesNotKeepAnUnreadBadge() {
         WatchRepository.setVisibleThread("chat")
         val incoming = local.copy(id = "incoming", fromMe = false, timestamp = System.currentTimeMillis() + 1000)
