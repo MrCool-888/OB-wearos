@@ -347,15 +347,12 @@ object NotificationCenter {
                 callback(ThreadPayload(error = "Relay is paused on the phone."))
                 return@request
             }
-            val bridged = if (reply.ok) BridgeJson.thread(reply.json?.optJSONObject("thread")) else null
+            val history = reply.json?.optJSONObject("thread")
+            val bridged = if (reply.ok && history?.optJSONArray("messages") != null)
+                BridgeJson.thread(history) else null
             if (bridged == null) {
-                callback(
-                    if (cached != null) ThreadPayload(thread = decorate(cached), error = reply.error)
-                    else ThreadPayload(
-                        error = reply.error
-                            ?: "Conversation not found. Send a message once in OpenBubbles, then retry."
-                    )
-                )
+                callback(ThreadPayload(thread = cached?.let(::decorate), error = reply.error
+                    ?: "OpenBubbles returned no message history. Cached messages may be incomplete."))
                 return@request
             }
             val stored = storeBridgeThread(bridged)

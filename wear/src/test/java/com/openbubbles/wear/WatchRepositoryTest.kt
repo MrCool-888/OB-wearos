@@ -983,6 +983,57 @@ class WatchRepositoryTest {
         assertEquals("Chat unavailable", state.value.error)
     }
 
+    @Test fun correlatedCachedThreadWithRefreshErrorKeepsBodyAndReportsErrorWithoutMarkingFresh() {
+        val cached = WireThread("chat", "Group", isGroup = true, messages = listOf(
+            message("cached-group", 1, "Failed group body")
+        ))
+        threadRequests["chat"] = "load"
+        threadRequests["other"] = "other-load"
+        state.value = state.value.copy(
+            threads = mapOf("chat" to cached),
+            requestingThreads = setOf("chat", "other"),
+            lastSyncAt = 1234L
+        )
+
+        WatchRepository.onThreadPayload(ThreadPayload(
+            requestedThreadId = "chat",
+            thread = cached,
+            error = "OpenBubbles history unavailable"
+        ))
+
+        assertEquals("Failed group body", state.value.threads.getValue("chat").messages.single().text)
+        assertEquals("OpenBubbles history unavailable", state.value.error)
+        assertEquals(setOf("other"), state.value.requestingThreads)
+        assertEquals(mapOf("other" to "other-load"), threadRequests)
+        assertEquals(1234L, state.value.lastSyncAt)
+    }
+
+    @Test fun erroredCachedHistoryCannotRemoveANewerFailedGroupMessage() {
+        val older = message("older", 1, "Earlier message")
+        val failed = message("failed-group", 2, "Missing group message").copy(fromMe = true, status = "failed")
+        val current = WireThread("chat", "Group", isGroup = true, directHistory = true,
+            updatedAt = 2, messages = listOf(older, failed))
+        state.value = state.value.copy(threads = mapOf("chat" to current))
+
+        WatchRepository.onThreadPayload(ThreadPayload(requestedThreadId = "chat",
+            thread = current.copy(messages = listOf(older), updatedAt = 1), error = "History lookup failed"))
+
+        assertEquals(listOf("older", "failed-group"), state.value.threads.getValue("chat").messages.map { it.id })
+        assertEquals("failed", status("failed-group"))
+        assertEquals("History lookup failed", state.value.error)
+    }
+
+    @Test fun successfulThreadPayloadClearsAnOlderError() {
+        state.value = state.value.copy(error = "Previous refresh failed")
+
+        WatchRepository.onThreadPayload(ThreadPayload(
+            requestedThreadId = "chat",
+            thread = WireThread("chat", "Alex")
+        ))
+
+        assertNull(state.value.error)
+    }
+
     @Test fun lateCorrelatedErrorCannotClearAnotherLoadOrReplaceItsNotice() {
         threadRequests["other"] = "other-load"
         state.value = state.value.copy(requestingThreads = setOf("other"), error = "Keep this")
