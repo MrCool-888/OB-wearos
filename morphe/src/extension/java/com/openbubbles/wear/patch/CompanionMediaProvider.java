@@ -52,8 +52,20 @@ public final class CompanionMediaProvider extends ContentProvider {
         requireReadMode(mode);
         try {
             Attachment attachment = findAttachment(attachmentGuid(uri));
-            if (!Boolean.TRUE.equals(attachment.isDownloaded())) {
+            if (!hasReadableFile(Database.INSTANCE.getAttachmentsDir(), attachment.getLocalPathFlow().getValue())) {
+                if (Boolean.TRUE.equals(attachment.isDownloaded())) {
+                    // OpenBubbles trusts isDownloaded even when the cached file is gone,
+                    // so download() would return true without fetching anything.
+                    Log.w("OBWearPatch", "Re-downloading stale attachment " + attachment.getGuid());
+                    attachment.setDownloaded(false);
+                    attachment.refreshFlows();
+                }
                 BridgeOps.downloadAttachment(attachment, DOWNLOAD_TIMEOUT_MS);
+                // A finished download only persists isDownloaded; the path flow stays stale.
+                attachment.refreshFlows();
+                if (!hasReadableFile(Database.INSTANCE.getAttachmentsDir(), attachment.getLocalPathFlow().getValue())) {
+                    Log.w("OBWearPatch", "Attachment still unavailable after download " + attachment.getGuid());
+                }
             }
             return ParcelFileDescriptor.open(localFile(attachment), ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (FileNotFoundException e) {
@@ -146,6 +158,16 @@ public final class CompanionMediaProvider extends ContentProvider {
         String path = attachment.getLocalPathFlow().getValue();
         if (path == null) throw unavailable();
         return containedFile(Database.INSTANCE.getAttachmentsDir(), new File(path));
+    }
+
+    static boolean hasReadableFile(File root, String path) {
+        if (path == null) return false;
+        try {
+            containedFile(root, new File(path));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     static File containedFile(File root, File candidate) throws IOException {

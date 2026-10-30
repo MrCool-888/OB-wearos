@@ -154,8 +154,9 @@ it may already have been accepted. Check OpenBubbles before manually retrying an
 Current automated checks are recorded in [2.1.8 release notes](RELEASE-2.1.8.md). Contact names are
 resolved from the Android address book, and the companions keep a previously cached human name when
 metadata is generic or raw. Live name display was verified on a Galaxy S25 and Galaxy Watch7 in 2.1.7: unnamed groups show
-participant names and custom group names are preserved. The 2.1.8 tile redesign and first-read image
-download were built but not yet checked on hardware. No network send test was run.
+participant names and custom group names are preserved. The 2.1.8 first-read image download, stale-cache
+re-download and tile empty state were checked on hardware; the crowded three-row tile was not reproduced.
+No network send test was run.
 
 The local testing set is copied into ignored `dist/OpenBubblesWear-2.1.8/`:
 

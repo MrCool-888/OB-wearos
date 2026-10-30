@@ -59,6 +59,10 @@ public class CompanionMediaProviderTest {
         File image = new File(nested, "photo.gif");
         Files.write(image.toPath(), new byte[]{1, 2, 3});
         assertEquals(image.getCanonicalFile(), CompanionMediaProvider.containedFile(root, image));
+        assertTrue(CompanionMediaProvider.hasReadableFile(root, image.getAbsolutePath()));
+        assertFalse(CompanionMediaProvider.hasReadableFile(root, null));
+        assertFalse(CompanionMediaProvider.hasReadableFile(root, new File(root, "missing").getAbsolutePath()));
+        assertFalse(CompanionMediaProvider.hasReadableFile(root, nested.getAbsolutePath()));
         File other = temporary.newFolder("attachments-other");
         File secret = new File(other, "secret.gif");
         Files.write(secret.toPath(), new byte[]{4});

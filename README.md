@@ -12,7 +12,8 @@ Apple's servers directly and never handles your account or encryption keys.
 
 The **2.1.8 release** fixes photos and GIFs in chats that the patched OpenBubbles bridge had not
 downloaded yet: the patch now exposes every image attachment and downloads it on the watch's first
-request. The watch tile is redesigned with card rows, ellipsis on every line, and a single footer so
+request, including re-downloading a cached attachment whose file is gone. The watch tile is
+redesigned with card rows, ellipsis on every line, a centered title and a single centered footer so
 text no longer clips on a 432×432 display. It keeps Morphe chat discovery and history for native
 OpenBubbles 2.0.0 (20002289), including UUID and exact 72-character hexadecimal conversation IDs with explicit
 group metadata. It requires the patched OpenBubbles APK update, which contains Morphe patch 1.2.5, and both
