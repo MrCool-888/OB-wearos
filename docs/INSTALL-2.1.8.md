@@ -51,7 +51,8 @@ the matching signed release set.
    explicitly in the directory metadata.
 4. Open a chat with a photo or GIF. If the patch had not downloaded the image yet, the first tap
    fetches it from OpenBubbles and then shows it; the phone may take several seconds on a slow
-   connection. A second tap opens the full-screen viewer.
+   connection. If OpenBubbles still marks the attachment as downloaded but its cached file is gone,
+   the patch re-downloads it automatically. A second tap opens the full-screen viewer.
 5. Unnamed groups show their participants' saved contact names. If a group still shows a raw
    `chat<number>` title, refresh the chat list so the phone sends the resolved title.
 6. If names are missing, confirm OpenBubbles has Contacts access, then refresh the chat list. Without

@@ -66,6 +66,7 @@ class WatchTileService : TileService() {
                     )
                     .build()
             )
+            .addContent(spacer(12f))
             .addContent(header(state, unread.size))
 
         if (latest.isEmpty()) {
@@ -88,17 +89,6 @@ class WatchTileService : TileService() {
 
     private fun header(state: WatchState, unread: Int): LayoutElementBuilders.LayoutElement {
         val row = LayoutElementBuilders.Row.Builder()
-            .setWidth(DimensionBuilders.expand())
-            .setModifiers(
-                ModifiersBuilders.Modifiers.Builder()
-                    .setClickable(
-                        ModifiersBuilders.Clickable.Builder()
-                            .setId("open-messages")
-                            .setOnClick(launchTo(null))
-                            .build()
-                    )
-                    .build()
-            )
         row.addContent(
             LayoutElementBuilders.Text.Builder()
                 .setText("OpenBubbles")
@@ -125,7 +115,22 @@ class WatchTileService : TileService() {
         } else if (!state.phoneOnline) {
             row.addContent(text(text = "Offline", size = 11f, color = ACCENT))
         }
-        return row.build()
+        // Centered so the round screen never clips the start of the title.
+        return LayoutElementBuilders.Column.Builder()
+            .setWidth(DimensionBuilders.expand())
+            .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
+            .setModifiers(
+                ModifiersBuilders.Modifiers.Builder()
+                    .setClickable(
+                        ModifiersBuilders.Clickable.Builder()
+                            .setId("open-messages")
+                            .setOnClick(launchTo(null))
+                            .build()
+                    )
+                    .build()
+            )
+            .addContent(row.build())
+            .build()
     }
 
     private fun emptyState(state: WatchState): LayoutElementBuilders.LayoutElement =
@@ -224,9 +229,13 @@ class WatchTileService : TileService() {
     }
 
     /** One combined line so the footer never pushes rows past the tile edge. */
-    private fun footer(state: WatchState, hiddenUnread: Int): LayoutElementBuilders.Text? {
+    private fun footer(state: WatchState, hiddenUnread: Int): LayoutElementBuilders.LayoutElement? {
         val label = tileFooter(hiddenUnread, state.queuedCount) ?: return null
-        return text(text = label, size = 11f, color = TERTIARY)
+        return LayoutElementBuilders.Column.Builder()
+            .setWidth(DimensionBuilders.expand())
+            .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
+            .addContent(text(text = label, size = 11f, color = TERTIARY))
+            .build()
     }
 
     private fun preview(summary: ThreadSummary): String = when {
