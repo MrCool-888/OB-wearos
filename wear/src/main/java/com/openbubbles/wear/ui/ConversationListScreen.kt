@@ -114,14 +114,13 @@ fun ConversationListScreen(
                         Card(onClick = onSync, modifier = Modifier.fillMaxWidth()) {
                             Text("No group chats yet", style = MaterialTheme.typography.titleSmall)
                             Text(if (state.directBridge) "Use Find chats in OpenBubbles below to load existing groups."
-                                else "Use Find chats (Shizuku) below, or receive a group notification. Published shortcuts and channels are a partial list, not every group.",
+                                else "Open patched OpenBubbles and enable the Wear bridge, then find chats below.",
                                 style = MaterialTheme.typography.bodyExtraSmall)
                         }
                     }
                 } else if (state.conversations.isEmpty()) {
                     item {
                         EmptyStateCard(
-                            hasNotificationAccess = state.notificationAccess,
                             directBridge = state.directBridge,
                             phoneOnline = state.phoneOnline,
                             onSync = onSync
@@ -133,6 +132,7 @@ fun ConversationListScreen(
                         key = { it.id }
                     ) { summary ->
                         ConversationCard(
+                            state = state,
                             summary = summary,
                             onClick = { onOpenThread(summary.id) }
                         )
@@ -205,7 +205,7 @@ private fun PhoneStatusCard(
     val scheme = MaterialTheme.colorScheme
     val statusColor = when {
         !state.phoneOnline -> scheme.error
-        !state.notificationAccess && !state.directBridge -> scheme.error
+        !state.directBridge -> scheme.error
         !state.relayEnabled -> scheme.tertiary
         state.phoneLocked -> scheme.tertiary
         else -> scheme.primary
@@ -213,7 +213,7 @@ private fun PhoneStatusCard(
     val title = when {
         state.syncing -> "Syncing…"
         !state.phoneOnline -> "Phone offline"
-        !state.notificationAccess && !state.directBridge -> "Notification access off"
+        !state.directBridge -> "Wear patch unavailable"
         !state.relayEnabled -> "Relay paused on phone"
         state.phoneLocked -> "Phone locked"
         else -> "Connected to phone"
@@ -225,8 +225,8 @@ private fun PhoneStatusCard(
         !state.phoneOnline ->
             "Open the bridge app on your phone."
 
-        !state.notificationAccess && !state.directBridge ->
-            "Open the bridge app and grant notification access."
+        !state.directBridge ->
+            state.backendState.ifBlank { "Enable the Wear patch in OpenBubbles and sync again." }
 
         !state.relayEnabled ->
             "New messages stay on the phone until relay is resumed."
@@ -260,7 +260,6 @@ private fun PhoneStatusCard(
 
 @Composable
 private fun EmptyStateCard(
-    hasNotificationAccess: Boolean,
     directBridge: Boolean,
     phoneOnline: Boolean,
     onSync: () -> Unit
@@ -284,11 +283,8 @@ private fun EmptyStateCard(
                     directBridge ->
                         "Use Find chats in OpenBubbles, or choose a contact to start a conversation."
 
-                    !hasNotificationAccess ->
-                        "The bridge needs notification access before it can see OpenBubbles messages."
-
                     else ->
-                        "When OpenBubbles posts a message notification, the chat will show up here."
+                        "Enable the Wear patch in OpenBubbles to load conversations."
                 },
                 style = MaterialTheme.typography.bodyExtraSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -305,6 +301,7 @@ private fun EmptyStateCard(
 
 @Composable
 private fun ConversationCard(
+    state: WatchState,
     summary: ThreadSummary,
     onClick: () -> Unit
 ) {
@@ -317,7 +314,9 @@ private fun ConversationCard(
         )
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ArtworkPlaceholder(
+            ContactAvatar(
+                state = state,
+                avatarId = summary.avatarId,
                 initials = initialsFor(summary.title),
                 color = if (summary.unread) scheme.primaryContainer else scheme.surfaceContainerHigh,
                 contentColor = if (summary.unread) scheme.onPrimaryContainer else scheme.onSurface
@@ -357,14 +356,6 @@ private fun ConversationCard(
                         color = scheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f)
                     )
-                    if (!summary.notificationActive) {
-                        Text(
-                            text = "Saved",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = scheme.tertiary
-                        )
-                        Spacer(Modifier.width(6.dp))
-                    }
                     Text(
                         text = relativeTime(summary.lastTimestamp),
                         style = MaterialTheme.typography.labelSmall,

@@ -163,7 +163,7 @@ fun ComposerScreen(
                                     "Relay is paused on the phone. Resume it in the bridge app to send."
 
                                 else ->
-                                    "Open this chat in OpenBubbles on the phone to refresh its reply action."
+                                    "Enable the Wear patch in OpenBubbles to send from the watch."
                             },
                             isError = false
                         )

@@ -20,15 +20,14 @@ import com.openbubbles.wear.protocol.WireThread
 /**
  * Builds the watch's own rich notification for an incoming message.
  *
- * The phone bridge already mirrors OpenBubbles' notification to the watch. This
- * notification is the companion's enhanced version: it has an inline text/voice
- * reply, a mark-read action, and a deep link straight into the cached chat. The
- * user can turn it off in Settings if the mirrored notification is enough.
+ * The phone forwards eligible live alerts only while its lock screen is showing.
+ * This notification adds inline text/voice reply, a mark-read action, and a deep
+ * link into the cached chat. The user can turn it off in Settings.
  */
 object WatchNotifications {
     private const val TAG = "OBWearNotify"
     private const val PREFS_NAME = "openbubbles_wear"
-    private const val KEY_NOTIFIED_AT = "notified_at:"
+    private const val KEY_ALERTED_IDS = "alerted_backend_message_ids"
 
     const val CHANNEL_ID = "messages"
 
@@ -69,27 +68,29 @@ object WatchNotifications {
         context: Context,
         thread: WireThread,
         state: WatchState,
-        allowNotify: Boolean
+        alertMessageId: String?,
+        hideAlertPreview: Boolean
     ) {
-        val latest = thread.messages.lastOrNull { !it.fromMe } ?: return
         if (thread.id == state.visibleThreadId || !thread.unread) {
             cancel(context, thread.id)
-            markNotified(context, thread.id, latest.timestamp)
+            alertMessageId?.let { recordAlerted(context, it) }
             return
         }
-        if (!allowNotify) return
+        val messageId = alertMessageId ?: return
+        val latest = thread.messages.firstOrNull { it.id == messageId && !it.fromMe } ?: return
+        if (wasAlerted(context, messageId)) return
         if (!state.canPostNotifications) return
         if (!areSystemNotificationsAllowed(context)) return
-        if (latest.timestamp <= lastNotified(context, thread.id)) return
-        show(context, thread, latest, state.quickReplies)
+        if (show(context, thread, latest, state.quickReplies, hideAlertPreview)) recordAlerted(context, messageId)
     }
 
     private fun show(
         context: Context,
         thread: WireThread,
         latest: WireMessage,
-        quickReplies: List<String>
-    ) {
+        quickReplies: List<String>,
+        hidePreview: Boolean
+    ): Boolean {
         val id = notificationId(thread.id)
         val me = Person.Builder().setName("You").build()
         val style = NotificationCompat.MessagingStyle(me)
@@ -103,7 +104,7 @@ object WatchNotifications {
                     .setName(message.sender?.takeIf { it.isNotBlank() } ?: thread.title)
                     .build()
             }
-            style.addMessage(message.displayText, message.timestamp, sender)
+            style.addMessage(if (hidePreview) "New message" else message.displayText, message.timestamp, sender)
         }
 
         val contentIntent = PendingIntent.getActivity(
@@ -171,7 +172,7 @@ object WatchNotifications {
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFF2E6FCC.toInt())
             .setContentTitle(thread.title)
-            .setContentText(latest.displayText)
+            .setContentText(if (hidePreview) "New message" else latest.displayText)
             .setStyle(style)
             .setContentIntent(contentIntent)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -183,20 +184,24 @@ object WatchNotifications {
             .setLocalOnly(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setNumber(1)
+            .addAction(R.drawable.ic_notification, "Open chat", contentIntent)
             .addAction(replyAction)
             .addAction(markReadAction)
+            .extend(NotificationCompat.WearableExtender()
+                .setContentAction(0)
+                .setContentIntentAvailableOffline(true))
             .build()
 
         try {
             NotificationManagerCompat.from(context).notify(thread.id, id, notification)
         } catch (error: SecurityException) {
             Log.w(TAG, "Notification permission was revoked for ${thread.id}", error)
-            return
+            return false
         } catch (error: Throwable) {
             Log.w(TAG, "Unable to post notification for ${thread.id}", error)
-            return
+            return false
         }
-        markNotified(context, thread.id, latest.timestamp)
+        return true
     }
 
     fun cancel(context: Context, threadId: String) {
@@ -216,15 +221,18 @@ object WatchNotifications {
         return if (raw == 0) 1 else raw
     }
 
-    fun lastNotified(context: Context, threadId: String): Long =
-        prefs(context).getLong(KEY_NOTIFIED_AT + threadId, 0L)
+    @Synchronized
+    private fun wasAlerted(context: Context, messageId: String): Boolean = messageId in alertedIds(context)
+
+    private fun alertedIds(context: Context): List<String> =
+        prefs(context).getString(KEY_ALERTED_IDS, null)?.let {
+            com.openbubbles.wear.protocol.Wire.decode<List<String>>(it)
+        }.orEmpty()
 
     @Synchronized
-    fun markNotified(context: Context, threadId: String, timestamp: Long) {
-        if (timestamp <= 0L) return
-        val prefs = prefs(context)
-        if (prefs.getLong(KEY_NOTIFIED_AT + threadId, 0L) >= timestamp) return
-        prefs.edit().putLong(KEY_NOTIFIED_AT + threadId, timestamp).apply()
+    private fun recordAlerted(context: Context, messageId: String) {
+        val ids = (alertedIds(context).filterNot { it == messageId } + messageId).takeLast(200)
+        prefs(context).edit().putString(KEY_ALERTED_IDS, com.openbubbles.wear.protocol.Wire.encode(ids)).apply()
     }
 
     private fun prefs(context: Context) =

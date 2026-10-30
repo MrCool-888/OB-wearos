@@ -50,7 +50,10 @@ class WearListenerService : WearableListenerService() {
         try {
             when (path) {
                 Protocol.PATH_SYNC -> {
-                    Wire.decodeBytes<SyncPayload>(data)?.let { WatchRepository.onSync(it) }
+                    Wire.decodeBytes<SyncPayload>(data)?.let {
+                        Log.i(TAG, "Synced " + it.conversations.size + " conversations; protocol " + it.version)
+                        WatchRepository.onSync(it)
+                    }
                 }
 
                 Protocol.PATH_THREAD -> {
@@ -60,7 +63,11 @@ class WearListenerService : WearableListenerService() {
 
                 Protocol.PATH_UPDATE -> {
                     val update = Wire.decodeBytes<com.openbubbles.wear.protocol.UpdatePayload>(data)
-                    if (update != null) WatchRepository.onThread(update.thread)
+                    if (update != null) WatchRepository.onThread(
+                        update.thread,
+                        alertMessageId = update.alertMessageId,
+                        hideAlertPreview = update.hideAlertPreview
+                    )
                 }
 
                 Protocol.PATH_PONG -> {
