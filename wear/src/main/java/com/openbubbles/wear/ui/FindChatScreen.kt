@@ -165,7 +165,7 @@ fun FindChatScreen(
                         items = recipients,
                         key = { it.id }
                     ) { summary ->
-                        RecipientCard(summary) { onOpenChat(summary.id) }
+                        RecipientCard(state, summary) { onOpenChat(summary.id) }
                     }
                 } else {
                     item {
@@ -185,7 +185,7 @@ fun FindChatScreen(
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = if (state.directBridge) "Choose a contact or enter a number/email. OpenBubbles creates the conversation when you send your first message."
-                                        else "Use Choose a contact or enter a number/email to open a chat OpenBubbles has already published or notified. Brand-new chats aren't supported.",
+                                        else "Enable the Wear bridge in OpenBubbles to choose a contact or start a conversation.",
                                     style = MaterialTheme.typography.bodyExtraSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -194,14 +194,14 @@ fun FindChatScreen(
                     }
                 }
 
-                item { SectionHeader(if (state.directBridge) "OpenBubbles chats" else "Published chats") }
+                item { SectionHeader("OpenBubbles chats") }
                 item { ChatDiscoveryControls(state) }
                 items(groups, key = { "group-${it.id}" }) { group ->
-                    RecipientCard(group) { onOpenChat(group.id) }
+                    RecipientCard(state, group) { onOpenChat(group.id) }
                 }
                 if (groups.isEmpty()) item {
                     Text(if (state.directBridge) "Find existing groups directly in OpenBubbles. Creating new groups is not supported."
-                        else "Find groups and chats published as Android shortcuts or notification channels using Shizuku on the phone, without a notification. Other chats can still appear from notifications; the private chat list is not read.",
+                        else "Enable the Wear bridge in OpenBubbles to find existing groups and chats.",
                         style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
@@ -217,11 +217,11 @@ fun FindChatScreen(
 }
 
 @Composable
-private fun RecipientCard(summary: ThreadSummary, onClick: () -> Unit) {
+private fun RecipientCard(state: WatchState, summary: ThreadSummary, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ArtworkPlaceholder(initials = initialsFor(summary.title))
+            ContactAvatar(state, summary.avatarId, initialsFor(summary.title))
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f)) {
                 Text(summary.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)

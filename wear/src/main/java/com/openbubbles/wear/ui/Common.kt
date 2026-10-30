@@ -1,6 +1,7 @@
 package com.openbubbles.wear.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +37,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import coil.compose.rememberAsyncImagePainter
+import com.openbubbles.wear.WatchRepository
+import com.openbubbles.wear.WatchState
+import java.io.File
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -166,6 +172,39 @@ fun ArtworkPlaceholder(
             fontWeight = FontWeight.Bold,
             color = contentColor
         )
+    }
+}
+
+@Composable
+fun ContactAvatar(
+    state: WatchState,
+    avatarId: String?,
+    initials: String,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 36.dp,
+    color: Color = MaterialTheme.colorScheme.primaryContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onPrimaryContainer
+) {
+    val media = avatarId?.let { state.media[it] }
+    LaunchedEffect(avatarId, media, state.phoneOnline, state.directBridge, state.relayEnabled) {
+        if (avatarId != null && media == null && state.phoneOnline && state.directBridge && state.relayEnabled) {
+            WatchRepository.requestMedia(avatarId)
+        }
+    }
+    if (media == null) {
+        ArtworkPlaceholder(initials, modifier.size(size), color, contentColor)
+    } else {
+        val painter = rememberAsyncImagePainter(File(media.path))
+        if (painter.state is coil.compose.AsyncImagePainter.State.Error) {
+            ArtworkPlaceholder(initials, modifier.size(size), color, contentColor)
+        } else {
+            Image(
+                painter = painter,
+                contentDescription = null,
+                modifier = modifier.size(size).clip(CircleShape),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+            )
+        }
     }
 }
 

@@ -158,7 +158,6 @@ class ProtocolTest {
                 )
             ),
             unread = true,
-            notificationActive = true,
             canReply = true,
             canMarkRead = true,
             updatedAt = 1235L
@@ -167,7 +166,6 @@ class ProtocolTest {
             generatedAt = 999L,
             phoneName = "Pixel",
             bridgeVersion = "0.1.0",
-            notificationAccess = true,
             conversations = listOf(thread.toSummary())
         )
 
@@ -186,15 +184,17 @@ class ProtocolTest {
                 WireMessage("m", "t", "Yo", 42L, sender = "Bob")
             ),
             unread = true,
-            notificationActive = true,
             canReply = true,
             canMarkRead = true,
             updatedAt = 42L
         )
-        val json = Wire.encode(UpdatePayload(thread = thread))
+        val payload = UpdatePayload(thread = thread, alertMessageId = "backend-7", hideAlertPreview = true)
+        val json = Wire.encode(payload)
             .dropLast(1) + ",\"futureField\":\"ignored\"}"
         val decoded = Wire.decode<UpdatePayload>(json)
         assertEquals(thread, decoded?.thread)
+        assertEquals("backend-7", decoded?.alertMessageId)
+        assertTrue(decoded?.hideAlertPreview == true)
     }
 
     @Test
@@ -251,7 +251,6 @@ class ProtocolTest {
             generatedAt = 1L,
             phoneName = "Pixel",
             bridgeVersion = "1.6.0",
-            notificationAccess = true,
             phoneLocked = true,
             phoneAwake = false
         )
@@ -260,7 +259,7 @@ class ProtocolTest {
         assertFalse(decoded.phoneAwake)
 
         val oldSync = Wire.decode<SyncPayload>(
-            """{"generatedAt":1,"phoneName":"Pixel","bridgeVersion":"1.5.0","notificationAccess":true}"""
+            """{"generatedAt":1,"phoneName":"Pixel","bridgeVersion":"1.5.0","futureField":true}"""
         )!!
         assertFalse(oldSync.phoneLocked)
         assertTrue(oldSync.phoneAwake)
@@ -306,6 +305,16 @@ class ProtocolTest {
         assertEquals("alice@example.com", summary.address)
         assertTrue(summary.canReply)
         assertTrue(summary.canSend)
+    }
+
+    @Test
+    fun backendStateRoundTripsAndDefaultsForOlderPayloads() {
+        val sync = SyncPayload(generatedAt = 10L, phoneName = "Phone", bridgeVersion = "test",
+            backendState = "Wear patch disabled")
+        val pong = PongPayload(backendState = "Waiting for backend")
+        assertEquals("Wear patch disabled", Wire.decode<SyncPayload>(Wire.encode(sync))?.backendState)
+        assertEquals("Waiting for backend", Wire.decode<PongPayload>(Wire.encode(pong))?.backendState)
+        assertEquals("", Wire.decode<SyncPayload>("""{"generatedAt":1,"phoneName":"p","bridgeVersion":"b"}""")?.backendState)
     }
 
     @Test

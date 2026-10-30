@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.*
@@ -89,10 +92,14 @@ fun ContactPickerScreen(state: WatchState, onBack: () -> Unit, onOpenChat: (Stri
                         Card(onClick = {
                             if (entry.addresses.size == 1) choose(entry, entry.addresses.single().address) else selected = entry
                         }, modifier = Modifier.fillMaxWidth()) {
-                            Column {
-                                Text(entry.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(if (entry.addresses.size == 1) entry.addresses.single().address else "${entry.addresses.size} numbers / emails",
-                                    style = MaterialTheme.typography.bodyExtraSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                ContactAvatar(state, entry.avatarId, initialsFor(entry.name), size = 32.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text(entry.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (entry.addresses.size == 1) entry.addresses.single().address else "${entry.addresses.size} numbers / emails",
+                                        style = MaterialTheme.typography.bodyExtraSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }

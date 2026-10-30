@@ -1,0 +1,74 @@
+name: Watch CI and signed build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      signed_release:
+        description: Build and upload a signed watch APK
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Test and build unsigned watch APK
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run protocol and watch tests, lint, and debug build
+        run: .\gradlew.bat :protocol:test :wear:testDebugUnitTest :wear:lintRelease :wear:assembleDebug
+
+      - name: Upload unsigned debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-debug-apk
+          path: wear/build/outputs/apk/debug/wear-debug-unsigned.apk
+          if-no-files-found: error
+
+  signed-watch:
+    name: Build signed watch release artifact
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_release }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Write existing signing files
+        shell: pwsh
+        env:
+          KEYSTORE_PROPERTIES: ${{ secrets.KEYSTORE_PROPERTIES }}
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:KEYSTORE_PROPERTIES)) { throw 'Missing KEYSTORE_PROPERTIES secret.' }
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_KEYSTORE)) { throw 'Missing RELEASE_KEYSTORE secret.' }
+          [IO.File]::WriteAllText((Join-Path $PWD 'keystore.properties'), $env:KEYSTORE_PROPERTIES)
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'release.keystore'), [Convert]::FromBase64String($env:RELEASE_KEYSTORE))
+
+      - name: Build signed watch release
+        run: .\gradlew.bat :wear:assembleRelease
+
+      - name: Upload signed watch APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-signed-release-apk
+          path: wear/build/outputs/apk/release/wear-release.apk
+          if-no-files-found: error

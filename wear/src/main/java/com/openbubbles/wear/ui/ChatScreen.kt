@@ -116,6 +116,13 @@ fun ChatScreen(
                                 )
                             }
                             Spacer(Modifier.width(2.dp))
+                            ContactAvatar(
+                                state = state,
+                                avatarId = thread?.avatarId ?: summary?.avatarId,
+                                initials = initialsFor(title),
+                                size = 32.dp
+                            )
+                            Spacer(Modifier.width(6.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     text = title,
@@ -169,7 +176,7 @@ fun ChatScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "Open this chat in OpenBubbles on the phone so its notification cache is refreshed, then try again.",
+                                    text = "Enable the Wear patch in OpenBubbles, then refresh this conversation.",
                                     style = MaterialTheme.typography.bodyExtraSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -179,8 +186,8 @@ fun ChatScreen(
                 } else if (messages.isEmpty()) {
                     item {
                         NoticeCard(
-                            message = if (state.directBridge) "No messages loaded. Refresh an existing chat, or reply to start this conversation."
-                                else "No saved messages yet. Messages appear after OpenBubbles posts a notification for this chat.",
+                            message = if (state.directBridge) "No messages loaded. Refresh the conversation to load recent history."
+                                else "Enable the Wear patch in OpenBubbles to load conversation history.",
                             isError = false
                         )
                     }
@@ -256,17 +263,13 @@ private fun ChatStatus(
         state.phoneLocked && canReply -> {
             color = scheme.primary
             title = "Phone locked · reply ready"
-            detail = if (state.directBridge) {
-                "Messages send through OpenBubbles without unlocking."
-            } else {
-                "Replies send through OpenBubbles' notification action without unlocking."
-            }
+            detail = "Messages send through OpenBubbles without unlocking."
         }
 
         !canReply -> {
             color = scheme.tertiary
             title = "Read only"
-            detail = "Open this chat in OpenBubbles on the phone, or install the Wear patch, to enable sending."
+            detail = "Enable the Wear patch in OpenBubbles to send messages."
         }
 
         else -> {
@@ -505,8 +508,8 @@ private fun ChatActions(
     onRefresh: () -> Unit,
     onMarkRead: () -> Unit
 ) {
-    val canMarkRead = state.directBridge || state.threads[threadId]?.canMarkRead == true ||
-        state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true
+    val canMarkRead = state.directBridge && (state.threads[threadId]?.canMarkRead == true ||
+        state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true)
     val sending = threadId in state.sendingThreads
     val queuedCount = state.queuedSends.count { it.threadId == threadId }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

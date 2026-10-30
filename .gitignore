@@ -7,6 +7,12 @@ local.properties
 *.iml
 .DS_Store
 dist/
+scripts/__pycache__/
+
+# Local release signing material. Never commit these files.
+keystore.properties
+*.keystore
+*.jks
 
 # Local reference source, decompiled artifacts, and toolchains.
 ref/
@@ -14,8 +20,3 @@ work/
 
 # Supplied APK/XAPK inputs.
 *.xapk
-
-# Local release signing material. Generate your own key; never commit these.
-keystore.properties
-*.keystore
-*.jks

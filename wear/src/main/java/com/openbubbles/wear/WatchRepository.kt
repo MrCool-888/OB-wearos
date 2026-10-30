@@ -80,10 +80,10 @@ data class WatchState(
     val phoneName: String = "",
     val bridgeVersion: String = "",
     val protocolVersion: Int = 0,
-    val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
     /** The current phone connection confirmed the patch; never restored from cache. */
     val directBridge: Boolean = false,
+    val backendState: String = "",
     /** Android is showing a secure keyguard; shown for information only. */
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
@@ -121,8 +121,11 @@ data class WatchState(
 
     fun queuedFor(threadId: String): Boolean = queuedSends.any { it.threadId == threadId }
 
-    fun canReplyTo(threadId: String): Boolean = directBridge ||
-        (conversations.firstOrNull { it.id == threadId }?.canReply ?: threads[threadId]?.canReply) == true
+    fun canReplyTo(threadId: String): Boolean {
+        val capable = conversations.firstOrNull { it.id == threadId }?.let { it.canReply || it.canSend }
+            ?: threads[threadId]?.let { it.canReply || it.canSend } ?: false
+        return capable || (directBridge && threadId.startsWith("new:"))
+    }
 }
 
 object WatchRepository {
@@ -135,7 +138,6 @@ object WatchRepository {
     private const val KEY_PHONE_NAME = "phone_name"
     private const val KEY_BRIDGE_VERSION = "bridge_version"
     private const val KEY_PROTOCOL_VERSION = "protocol_version"
-    private const val KEY_NOTIFICATION_ACCESS = "notification_access"
     private const val KEY_RELAY_ENABLED = "relay_enabled"
     private const val KEY_LAST_SYNC = "last_sync"
     private const val KEY_PHONE_GENERATED = "phone_generated"
@@ -143,8 +145,6 @@ object WatchRepository {
     private const val KEY_MEDIA_PREFIX = "media:"
     private const val KEY_QUEUE = "send_queue"
     private const val KEY_ALERTS_ENABLED = "alerts_enabled"
-    private const val KEY_NOTIFY_BASELINE = "notify_baseline"
-    private const val KEY_NOTIFIED_AT = "notified_at:"
     private const val KEY_CONTACTS = "contacts"
     private const val KEY_CONTACTS_QUERY = "contacts_query"
     private const val KEY_CONTACTS_ACCESS = "contacts_access"
@@ -160,6 +160,9 @@ object WatchRepository {
     private const val MAX_MEDIA_FILES = 60
     private const val MAX_MEDIA_BYTES = 40L * 1024 * 1024
     private const val MEDIA_TIMEOUT_MS = 45_000L
+    private val AVATAR_MEDIA_ID = Regex("avatar-[0-9a-f]{64}")
+
+    private fun isAvatarMedia(mediaId: String): Boolean = AVATAR_MEDIA_ID.matches(mediaId)
     private const val LOCAL_MATCH_WINDOW_MS = 5 * 60_000L
     private const val AUTO_MATCH_WINDOW_MS = 2 * 60_000L
     private const val MAX_REPLY_LENGTH = 800
@@ -202,7 +205,6 @@ object WatchRepository {
         val restoredQueue = loadQueue(prefs)
         val queued = restoredQueue.filterNot { it.dispatching }
         val reconciledThreads = reconcileQueuedMessages(threads, queued)
-        ensureNotificationBaseline(prefs, reconciledThreads, conversations)
         _state.value = WatchState(
             loading = false,
             conversations = conversations,
@@ -211,7 +213,6 @@ object WatchRepository {
             phoneName = prefs.getString(KEY_PHONE_NAME, "").orEmpty(),
             bridgeVersion = prefs.getString(KEY_BRIDGE_VERSION, "").orEmpty(),
             protocolVersion = prefs.getInt(KEY_PROTOCOL_VERSION, 0),
-            notificationAccess = prefs.getBoolean(KEY_NOTIFICATION_ACCESS, false),
             relayEnabled = prefs.getBoolean(KEY_RELAY_ENABLED, true),
             lastSyncAt = prefs.getLong(KEY_LAST_SYNC, 0L),
             phoneGeneratedAt = prefs.getLong(KEY_PHONE_GENERATED, 0L),
@@ -280,7 +281,7 @@ object WatchRepository {
             val old = _state.value.conversations.firstOrNull { it.id == incoming.id }
             incoming.copy(title = Protocol.preferredConversationTitle(
                 incoming.title, old?.title, incoming.id, incoming.address
-            ))
+            ), avatarId = incoming.avatarId ?: old?.avatarId)
         }.map(::respectLocalRead).sortedByDescending { it.lastTimestamp }
         val byId = summaries.associateBy { it.id }
         val existingThreads = _state.value.threads.mapValues { (id, thread) ->
@@ -290,11 +291,11 @@ object WatchRepository {
                 title = summary.title,
                 isGroup = summary.isGroup,
                 unread = summary.unread && summary.lastTimestamp > readAt,
-                notificationActive = summary.notificationActive,
                 canReply = summary.canReply,
                 canMarkRead = summary.canMarkRead,
                 canSend = summary.canSend,
                 address = summary.address ?: thread.address,
+                avatarId = summary.avatarId ?: thread.avatarId,
                 participants = summary.participants,
                 updatedAt = maxOf(thread.updatedAt, summary.lastTimestamp),
                 lastPreview = summary.lastPreview
@@ -316,10 +317,10 @@ object WatchRepository {
                 phoneName = payload.phoneName,
                 bridgeVersion = payload.bridgeVersion,
                 protocolVersion = payload.version,
-                notificationAccess = payload.notificationAccess,
                 relayEnabled = payload.relayEnabled,
                 // Durable Data Layer snapshots do not prove the patch is still installed or reachable.
                 directBridge = if (connected) payload.directBridge else current.directBridge,
+                backendState = payload.backendState,
                 phoneLocked = payload.phoneLocked,
                 phoneAwake = payload.phoneAwake,
                 contactsAccess = payload.contactsAccess ?: current.contactsAccess,
@@ -388,7 +389,12 @@ object WatchRepository {
     }
 
     @Synchronized
-    fun onThread(thread: WireThread, connected: Boolean = true) {
+    fun onThread(
+        thread: WireThread,
+        connected: Boolean = true,
+        alertMessageId: String? = null,
+        hideAlertPreview: Boolean = false
+    ) {
         if (!initialized) return
         // Backend deletions can lower last activity; it is not an authoritative snapshot revision.
         if (!connected && !thread.directHistory) {
@@ -400,7 +406,7 @@ object WatchRepository {
         pendingThreadRequests.remove(thread.id)
         val visible = _state.value.visibleThreadId == thread.id
         val markPhoneRead = connected && visible && thread.unread &&
-            (_state.value.directBridge || thread.canMarkRead)
+            (_state.value.directBridge && thread.canMarkRead)
         val merged = mergeThread(thread).let {
             if (_state.value.visibleThreadId == it.id) {
                 markReadAt(it.id, System.currentTimeMillis())
@@ -431,7 +437,8 @@ object WatchRepository {
                 context = context,
                 thread = merged,
                 state = _state.value,
-                allowNotify = connected
+                alertMessageId = alertMessageId,
+                hideAlertPreview = hideAlertPreview
             )
         }
         if (markPhoneRead) markRead(merged.id)
@@ -526,9 +533,9 @@ object WatchRepository {
                 reachable = true,
                 phoneName = pong.phoneName,
                 bridgeVersion = pong.bridgeVersion,
-                notificationAccess = pong.notificationAccess,
                 relayEnabled = pong.relayEnabled,
                 directBridge = pong.directBridge,
+                backendState = pong.backendState,
                 phoneLocked = pong.phoneLocked,
                 phoneAwake = pong.phoneAwake,
                 contactsAccess = pong.contactsAccess ?: current.contactsAccess,
@@ -717,9 +724,7 @@ object WatchRepository {
         val summary = state.conversations.firstOrNull { it.id == threadId }
         if (!state.canReplyTo(threadId)) {
             _state.update {
-                it.copy(
-                    error = "This chat needs a new OpenBubbles message notification to provide a reply action, or the OpenBubbles Wear patch for notification-free sending."
-                )
+                it.copy(error = "Connect the watch to OpenBubbles with the Wear patch enabled to send messages.")
             }
             return false
         }
@@ -780,7 +785,6 @@ object WatchRepository {
             return false
         }
         WatchNotifications.cancel(context, threadId)
-        WatchNotifications.markNotified(context, threadId, now)
 
         _state.update { it.copy(info = if (it.phoneOnline) "Message saved to the outbox." else "Phone offline. The message will send when it reconnects.") }
         flushQueue()
@@ -853,6 +857,7 @@ object WatchRepository {
         }
         if (!_state.value.phoneOnline && !manual) return
         if (!_state.value.relayEnabled) return
+        if (!_state.value.directBridge) return
         if (queueFlushing) {
             if (manual) _state.update { it.copy(info = "Already sending queued messages.") }
             return
@@ -1000,7 +1005,7 @@ object WatchRepository {
             if (!_state.value.directBridge) {
                 _state.update {
                     it.copy(
-                        error = "No saved chat with this contact yet. Send or receive a message in OpenBubbles, then open it on the phone to refresh it."
+                        error = "Enable the Wear patch in OpenBubbles and sync to load this contact's chats."
                     )
                 }
                 return null
@@ -1033,7 +1038,7 @@ object WatchRepository {
         val context = appContext ?: return
         val state = _state.value
         if (!state.phoneOnline || !state.relayEnabled) {
-            _state.update { it.copy(discoveryNotice = "Connect the phone and enable the relay to find chats without notifications.") }
+            _state.update { it.copy(discoveryNotice = "Connect the phone and enable the relay to find chats in OpenBubbles.") }
             return
         }
         if (state.discoveryRequestId != null) return
@@ -1048,7 +1053,7 @@ object WatchRepository {
             delay(30_000L)
             _state.update { if (it.discoveryRequestId != requestId || discoveryOffset != offset) it else it.copy(
                 discoveryRequestId = null,
-                discoveryNotice = "No chat list received. Open OpenBubbles and check the Wear patch or Shizuku on the phone.") }
+                discoveryNotice = "No chat list received. Open OpenBubbles and check the Wear bridge in Morphe patches.") }
         }
         PhoneLink.send(context, Protocol.PATH_GROUPS_REQUEST,
             Wire.encodeBytes(com.openbubbles.wear.protocol.GroupsRequest(requestId = requestId, offset = offset))) { sent ->
@@ -1089,7 +1094,8 @@ object WatchRepository {
                 val old = state.conversations.firstOrNull { it.id == found.id }
                     ?: foundAddress?.let { byAddress[it] }
                 if (old == null || state.directBridge) found.copy(
-                    title = Protocol.preferredConversationTitle(found.title, old?.title, found.id, found.address)
+                    title = Protocol.preferredConversationTitle(found.title, old?.title, found.id, found.address),
+                    avatarId = found.avatarId ?: old?.avatarId
                 ) else found.copy(
                     title = Protocol.preferredConversationTitle(found.title, old.title, found.id, found.address),
                     isGroup = found.isGroup || old.isGroup,
@@ -1098,7 +1104,8 @@ object WatchRepository {
                     lastPreview = old.lastPreview,
                     messageCount = old.messageCount,
                     participants = found.participants.ifEmpty { old.participants },
-                    address = found.address ?: old.address
+                    address = found.address ?: old.address,
+                    avatarId = found.avatarId ?: old.avatarId
                 )
             }.map(::respectLocalRead)
             val mergedIds = merged.map { it.id }.toSet()
@@ -1140,11 +1147,11 @@ object WatchRepository {
         if (state.media.containsKey(mediaId)) return
         if (mediaId in state.requestingMedia) return
         if (!state.relayEnabled) {
-            _state.update { it.copy(error = "Relay is paused on the phone.") }
+            if (!isAvatarMedia(mediaId)) _state.update { it.copy(error = "Relay is paused on the phone.") }
             return
         }
         if (state.protocolVersion in 1 until Protocol.VERSION) {
-            _state.update {
+            if (!isAvatarMedia(mediaId)) _state.update {
                 it.copy(
                     error = "Update the phone bridge to 1.2.0 or newer to view photos."
                 )
@@ -1153,7 +1160,8 @@ object WatchRepository {
         }
         val context = appContext ?: return
         _state.update {
-            it.copy(requestingMedia = it.requestingMedia + mediaId, error = null)
+            it.copy(requestingMedia = it.requestingMedia + mediaId,
+                error = if (isAvatarMedia(mediaId)) it.error else null)
         }
         PhoneLink.send(
             context,
@@ -1167,13 +1175,13 @@ object WatchRepository {
         ) { sent ->
             if (!sent) {
                 _state.update {
-                    it.copy(
+                    if (isAvatarMedia(mediaId)) it.copy(requestingMedia = it.requestingMedia - mediaId)
+                    else it.copy(
                         requestingMedia = it.requestingMedia - mediaId,
                         connected = false,
                         reachable = false,
                         directBridge = false,
-                        error = "Phone isn't reachable. This photo isn't cached on the watch yet."
-                    )
+                        error = "Phone isn't reachable. This photo isn't cached on the watch yet.")
                 }
             }
         }
@@ -1181,10 +1189,8 @@ object WatchRepository {
             delay(MEDIA_TIMEOUT_MS)
             if (mediaId in _state.value.requestingMedia && _state.value.media[mediaId] == null) {
                 _state.update {
-                    it.copy(
-                        requestingMedia = it.requestingMedia - mediaId,
-                        error = "The photo took too long to arrive from the phone."
-                    )
+                    it.copy(requestingMedia = it.requestingMedia - mediaId,
+                        error = if (isAvatarMedia(mediaId)) it.error else "The photo took too long to arrive from the phone.")
                 }
             }
         }
@@ -1200,7 +1206,8 @@ object WatchRepository {
         _state.update {
             it.copy(
                 requestingMedia = it.requestingMedia - payload.mediaId,
-                error = payload.error ?: "The photo could not be loaded from the phone."
+                error = if (isAvatarMedia(payload.mediaId)) it.error
+                    else payload.error ?: "The photo could not be loaded from the phone."
             )
         }
     }
@@ -1224,7 +1231,7 @@ object WatchRepository {
                 _state.update {
                     it.copy(
                         requestingMedia = it.requestingMedia - mediaId,
-                        error = "The photo could not be saved on the watch."
+                        error = if (isAvatarMedia(mediaId)) it.error else "The photo could not be saved on the watch."
                     )
                 }
                 return@launch
@@ -1244,7 +1251,7 @@ object WatchRepository {
                 it.copy(
                     media = mediaMap,
                     requestingMedia = it.requestingMedia - mediaId,
-                    error = null
+                    error = if (isAvatarMedia(mediaId)) it.error else null
                 )
             }
         }
@@ -1319,6 +1326,10 @@ object WatchRepository {
     fun markRead(threadId: String) {
         if (!initialized) return
         val context = appContext ?: return
+        val state = _state.value
+        val canMarkRead = state.threads[threadId]?.canMarkRead == true ||
+            state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true
+        if (!state.directBridge || !canMarkRead) return
         if (!_state.value.relayEnabled) {
             _state.update { it.copy(error = "Relay is paused on the phone.") }
             return
@@ -1346,12 +1357,9 @@ object WatchRepository {
         val context = appContext ?: return
         if (threadId != null) {
             markReadLocally(threadId)
-            latestInboundTimestamp(threadId)?.let {
-                WatchNotifications.markNotified(context, threadId, it)
-            }
             val state = _state.value
             if (state.connected && state.relayEnabled && !threadId.startsWith(NEW_THREAD_PREFIX) &&
-                (state.directBridge || state.threads[threadId]?.canMarkRead == true ||
+                state.directBridge && (state.threads[threadId]?.canMarkRead == true ||
                     state.conversations.firstOrNull { it.id == threadId }?.canMarkRead == true)) {
                 markRead(threadId)
             }
@@ -1395,11 +1403,6 @@ object WatchRepository {
         }
     }
 
-    private fun latestInboundTimestamp(threadId: String): Long? {
-        val thread = _state.value.threads[threadId] ?: return null
-        return thread.messages.lastOrNull { !it.fromMe }?.timestamp
-    }
-
     fun openOnPhone(threadId: String?) {
         if (!initialized) return
         val context = appContext ?: return
@@ -1429,9 +1432,6 @@ object WatchRepository {
         val context = appContext
         if (context != null) {
             WatchNotifications.cancel(context, threadId)
-            latestInboundTimestamp(threadId)?.let {
-                WatchNotifications.markNotified(context, threadId, it)
-            }
         }
         val thread = _state.value.threads[threadId]
         if (thread != null) replaceThread(thread.copy(unread = false))
@@ -1494,8 +1494,6 @@ object WatchRepository {
         val readAt = (aliases + threadId).maxOf { readAt(it) }
         if (readAt > 0L) markReadAt(threadId, readAt)
         appContext?.let { context ->
-            WatchNotifications.markNotified(context, threadId,
-                (aliases + threadId).maxOf { WatchNotifications.lastNotified(context, it) })
             aliases.forEach { WatchNotifications.cancel(context, it) }
         }
         aliases.forEach { pendingThreadRequests.remove(it) }
@@ -1593,6 +1591,8 @@ object WatchRepository {
             title = Protocol.preferredConversationTitle(incoming.title, old?.title
                 ?: _state.value.conversations.firstOrNull { it.id == incoming.id }?.title,
                 incoming.id, incoming.address ?: old?.address),
+            avatarId = incoming.avatarId ?: old?.avatarId
+                ?: _state.value.conversations.firstOrNull { it.id == incoming.id }?.avatarId,
             messages = allMessages, unread = unread,
             directHistory = incoming.directHistory || old?.directHistory == true)
     }
@@ -1778,33 +1778,6 @@ object WatchRepository {
         }
     }
 
-    /**
-     * Do not replay every old chat as a watch notification the first time the
-     * 1.3.0 app starts. New messages after this baseline still notify.
-     */
-    private fun ensureNotificationBaseline(
-        prefs: android.content.SharedPreferences,
-        threads: Map<String, WireThread>,
-        conversations: List<ThreadSummary>
-    ) {
-        if (prefs.getBoolean(KEY_NOTIFY_BASELINE, false)) return
-        val editor = prefs.edit()
-        val summaryTimes = conversations.associate { it.id to it.lastTimestamp }
-        threads.values.forEach { thread ->
-            val latest = thread.messages.lastOrNull { !it.fromMe }?.timestamp
-                ?: summaryTimes[thread.id]
-                ?: 0L
-            if (latest > 0L) editor.putLong(KEY_NOTIFIED_AT + thread.id, latest)
-        }
-        conversations.forEach { summary ->
-            if (summary.lastTimestamp > 0L) {
-                val key = KEY_NOTIFIED_AT + summary.id
-                if (!prefs.contains(key)) editor.putLong(key, summary.lastTimestamp)
-            }
-        }
-        editor.putBoolean(KEY_NOTIFY_BASELINE, true).apply()
-    }
-
     @Synchronized
     private fun persist(synchronous: Boolean = false): Boolean {
         val context = appContext ?: return false
@@ -1817,7 +1790,6 @@ object WatchRepository {
             .putString(KEY_PHONE_NAME, state.phoneName)
             .putString(KEY_BRIDGE_VERSION, state.bridgeVersion)
             .putInt(KEY_PROTOCOL_VERSION, state.protocolVersion)
-            .putBoolean(KEY_NOTIFICATION_ACCESS, state.notificationAccess)
             .putBoolean(KEY_RELAY_ENABLED, state.relayEnabled)
             .remove("direct_bridge")
             .putLong(KEY_LAST_SYNC, state.lastSyncAt)

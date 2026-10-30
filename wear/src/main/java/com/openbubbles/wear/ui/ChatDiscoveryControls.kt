@@ -20,14 +20,13 @@ fun ChatDiscoveryControls(state: WatchState) {
         ) {
             Text(when {
                 state.discoveryRequestId != null -> "Finding chats…"
-                state.directBridge -> "Find chats in OpenBubbles"
-                else -> "Find chats (Shizuku)"
+                else -> "Find chats in OpenBubbles"
             })
         }
         Text(
             state.discoveryNotice
                 ?: if (state.directBridge) "Reads chats directly with the Wear patch. Open a chat to load recent history."
-                else "Start Shizuku and grant the phone bridge access. Reads OpenBubbles' published Android shortcuts and notification channels without needing a notification.",
+                else "Open patched OpenBubbles and enable the Wear bridge in Settings → Morphe patches.",
             style = MaterialTheme.typography.bodyExtraSmall
         )
     }
