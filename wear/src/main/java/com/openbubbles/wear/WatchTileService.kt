@@ -19,6 +19,7 @@ import com.openbubbles.wear.protocol.ThreadSummary
  * Quick-glance tile listing unread conversations. Each row deep links into the
  * cached chat, so reading and replying work without waiting for a sync.
  */
+@androidx.annotation.OptIn(markerClass = [androidx.wear.protolayout.expression.ProtoLayoutExperimental::class])
 class WatchTileService : TileService() {
     override fun onTileResourcesRequest(
         requestParams: RequestBuilders.ResourcesRequest

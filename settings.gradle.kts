@@ -17,6 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "OpenBubblesWear"
 
 include(":protocol")
-include(":phone")
 include(":wear")
 include(":testnotifier")

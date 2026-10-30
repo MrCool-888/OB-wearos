@@ -9,14 +9,14 @@ import java.util.Locale
  * Shared wire contract between the phone bridge and the Wear OS app.
  *
  * The phone is the source of truth. The watch only receives snapshots and
- * asks the phone to perform actions against the live OpenBubbles notification.
+ * asks the phone to perform actions against the patched OpenBubbles backend.
  */
 object Protocol {
     private val notificationMessageId = Regex("^m-[0-9a-f]{40}(?:-[0-9]+)?$")
 
     fun isNotificationMessageId(id: String): Boolean = notificationMessageId.matches(id)
 
-    const val VERSION = 3
+    const val VERSION = 4
 
     const val CAPABILITY_PHONE = "openbubbles_wear_bridge"
     const val CAPABILITY_WATCH = "openbubbles_wear"
@@ -177,7 +177,7 @@ object Protocol {
     // Native OB 2.x stores Chat.guid as UUID.randomUUID().toString(). Merged
     // chats use UUID+UUID, which is intentionally unsupported by this validator.
     private val nativeChatGuid = Regex("^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
-    private val nativeHexChatGuid = Regex("^[0-9a-fA-F]{72}$")
+    private val nativeHexChatGuid = Regex("^(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{72})$")
     private val legacyChatGuid = Regex("^(iMessage|SMS|RCS);[+-];[^\\s\\p{Cntrl};:/?#]{1,512}$")
     private val chatIdentifier = Regex("(?i)^chat[_-]?[0-9a-f-]{5,}$")
     private val addressTitlePhone = Regex("(?i)^(?:tel:|sms:|smsto:)?[+0-9 ().-]+$")

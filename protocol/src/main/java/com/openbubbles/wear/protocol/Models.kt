@@ -62,7 +62,6 @@ data class WireThread(
     val participants: List<String> = emptyList(),
     val messages: List<WireMessage> = emptyList(),
     val unread: Boolean = false,
-    val notificationActive: Boolean = false,
     val canReply: Boolean = false,
     val canMarkRead: Boolean = false,
     val canSend: Boolean = false,
@@ -72,7 +71,9 @@ data class WireThread(
     /** Backend directory preview, available before the message history is loaded. */
     val lastPreview: String = "",
     /** Message IDs/history are authoritative backend data, not notification-derived hashes. */
-    val directHistory: Boolean = false
+    val directHistory: Boolean = false,
+    /** Content-addressed chat/contact photo transferred through the existing media channel. */
+    val avatarId: String? = null
 ) {
     fun latestMessage(): WireMessage? = messages.maxByOrNull { it.timestamp }
 
@@ -87,7 +88,6 @@ data class WireThread(
             title = title,
             isGroup = isGroup,
             unread = unread,
-            notificationActive = notificationActive,
             canReply = canReply,
             canMarkRead = canMarkRead,
             canSend = canSend,
@@ -96,7 +96,8 @@ data class WireThread(
                 lastPreview else latest?.displayText ?: lastPreview,
             messageCount = messages.size,
             participants = participants,
-            address = address
+            address = address,
+            avatarId = avatarId
         )
     }
 }
@@ -107,7 +108,6 @@ data class ThreadSummary(
     val title: String,
     val isGroup: Boolean = false,
     val unread: Boolean = false,
-    val notificationActive: Boolean = false,
     val canReply: Boolean = false,
     val canMarkRead: Boolean = false,
     val canSend: Boolean = false,
@@ -115,7 +115,8 @@ data class ThreadSummary(
     val lastPreview: String = "",
     val messageCount: Int = 0,
     val participants: List<String> = emptyList(),
-    val address: String? = null
+    val address: String? = null,
+    val avatarId: String? = null
 )
 
 @Serializable
@@ -124,7 +125,6 @@ data class SyncPayload(
     val generatedAt: Long,
     val phoneName: String,
     val bridgeVersion: String,
-    val notificationAccess: Boolean,
     val relayEnabled: Boolean = true,
     /** True when Android is showing a secure keyguard; shown for information only. */
     val phoneLocked: Boolean = false,
@@ -132,7 +132,9 @@ data class SyncPayload(
     val conversations: List<ThreadSummary> = emptyList(),
     val contactsAccess: Boolean? = null,
     /** True when the patched OpenBubbles IPC service answered on the phone. */
-    val directBridge: Boolean = false
+    val directBridge: Boolean = false,
+    /** Actionable backend status, such as why the patched OB service is unavailable. */
+    val backendState: String = ""
 )
 
 @Serializable
@@ -146,7 +148,10 @@ data class ThreadPayload(
 @Serializable
 data class UpdatePayload(
     val version: Int = Protocol.VERSION,
-    val thread: WireThread
+    val thread: WireThread,
+    /** Exact backend message ID that caused this live update, if it is a new incoming message. */
+    val alertMessageId: String? = null,
+    val hideAlertPreview: Boolean = false
 )
 
 @Serializable
@@ -177,7 +182,6 @@ data class PongPayload(
     val receivedAt: Long = System.currentTimeMillis(),
     val phoneName: String = "",
     val bridgeVersion: String = "",
-    val notificationAccess: Boolean = false,
     val relayEnabled: Boolean = true,
     val phoneLocked: Boolean = false,
     val phoneAwake: Boolean = true,
@@ -185,7 +189,9 @@ data class PongPayload(
     val quickReplies: List<String> = Protocol.DEFAULT_QUICK_REPLIES,
     val contactsAccess: Boolean? = null,
     /** True when the patched OpenBubbles IPC service answered on the phone. */
-    val directBridge: Boolean = false
+    val directBridge: Boolean = false,
+    /** Actionable backend status, such as why the patched OB service is unavailable. */
+    val backendState: String = ""
 )
 
 @Serializable
@@ -213,7 +219,7 @@ data class OpenPhoneRequest(
     val sentAt: Long = System.currentTimeMillis()
 )
 
-/** Sends text through the chat's OpenBubbles notification reply action, or the Wear patch bridge. */
+/** Sends text through the patched OpenBubbles backend. */
 @Serializable
 data class SendRequest(
     val version: Int = Protocol.VERSION,
@@ -276,7 +282,8 @@ data class ContactAddress(val address: String, val label: String = "")
 data class WatchContact(
     val id: String,
     val name: String,
-    val addresses: List<ContactAddress> = emptyList()
+    val addresses: List<ContactAddress> = emptyList(),
+    val avatarId: String? = null
 )
 
 @Serializable

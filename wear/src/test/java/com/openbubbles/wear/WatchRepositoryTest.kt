@@ -7,8 +7,10 @@ import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import androidx.core.app.NotificationCompat
 import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.Protocol
+import com.openbubbles.wear.protocol.MediaPayload
 import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
@@ -64,6 +66,34 @@ class WatchRepositoryTest {
             queuedSends = listOf(QueuedSend("request", "chat", "Hello")), sendingThreads = setOf("chat"))
         pending["request"] = "chat"
         WatchNotifications.createChannel(context)
+    }
+
+    @Test fun avatarMetadataSurvivesThreadRefreshWithoutAvatar() {
+        val original = WireThread(id = "chat", title = "Group", isGroup = true, avatarId = "avatar-abc")
+        state.value = state.value.copy(threads = mapOf(original.id to original),
+            conversations = listOf(original.toSummary()))
+
+        WatchRepository.onThread(original.copy(messages = listOf(local)))
+        WatchRepository.onThread(WireThread(id = "chat", title = "Group", isGroup = true))
+
+        assertEquals("avatar-abc", state.value.threads.getValue("chat").avatarId)
+        assertEquals("avatar-abc", state.value.conversations.single().avatarId)
+    }
+
+    @Test fun avatarMediaFailureIsQuietButAttachmentFailureIsReported() {
+        val priorError = "Existing sync warning"
+        val avatarId = "avatar-${"a".repeat(64)}"
+        state.value = state.value.copy(error = priorError, requestingMedia = setOf(avatarId, "attachment"))
+
+        WatchRepository.onMediaResult(MediaPayload(requestId = "avatar-request", mediaId = avatarId,
+            ok = false, error = "Avatar unavailable"))
+        assertEquals(priorError, state.value.error)
+        assertFalse(avatarId in state.value.requestingMedia)
+
+        WatchRepository.onMediaResult(MediaPayload(requestId = "attachment-request", mediaId = "attachment",
+            ok = false, error = "Attachment unavailable"))
+        assertEquals("Attachment unavailable", state.value.error)
+        assertFalse("attachment" in state.value.requestingMedia)
     }
 
     private fun status() = state.value.threads.getValue("chat").messages.single().status
@@ -156,7 +186,7 @@ class WatchRepositoryTest {
         state.value = state.value.copy(threads = mapOf(id to thread),
             queuedSends = listOf(QueuedSend("request", id, "Hello")))
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "1.3.0",
-            notificationAccess = true, conversations = emptyList(), relayEnabled = false), fromCache = true)
+            conversations = emptyList(), relayEnabled = false), fromCache = true)
         assertEquals(id, state.value.conversations.single().id)
         assertTrue(state.value.threads.containsKey(id))
     }
@@ -180,16 +210,45 @@ class WatchRepositoryTest {
         for (id in listOf("Aa", "BB")) {
             val incoming = WireThread(id = id, title = id, unread = true, canReply = true,
                 messages = listOf(local.copy(id = "incoming-$id", threadId = id, fromMe = false)))
-            WatchNotifications.syncThread(context, incoming, WatchState(), allowNotify = true)
+            WatchNotifications.syncThread(context, incoming, WatchState(),
+                alertMessageId = incoming.messages.single().id, hideAlertPreview = false)
         }
         val manager = context.getSystemService(NotificationManager::class.java)
         assertEquals(2, manager.activeNotifications.size)
         for (posted in manager.activeNotifications) {
-            val reply = posted.notification.actions.first().actionIntent
+            val reply = posted.notification.actions.first { it.remoteInputs?.isNotEmpty() == true }.actionIntent
             assertEquals(posted.tag, shadowOf(reply).savedIntent.getStringExtra(WatchNotificationReceiver.EXTRA_THREAD_ID))
         }
         WatchNotifications.cancel(context, "Aa")
         assertEquals("BB", manager.activeNotifications.single().tag)
+    }
+
+    @Test fun notificationOpensItsChatFromThePrimaryWearAction() {
+        val threadId = "chat-open-directly"
+        val incoming = WireThread(id = threadId, title = "Alex", unread = true,
+            messages = listOf(local.copy(id = "incoming-open", threadId = threadId, fromMe = false)))
+        WatchNotifications.syncThread(context, incoming, WatchState(),
+            alertMessageId = incoming.messages.single().id, hideAlertPreview = false)
+
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
+        val actions = notification.actions
+        val openChat = actions[0]
+        val openIntent = shadowOf(openChat.actionIntent).savedIntent
+        assertEquals("Open chat", openChat.title.toString())
+        assertEquals(MainActivity::class.java.name, openIntent.component?.className)
+        assertEquals(WatchNavigation.ACTION_OPEN_CHAT, openIntent.action)
+        assertEquals(threadId, openIntent.getStringExtra(WatchNavigation.EXTRA_THREAD_ID))
+        assertEquals("openbubbles-wear://chat/$threadId", openIntent.data.toString())
+        assertEquals(notification.contentIntent, openChat.actionIntent)
+
+        val extender = NotificationCompat.WearableExtender(notification)
+        assertEquals(0, extender.contentAction)
+        assertTrue(extender.contentIntentAvailableOffline)
+        assertEquals("Reply", actions[1].title.toString())
+        assertTrue(actions[1].remoteInputs?.any { it.resultKey == WatchNotificationReceiver.KEY_REPLY } == true)
+        assertEquals("Mark read", actions[2].title.toString())
+        assertEquals(WatchNotificationReceiver.ACTION_MARK_READ,
+            shadowOf(actions[2].actionIntent).savedIntent.action)
     }
 
     @Test
@@ -198,15 +257,56 @@ class WatchRepositoryTest {
         val incoming = WireThread(id = "incoming", title = "Alex", unread = true,
             messages = listOf(local.copy(id = "incoming-message", threadId = "incoming", fromMe = false)))
         assertTrue(WatchNotifications.areSystemNotificationsAllowed(context))
-        WatchNotifications.syncThread(context, incoming, WatchState(), allowNotify = true)
-        assertEquals(0L, WatchNotifications.lastNotified(context, incoming.id))
+        WatchNotifications.syncThread(context, incoming, WatchState(),
+            alertMessageId = "incoming-message", hideAlertPreview = false)
+        WatchNotifications.syncThread(context, incoming, WatchState(),
+            alertMessageId = "incoming-message", hideAlertPreview = false)
+        val ids = context.getSharedPreferences("openbubbles_wear", Context.MODE_PRIVATE)
+            .getString("alerted_backend_message_ids", null)?.let { com.openbubbles.wear.protocol.Wire.decode<List<String>>(it) }.orEmpty()
+        assertTrue(ids.contains("incoming-message"))
+        assertEquals(1, context.getSystemService(NotificationManager::class.java).activeNotifications.size)
+    }
+
+    @Test fun onlyExplicitLiveAlertMarkersCreateNotificationsAndBackendIdsDeduplicate() {
+        val incoming = WireThread(id = "incoming", title = "Alex", unread = true,
+            messages = listOf(message("backend-id", 1000, "Hello").copy(fromMe = false)))
+        state.value = state.value.copy(alertsEnabled = true, notificationPermission = true)
+        WatchRepository.onThread(incoming, connected = false)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        assertTrue(manager.activeNotifications.isEmpty())
+
+        WatchRepository.onThread(incoming, connected = true, alertMessageId = "backend-id")
+        assertEquals(1, manager.activeNotifications.size)
+        WatchRepository.onThread(incoming.copy(messages = listOf(
+            incoming.messages.single().copy(timestamp = 2000, text = "Updated"))),
+            connected = true, alertMessageId = "backend-id")
+        assertEquals(1, manager.activeNotifications.size)
+    }
+
+    @Test fun hiddenAlertPreviewDoesNotPutMessageTextInNotification() {
+        val incoming = WireThread(id = "private", title = "Alex", unread = true,
+            messages = listOf(message("private-id", 1000, "Secret text").copy(fromMe = false)))
+        WatchNotifications.syncThread(context, incoming, WatchState(),
+            alertMessageId = "private-id", hideAlertPreview = true)
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
+        assertEquals("New message", notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        val messages = notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+        assertTrue(messages.orEmpty().isNotEmpty())
+        assertTrue(messages.orEmpty().all {
+            (it as? Bundle)?.getCharSequence("text").toString() == "New message"
+        })
     }
 
     @Implements(NotificationManager::class)
     class PermissionRevokedNotificationManager : ShadowNotificationManager() {
+        private var rejected = false
         @Implementation
         override fun notify(tag: String?, id: Int, notification: Notification?) {
-            throw SecurityException("Notification permission revoked after the availability check")
+            if (!rejected) {
+                rejected = true
+                throw SecurityException("Notification permission revoked after the availability check")
+            }
+            super.notify(tag, id, notification)
         }
     }
 
@@ -223,7 +323,7 @@ class WatchRepositoryTest {
 
         WatchRepository.onThread(alex.copy(title = "Conversation"), connected = false)
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = true, relayEnabled = true,
+            relayEnabled = true,
             conversations = listOf(alex.toSummary().copy(title = "a".repeat(72)))))
 
         assertEquals("Alex", state.value.threads.getValue("chat").title)
@@ -235,7 +335,7 @@ class WatchRepositoryTest {
         state.value = state.value.copy(threads = mapOf("chat" to alex), conversations = listOf(alex.toSummary()))
 
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = true, relayEnabled = true,
+            relayEnabled = true,
             conversations = listOf(alex.toSummary().copy(title = "Alex Work"))))
 
         assertEquals("Alex Work", state.value.threads.getValue("chat").title)
@@ -347,7 +447,7 @@ class WatchRepositoryTest {
         assertNull(WatchRepository.findChatByAddress("nobody@example.com"))
         assertTrue(state.value.threads.isEmpty())
         assertTrue(state.value.conversations.isEmpty())
-        assertTrue(state.value.error!!.contains("No saved chat"))
+        assertTrue(state.value.error!!.contains("OpenBubbles"))
     }
 
     @Test fun mismatchedContactQueryOrOffsetCannotReplaceCurrentPage() {
@@ -431,7 +531,7 @@ class WatchRepositoryTest {
         assertEquals(95, state.value.conversations.size)
 
         WatchRepository.onSync(SyncPayload(generatedAt = 2_000L, phoneName = "Phone", bridgeVersion = "2.1.2",
-            notificationAccess = true, conversations = all.take(60)), fromCache = true)
+            conversations = all.take(60)), fromCache = true)
         assertEquals(95, state.value.conversations.size)
         assertTrue(state.value.conversations.map { it.id }.containsAll(all.map { it.id }))
     }
@@ -473,16 +573,16 @@ class WatchRepositoryTest {
             action = Protocol.ACTION_SEND,
             ok = false,
             threadId = "chat",
-            error = "OpenBubbles has no reply action for this chat yet.",
+            error = "The Wear patch is not ready.",
             retryable = true
         ))
         assertEquals("failed", status())
         assertTrue(state.value.queuedSends.isEmpty())
-        assertEquals("OpenBubbles has no reply action for this chat yet.", state.value.error)
+        assertEquals("The Wear patch is not ready.", state.value.error)
         assertTrue(state.value.sendingThreads.isEmpty())
     }
 
-    @Test fun chatWithoutReplyActionIsRejectedOnTheWatch() {
+    @Test fun chatWithoutBackendSendCapabilityIsRejectedOnTheWatch() {
         state.value = state.value.copy(
             connected = true,
             relayEnabled = true,
@@ -491,7 +591,7 @@ class WatchRepositoryTest {
                 id = "chat",
                 title = "Alex",
                 address = "+15551234567",
-                canSend = true
+                canSend = false
             )),
             conversations = emptyList(),
             queuedSends = emptyList(),
@@ -499,10 +599,10 @@ class WatchRepositoryTest {
         )
         assertFalse(WatchRepository.sendReply("chat", "Send now"))
         assertTrue(state.value.queuedSends.isEmpty())
-        assertTrue(state.value.error!!.contains("reply action"))
+        assertTrue(state.value.error!!.contains("Wear patch"))
     }
 
-    @Test fun lockedLiveReplyDispatchesThroughTheNotification() {
+    @Test fun lockedReplyQueuesForThePatchedOpenBubblesBackend() {
         pending.clear()
         state.value = state.value.copy(
             connected = true,
@@ -524,7 +624,7 @@ class WatchRepositoryTest {
         assertEquals(0L, queued.nextAttemptAt)
     }
 
-    @Test fun savedReplyActionSendsWhileLockedWithoutALiveNotification() {
+    @Test fun savedBackendCapabilityAllowsAnOfflineQueuedReply() {
         pending.clear()
         state.value = state.value.copy(
             connected = true,
@@ -533,7 +633,6 @@ class WatchRepositoryTest {
             threads = mapOf("chat" to WireThread(
                 id = "chat",
                 title = "Alex",
-                notificationActive = false,
                 canReply = true
             )),
             conversations = emptyList(),
@@ -574,7 +673,7 @@ class WatchRepositoryTest {
         assertFalse(state.value.requestingThreads.contains(id))
     }
 
-    @Test fun directBridgeSendsWithoutAReplyAction() {
+    @Test fun directBridgeSendsWhenBackendMarksChatSendable() {
         state.value = state.value.copy(
             directBridge = true,
             relayEnabled = true,
@@ -583,7 +682,8 @@ class WatchRepositoryTest {
             threads = mapOf("chat" to WireThread(
                 id = "chat",
                 title = "Alex",
-                address = "+15551234567"
+                address = "+15551234567",
+                canSend = true
             )),
             conversations = emptyList()
         )
@@ -647,7 +747,7 @@ class WatchRepositoryTest {
             visibleThreadId = old.id, queuedSends = listOf(QueuedSend("request", old.id, "Hello")))
         pending["request"] = old.id
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = true, relayEnabled = false, conversations = listOf(old.copy(id = "canonical"))), fromCache = true)
+            relayEnabled = false, conversations = listOf(old.copy(id = "canonical"))), fromCache = true)
         assertEquals(listOf("canonical"), state.value.conversations.map { it.id })
         assertEquals("canonical", state.value.visibleThreadId)
         assertEquals("canonical", state.value.queuedSends.single().threadId)
@@ -666,13 +766,12 @@ class WatchRepositoryTest {
         assertEquals("canonical", pending["request"])
     }
 
-    @Test fun aliasMigrationPreservesReadAndNotificationWatermarksWithoutMergingGroups() {
+    @Test fun aliasMigrationPreservesLocalReadWithoutMergingGroups() {
         val old = WireThread(id = "old", title = "Alex", address = "alex@example.com", messages = listOf(local.copy(id = "history")))
         val summaryOnly = old.toSummary().copy(id = "other-old")
         val group = old.toSummary().copy(id = "group", isGroup = true)
         state.value = state.value.copy(threads = mapOf(old.id to old), conversations = listOf(old.toSummary(), summaryOnly, group))
         WatchRepository.markReadLocally(summaryOnly.id)
-        WatchNotifications.markNotified(context, summaryOnly.id, 5000)
         WatchRepository.onThread(WireThread(id = "canonical", title = "Alex", address = old.address, unread = true,
             messages = listOf(local.copy(id = "incoming", threadId = "canonical", fromMe = false, timestamp = 2000))), connected = false)
         assertEquals(setOf("canonical", "group"), state.value.conversations.map { it.id }.toSet())
@@ -680,7 +779,6 @@ class WatchRepositoryTest {
         assertEquals(setOf("history", "incoming"), canonical.messages.map { it.id }.toSet())
         assertTrue(canonical.messages.all { it.threadId == "canonical" })
         assertFalse(canonical.unread)
-        assertEquals(5000L, WatchNotifications.lastNotified(context, "canonical"))
     }
 
     @Test fun confirmationWithoutABackendMessageStillMigratesTheNewChatId() {
@@ -770,16 +868,16 @@ class WatchRepositoryTest {
         WatchRepository.onPeerConnected()
         assertFalse(state.value.directBridge)
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = false, relayEnabled = false, directBridge = true), fromCache = true)
+            relayEnabled = false, directBridge = true), fromCache = true)
         assertFalse(state.value.directBridge)
         WatchRepository.onPong(PongPayload(relayEnabled = false, directBridge = true))
         assertTrue(state.value.directBridge)
         WatchRepository.onSync(SyncPayload(generatedAt = 3000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = false, relayEnabled = false), fromCache = true)
+            relayEnabled = false), fromCache = true)
         assertTrue(state.value.directBridge)
     }
 
-    @Test fun newChatPlaceholderDoesNotPretendToHaveANotificationReplyAction() {
+    @Test fun newChatPlaceholderNeedsTheLiveWearPatchToQueueItsFirstSend() {
         state.value = state.value.copy(directBridge = true, relayEnabled = true, sendingThreads = emptySet(), queuedSends = emptyList())
         val id = WatchRepository.findChatByAddress("new@example.com")!!
         WatchRepository.onPeerDisconnected()
@@ -835,7 +933,7 @@ class WatchRepositoryTest {
     @Test fun notificationRemoteInputUsesTheSameDirectSendOutbox() {
         pending.clear()
         state.value = state.value.copy(directBridge = true, relayEnabled = true, threads = emptyMap(),
-            conversations = listOf(WireThread(id = "summary", title = "Alex", address = "alex@example.com").toSummary()),
+            conversations = listOf(WireThread(id = "summary", title = "Alex", address = "alex@example.com", canSend = true).toSummary()),
             queuedSends = emptyList(), sendingThreads = emptySet())
         val intent = Intent(context, WatchNotificationReceiver::class.java)
             .setAction(WatchNotificationReceiver.ACTION_REPLY)
@@ -854,7 +952,7 @@ class WatchRepositoryTest {
         state.value = state.value.copy(conversations = listOf(summary))
         WatchRepository.markReadLocally("chat")
         WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "test",
-            notificationAccess = true, relayEnabled = false, conversations = listOf(summary)), fromCache = true)
+            relayEnabled = false, conversations = listOf(summary)), fromCache = true)
         assertFalse(state.value.conversations.single().unread)
         state.value = state.value.copy(discoveryRequestId = "discover", directBridge = true)
         WatchRepository.onGroups(GroupsResult(requestId = "discover", chats = listOf(summary)))
