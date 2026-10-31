@@ -37,9 +37,10 @@ object WatchSurfaces {
         val app = context.applicationContext
         scope.launch {
             WatchRepository.state.collectLatest { state ->
-                val unread = state.conversations.count { it.unread }
-                val latest = state.conversations.firstOrNull { it.unread }
-                    ?: state.conversations.maxByOrNull { it.lastTimestamp }
+                val conversations = state.conversationsForDisplay
+                val unread = conversations.count { it.unread }
+                val latest = conversations.firstOrNull { it.unread }
+                    ?: conversations.maxByOrNull { it.lastTimestamp }
                 val signature = buildString {
                     append(unread)
                     append('|')
@@ -51,7 +52,7 @@ object WatchSurfaces {
                     append('|')
                     append(state.queuedCount)
                     append('|')
-                    state.conversations.filter { it.unread }.take(3).forEach {
+                    conversations.filter { it.unread }.take(3).forEach {
                         append(listOf(it.id, it.title, it.lastPreview, it.lastTimestamp))
                     }
                 }

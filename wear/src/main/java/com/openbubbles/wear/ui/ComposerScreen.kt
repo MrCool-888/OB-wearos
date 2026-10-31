@@ -175,13 +175,6 @@ fun ComposerScreen(
                             isError = false
                         )
                     }
-                } else if (state.phoneLocked) {
-                    item {
-                        NoticeCard(
-                            message = "Phone locked. Replies send through OpenBubbles without unlocking.",
-                            isError = false
-                        )
-                    }
                 }
 
                 val quickReplies = state.quickReplies.ifEmpty {

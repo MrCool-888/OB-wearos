@@ -41,8 +41,9 @@ class UnreadComplicationService : SuspendingComplicationDataSourceService() {
     }
 
     private fun data(type: ComplicationType, state: WatchState): ComplicationData? {
-        val unread = state.conversations.count { it.unread }
-        val target = state.conversations.firstOrNull { it.unread }?.id
+        val conversations = state.conversationsForDisplay
+        val unread = conversations.count { it.unread }
+        val target = conversations.firstOrNull { it.unread }?.id
         val tapAction = tapIntent(target)
 
         return when (type) {

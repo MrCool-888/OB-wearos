@@ -1,6 +1,6 @@
 # OpenBubbles Wear
 
-Wear OS companion for OpenBubbles. This repository builds the watch app and its shared protocol only; it does not build or patch a phone APK. The phone-side Morphe patch lives in the private [mrcool-patches repository](https://github.com/MrCool-888/mrcool-patches).
+Wear OS companion for OpenBubbles. This repository builds the watch app and its shared protocol only; it does not build or patch a phone APK. The phone-side Morphe patch lives in the [mrcool-patches repository](https://github.com/MrCool-888/mrcool-patches).
 
 The watch package identity is `com.openbubbles.messaging`. Keep it and its release signing key aligned with the phone patch so the Wear Data Layer can authenticate the companion.
 

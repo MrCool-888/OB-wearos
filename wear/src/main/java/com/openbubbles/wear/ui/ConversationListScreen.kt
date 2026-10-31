@@ -51,11 +51,10 @@ fun ConversationListScreen(
     onDismissNotice: () -> Unit
 ) {
     val listState = rememberScalingLazyListState()
-    val unreadCount = remember(state.conversations) {
-        state.conversations.count { it.unread }
-    }
+    val conversations = remember(state.conversations) { state.conversationsForDisplay }
+    val unreadCount = conversations.count { it.unread }
     var groupsOnly by remember { mutableStateOf(false) }
-    val visibleConversations = state.conversations.filter { !groupsOnly || it.isGroup }
+    val visibleConversations = conversations.filter { !groupsOnly || it.isGroup }
 
     AppScaffold(timeText = { TimeText() }) {
         Box(Modifier.fillMaxSize()) {
@@ -103,9 +102,15 @@ fun ConversationListScreen(
                 }
 
                 item {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        TextButton(onClick = { groupsOnly = false }) { Text(if (!groupsOnly) "All ✓" else "All") }
-                        TextButton(onClick = { groupsOnly = true }) { Text(if (groupsOnly) "Groups ✓" else "Groups") }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = { groupsOnly = false },
+                            modifier = Modifier.weight(1f)
+                        ) { Text(if (!groupsOnly) "All ✓" else "All", maxLines = 1, softWrap = false) }
+                        TextButton(
+                            onClick = { groupsOnly = true },
+                            modifier = Modifier.weight(1.4f)
+                        ) { Text(if (groupsOnly) "Groups ✓" else "Groups", maxLines = 1, softWrap = false) }
                     }
                 }
 
@@ -118,7 +123,7 @@ fun ConversationListScreen(
                                 style = MaterialTheme.typography.bodyExtraSmall)
                         }
                     }
-                } else if (state.conversations.isEmpty()) {
+                } else if (conversations.isEmpty()) {
                     item {
                         EmptyStateCard(
                             directBridge = state.directBridge,
@@ -207,7 +212,6 @@ private fun PhoneStatusCard(
         !state.phoneOnline -> scheme.error
         !state.directBridge -> scheme.error
         !state.relayEnabled -> scheme.tertiary
-        state.phoneLocked -> scheme.tertiary
         else -> scheme.primary
     }
     val title = when {
@@ -215,7 +219,6 @@ private fun PhoneStatusCard(
         !state.phoneOnline -> "Phone offline"
         !state.directBridge -> "Wear patch unavailable"
         !state.relayEnabled -> "Relay paused on phone"
-        state.phoneLocked -> "Phone locked"
         else -> "Connected to phone"
     }
     val detail = when {
@@ -231,12 +234,8 @@ private fun PhoneStatusCard(
         !state.relayEnabled ->
             "New messages stay on the phone until relay is resumed."
 
-        state.phoneLocked && state.queuedCount > 0 ->
+        state.queuedCount > 0 ->
             "Replies send through OpenBubbles. ${state.queuedCount} ${if (state.queuedCount == 1) "message is" else "messages are"} waiting for the phone."
-
-        state.phoneLocked ->
-            "Replies send through OpenBubbles without unlocking."
-
         unreadCount > 0 ->
             "$unreadCount unread ${if (unreadCount == 1) "chat" else "chats"} · Tap to refresh"
 

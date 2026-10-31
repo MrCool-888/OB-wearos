@@ -20,6 +20,8 @@ import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.GroupsResult
 import com.openbubbles.wear.protocol.ThreadPayload
+import com.openbubbles.wear.protocol.MarkReadRequest
+import com.openbubbles.wear.protocol.Wire
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Before
@@ -295,6 +297,75 @@ class WatchRepositoryTest {
         assertTrue(messages.orEmpty().all {
             (it as? Bundle)?.getCharSequence("text").toString() == "New message"
         })
+    }
+
+    @Test
+    @Config(shadows = [RecordingPhoneLink::class])
+    fun openingNotificationBeforeBridgeConfirmationClearsPhoneWhenLiveSyncArrives() {
+        RecordingPhoneLink.requests.clear()
+        val thread = WireThread(id = "chat", title = "Alex", unread = true, canMarkRead = true)
+        state.value = WatchState(loading = false, threads = mapOf(thread.id to thread))
+        WatchRepository.setVisibleThread(thread.id)
+        assertFalse(state.value.threads.getValue(thread.id).unread)
+        assertTrue(RecordingPhoneLink.requests.isEmpty())
+
+        val sync = SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "3.0.0",
+            directBridge = true, conversations = listOf(thread.toSummary()))
+        WatchRepository.onSync(sync, fromCache = true)
+        assertTrue(RecordingPhoneLink.requests.isEmpty())
+        WatchRepository.onSync(sync)
+        assertEquals(listOf(thread.id), RecordingPhoneLink.readThreads())
+        WatchRepository.onSync(sync.copy(generatedAt = 3000,
+            conversations = listOf(thread.copy(unread = false).toSummary())))
+        assertEquals(listOf(thread.id), RecordingPhoneLink.readThreads())
+    }
+
+    @Test
+    @Config(shadows = [RecordingPhoneLink::class])
+    fun reconnectingWhileChatIsVisibleRetriesPhoneReadAfterLocalRead() {
+        RecordingPhoneLink.requests.clear()
+        val thread = WireThread(id = "chat", title = "Alex", unread = true, canMarkRead = true)
+        state.value = WatchState(loading = false, threads = mapOf(thread.id to thread))
+        WatchRepository.setVisibleThread(thread.id)
+        WatchRepository.onPong(PongPayload(directBridge = true))
+        assertEquals(listOf(thread.id), RecordingPhoneLink.readThreads())
+        WatchRepository.onPong(PongPayload(directBridge = true))
+        assertEquals(listOf(thread.id), RecordingPhoneLink.readThreads())
+    }
+
+    @Test
+    @Config(shadows = [RecordingPhoneLink::class])
+    fun liveUnreadSyncClearsOnlyTheVisibleChatAndPausedBridgeDoesNotRead() {
+        RecordingPhoneLink.requests.clear()
+        val visible = WireThread(id = "chat", title = "Alex", updatedAt = 1000, canMarkRead = true)
+        val other = WireThread(id = "other", title = "Sam", updatedAt = 1000, unread = true, canMarkRead = true)
+        state.value = WatchState(loading = false, connected = true, directBridge = true,
+            visibleThreadId = visible.id, threads = mapOf(visible.id to visible, other.id to other))
+        val sync = SyncPayload(generatedAt = 2000, phoneName = "Phone", bridgeVersion = "3.0.0",
+            directBridge = true, conversations = listOf(visible.copy(unread = true).toSummary(), other.toSummary()))
+        WatchRepository.onSync(sync)
+        assertEquals(listOf(visible.id), RecordingPhoneLink.readThreads())
+        RecordingPhoneLink.requests.clear()
+        WatchRepository.onSync(sync.copy(relayEnabled = false))
+        assertTrue(RecordingPhoneLink.requests.isEmpty())
+        WatchRepository.onSync(sync)
+        assertEquals(listOf(visible.id), RecordingPhoneLink.readThreads())
+        assertTrue(state.value.threads.getValue(other.id).unread)
+    }
+
+    @Implements(value = PhoneLink::class, isInAndroidSdk = false)
+    class RecordingPhoneLink {
+        @Implementation
+        fun send(context: Context, path: String, bytes: ByteArray, onResult: ((Boolean) -> Unit)?) {
+            requests.add(path to bytes)
+            onResult?.invoke(true)
+        }
+
+        companion object {
+            val requests = mutableListOf<Pair<String, ByteArray>>()
+            fun readThreads(): List<String> = requests.filter { it.first == Protocol.PATH_MARK_READ }
+                .map { Wire.decodeBytes<MarkReadRequest>(it.second)!!.threadId }
+        }
     }
 
     @Implements(NotificationManager::class)
@@ -647,6 +718,7 @@ class WatchRepositoryTest {
     @Test fun unlockOnlyUpdatesPhoneState() {
         state.value = state.value.copy(
             phoneLocked = true,
+            info = "Existing notice",
             queuedSends = listOf(QueuedSend(
                 requestId = "request",
                 threadId = "chat",
@@ -659,7 +731,57 @@ class WatchRepositoryTest {
         WatchRepository.onPong(PongPayload(relayEnabled = false, phoneLocked = false))
         assertFalse(state.value.phoneLocked)
         assertEquals(retryAt, state.value.queuedSends.single().nextAttemptAt)
-        assertTrue(state.value.info!!.contains("unlocked", ignoreCase = true))
+        assertEquals("Existing notice", state.value.info)
+    }
+
+    @Test fun syncAndPongLockChangesDoNotCreateNotices() {
+        state.value = WatchState(loading = false, info = "Existing notice")
+        for (locked in listOf(true, false, true)) {
+            WatchRepository.onSync(SyncPayload(generatedAt = 2000, phoneName = "Phone",
+                bridgeVersion = "3.0.0", phoneLocked = locked), fromCache = true)
+            assertEquals(locked, state.value.phoneLocked)
+            assertEquals("Existing notice", state.value.info)
+            WatchRepository.onPong(PongPayload(relayEnabled = false, phoneLocked = !locked))
+            assertEquals(!locked, state.value.phoneLocked)
+            assertEquals("Existing notice", state.value.info)
+        }
+    }
+
+    @Test fun repeatedSameRecipientSyncDoesNotRedirectAnOpenNativeChatOrMoveItsOutbox() {
+        val firstId = "chat_11111111-1111-1111-1111-111111111111"
+        val secondId = "chat_22222222-2222-2222-2222-222222222222"
+        val first = WireThread(id = firstId, title = "Alex", address = "alex@example.com",
+            messages = listOf(local.copy(id = "first-message", threadId = firstId)))
+        val second = first.copy(id = secondId,
+            messages = listOf(local.copy(id = "second-message", threadId = secondId)))
+        state.value = WatchState(loading = false, threads = mapOf(firstId to first, secondId to second),
+            conversations = listOf(first.toSummary(), second.toSummary()), visibleThreadId = firstId,
+            queuedSends = listOf(QueuedSend("request", firstId, "Hello")))
+        pending["request"] = firstId
+        repeat(3) { iteration ->
+            val summaries = listOf(first.toSummary(), second.toSummary())
+            WatchRepository.onSync(SyncPayload(generatedAt = 2000L + iteration, phoneName = "Phone",
+                bridgeVersion = "3.0.0", relayEnabled = false,
+                conversations = if (iteration % 2 == 0) summaries else summaries.reversed()), fromCache = true)
+            assertEquals(firstId, state.value.visibleThreadId)
+            assertNull(WatchNavigation.openThread.value)
+            assertEquals(firstId, pending["request"])
+            assertEquals(firstId, state.value.queuedSends.single().threadId)
+            assertEquals(listOf("first-message"), state.value.threads.getValue(firstId).messages.map { it.id })
+            assertEquals(listOf("second-message"), state.value.threads.getValue(secondId).messages.map { it.id })
+        }
+        WatchRepository.onThread(second.copy(updatedAt = 5000), connected = false)
+        assertEquals(firstId, state.value.visibleThreadId)
+        assertNull(WatchNavigation.openThread.value)
+        assertEquals(firstId, pending["request"])
+    }
+
+    @Test fun automaticReadConfirmationDoesNotInsertANoticeAboveTheVisibleMessages() {
+        state.value = WatchState(loading = false, visibleThreadId = "chat", info = null,
+            threads = mapOf("chat" to WireThread(id = "chat", title = "Alex")))
+        WatchRepository.onActionResult(ActionResult(requestId = "read", action = Protocol.ACTION_MARK_READ,
+            ok = true, threadId = "chat"))
+        assertNull(state.value.info)
     }
 
     @Test fun directBridgeCreatesAConversationForANewAddress() {

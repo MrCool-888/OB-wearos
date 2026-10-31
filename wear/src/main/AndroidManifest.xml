@@ -23,6 +23,11 @@
             android:name="com.google.android.wearable.standalone"
             android:value="false" />
 
+        <!-- The embedded phone bridge supplies the watch's own actionable alerts. -->
+        <meta-data
+            android:name="com.google.android.wearable.notificationBridgeMode"
+            android:value="NO_BRIDGING" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

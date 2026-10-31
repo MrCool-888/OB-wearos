@@ -72,6 +72,9 @@ data class WatchMedia(
     val isGif: Boolean get() = mimeType == "image/gif"
 }
 
+private fun ThreadSummary.recipientAddress(): String? = if (isGroup) null else
+    Protocol.normalizeAddress(address) ?: Protocol.normalizeAddress(participants.singleOrNull())
+
 data class WatchState(
     val loading: Boolean = true,
     val conversations: List<ThreadSummary> = emptyList(),
@@ -116,8 +119,13 @@ data class WatchState(
     val queuedCount: Int get() = queuedSends.size
     val canPostNotifications: Boolean get() = alertsEnabled && notificationPermission
     val contactsLoading: Boolean get() = contactsRequestId != null
-    val groups: List<ThreadSummary> get() = conversations.filter { it.isGroup }
-    val directChats: List<ThreadSummary> get() = conversations.filterNot { it.isGroup }
+    val conversationsForDisplay: List<ThreadSummary> get() = conversations
+        .groupBy { summary -> summary.recipientAddress()?.let { "recipient:$it" } ?: "chat:${summary.id}" }
+        .values.map { copies ->
+            copies.maxWith(compareBy<ThreadSummary> { it.unread }.thenBy { it.lastTimestamp }.thenBy { it.id })
+        }.sortedByDescending { it.lastTimestamp }
+    val groups: List<ThreadSummary> get() = conversationsForDisplay.filter { it.isGroup }
+    val directChats: List<ThreadSummary> get() = conversationsForDisplay.filterNot { it.isGroup }
 
     fun queuedFor(threadId: String): Boolean = queuedSends.any { it.threadId == threadId }
 
@@ -276,6 +284,8 @@ object WatchRepository {
 
     @Synchronized
     private fun applySync(payload: SyncPayload, connected: Boolean) {
+        val previous = _state.value
+        val wasReady = previous.connected && previous.relayEnabled && previous.directBridge
         payload.conversations.forEach { migrateThreadIds(it.id, aliasesFor(it.id, it.address, it.isGroup)) }
         val summaries = payload.conversations.map { incoming ->
             val old = _state.value.conversations.firstOrNull { it.id == incoming.id }
@@ -306,7 +316,6 @@ object WatchRepository {
         }.map { it.toSummary() }
         val retainedSummaries = _state.value.conversations.filter { it.id !in byId }
         _state.update { current ->
-            val unlocked = current.phoneLocked && !payload.phoneLocked
             current.copy(
                 loading = false,
                 conversations = (summaries + localSummaries + retainedSummaries)
@@ -332,19 +341,17 @@ object WatchRepository {
                 lastSyncAt = if (connected) System.currentTimeMillis() else payload.generatedAt,
                 phoneGeneratedAt = maxOf(current.phoneGeneratedAt, payload.generatedAt),
                 syncing = false,
-                error = null,
-                info = when {
-                    !current.phoneLocked && payload.phoneLocked ->
-                        "Phone locked. Replies still send through OpenBubbles."
-
-                    unlocked -> "Phone unlocked."
-                    else -> current.info
-                }
+                error = null
             )
         }
         persist()
         if (payload.contactsAccess == false) persistContacts()
         if (connected) {
+            // A chat opened before the bridge reconnects was only marked read locally.
+            val visible = _state.value.visibleThreadId
+            if (visible != null && (!wasReady || payload.conversations.any { it.id == visible && it.unread })) {
+                markRead(visible)
+            }
             val context = appContext
             if (context != null) {
                 summaries.filterNot { it.unread }.forEach { summary ->
@@ -498,7 +505,7 @@ object WatchRepository {
             Protocol.ACTION_MARK_READ -> {
                 if (result.ok) {
                     markReadLocally(preview)
-                    _state.update { it.copy(info = "Marked as read") }
+                    _state.update { it.copy(info = if (preview == it.visibleThreadId) it.info else "Marked as read") }
                 } else {
                     _state.update {
                         it.copy(error = result.error ?: "Could not mark the chat as read.")
@@ -526,8 +533,9 @@ object WatchRepository {
 
     fun onPong(pong: PongPayload) {
         if (!initialized) return
+        val previous = _state.value
+        val wasReady = previous.connected && previous.relayEnabled && previous.directBridge
         _state.update { current ->
-            val unlocked = current.phoneLocked && !pong.phoneLocked
             current.copy(
                 connected = true,
                 reachable = true,
@@ -542,12 +550,12 @@ object WatchRepository {
                 contacts = if (pong.contactsAccess == false) emptyList() else current.contacts,
                 contactsNextOffset = if (pong.contactsAccess == false) null else current.contactsNextOffset,
                 contactsRequestId = if (pong.contactsAccess == false) null else current.contactsRequestId,
-                quickReplies = pong.quickReplies.ifEmpty { Protocol.DEFAULT_QUICK_REPLIES },
-                info = if (unlocked) "Phone unlocked." else current.info
+                quickReplies = pong.quickReplies.ifEmpty { Protocol.DEFAULT_QUICK_REPLIES }
             )
         }
         persist()
         if (pong.contactsAccess == false) persistContacts()
+        if (!wasReady) _state.value.visibleThreadId?.let(::markRead)
         flushQueue()
     }
 
@@ -1458,7 +1466,8 @@ object WatchRepository {
         val normalized = Protocol.normalizeAddress(address) ?: return emptySet()
         val state = _state.value
         return (state.conversations + state.threads.values.map { it.toSummary() })
-            .filter { it.id != threadId && !it.isGroup && Protocol.normalizeAddress(it.address) == normalized }
+            // Native chats can share a recipient; only the phone can confirm that their IDs are aliases.
+            .filter { it.id != threadId && !Protocol.isChatGuid(it.id) && it.recipientAddress() == normalized }
             .map { it.id }.toSet()
     }
 

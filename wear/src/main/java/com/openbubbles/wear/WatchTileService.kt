@@ -43,7 +43,7 @@ class WatchTileService : TileService() {
     }
 
     private fun buildLayout(state: WatchState): LayoutElementBuilders.LayoutElement {
-        val unread = state.conversations.filter { it.unread }
+        val unread = state.conversationsForDisplay.filter { it.unread }
         val latest = unread.take(MAX_ROWS)
         val column = LayoutElementBuilders.Column.Builder()
             .setWidth(DimensionBuilders.expand())

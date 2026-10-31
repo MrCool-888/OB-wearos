@@ -56,7 +56,7 @@ fun SettingsScreen(
         !state.relayEnabled -> scheme.tertiary
         else -> scheme.primary
     }
-    val unreadCount = state.conversations.count { it.unread }
+    val unreadCount = state.conversationsForDisplay.count { it.unread }
 
     Box(
         Modifier
@@ -168,7 +168,7 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Get alerts while your phone is locked, with reply, voice input and mark read. Open an alert to clear it on your phone too.",
+                            text = "Get alerts with reply, voice input and mark read. Open the chat from an alert to clear its phone notification too.",
                             style = MaterialTheme.typography.bodyExtraSmall,
                             color = scheme.onSurfaceVariant
                         )
@@ -262,7 +262,7 @@ fun SettingsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.height(8.dp))
-                        InfoRow("Conversations", state.conversations.size.toString())
+                        InfoRow("Conversations", state.conversationsForDisplay.size.toString())
                         InfoRow("Unread", unreadCount.toString())
                         InfoRow("Cached chats", state.threads.size.toString())
                         Spacer(Modifier.height(4.dp))
@@ -306,8 +306,8 @@ fun SettingsScreen(
                         Spacer(Modifier.height(6.dp))
                         if (state.directBridge) {
                             AboutLine("The Wear patch loads chats and recent history directly from OpenBubbles, including text hidden in app previews.")
-                            AboutLine("Send and mark-read work through OpenBubbles, even while the phone is locked. Choose a contact to start a one-to-one chat on the first send.")
-                            AboutLine("Incoming alerts are mirrored from live OpenBubbles updates. Refresh a chat to load recent messages.")
+                            AboutLine("Send and mark-read work through OpenBubbles. Choose a contact to start a one-to-one chat on the first send.")
+                            AboutLine("Incoming alerts come from live OpenBubbles updates. Refresh a chat to load recent messages.")
                         } else {
                             AboutLine("Enable the Wear patch in OpenBubbles to load chats and send messages from the watch.")
                         }

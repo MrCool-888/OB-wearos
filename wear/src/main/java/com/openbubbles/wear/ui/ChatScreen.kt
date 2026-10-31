@@ -29,6 +29,7 @@ import androidx.wear.compose.material3.TextButton
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,8 +65,8 @@ fun ChatScreen(
     val thread = state.threads[threadId]
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val messages = thread?.messages.orEmpty()
-    val newestMessageId = messages.lastOrNull()?.id
     val listState = rememberScalingLazyListState()
+    val scrollPosition = remember(threadId) { ChatScrollPosition() }
     val requesting = threadId in state.requestingThreads
     val canReply = state.canReplyTo(threadId)
 
@@ -75,13 +76,11 @@ fun ChatScreen(
 
     LaunchedEffect(threadId) {
         WatchRepository.requestThread(threadId)
-        if (messages.isNotEmpty()) {
-            runCatching { listState.scrollToItem(messages.size + 1) }
-        }
     }
-    // Only a new message should pull the list back to the bottom.
-    LaunchedEffect(newestMessageId) {
-        if (newestMessageId != null) {
+    LaunchedEffect(threadId, messages.map { it.id }) {
+        if (scrollPosition.update(messages,
+                atLatest = listState.centerItemIndex >= scrollPosition.messageCount,
+                scrolling = listState.isScrollInProgress)) {
             runCatching { listState.scrollToItem(messages.size + 1) }
         }
     }
@@ -103,7 +102,7 @@ fun ChatScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                item {
+                item(key = "chat-header") {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
@@ -152,7 +151,7 @@ fun ChatScreen(
                     }
                 }
 
-                item {
+                item(key = "chat-status") {
                     ChatStatus(
                         state = state,
                         thread = thread,
@@ -163,7 +162,7 @@ fun ChatScreen(
                 }
 
                 if (thread == null && summary == null) {
-                    item {
+                    item(key = "chat-unavailable") {
                         Card(
                             onClick = { WatchRepository.requestThread(threadId) },
                             modifier = Modifier.fillMaxWidth()
@@ -184,7 +183,7 @@ fun ChatScreen(
                         }
                     }
                 } else if (messages.isEmpty()) {
-                    item {
+                    item(key = "chat-empty") {
                         NoticeCard(
                             message = if (state.directBridge) "No messages loaded. Refresh the conversation to load recent history."
                                 else "Enable the Wear patch in OpenBubbles to load conversation history.",
@@ -194,7 +193,7 @@ fun ChatScreen(
                 } else {
                     items(
                         items = messages,
-                        key = { it.id }
+                        key = { "message:${it.id}" }
                     ) { message ->
                         MessageBubble(
                             message = message,
@@ -207,7 +206,7 @@ fun ChatScreen(
                     }
                 }
 
-                item {
+                item(key = "chat-actions") {
                     ChatActions(
                         state = state,
                         threadId = threadId,
@@ -260,12 +259,6 @@ private fun ChatStatus(
             }
         }
 
-        state.phoneLocked && canReply -> {
-            color = scheme.primary
-            title = "Phone locked · reply ready"
-            detail = "Messages send through OpenBubbles without unlocking."
-        }
-
         !canReply -> {
             color = scheme.tertiary
             title = "Read only"
@@ -296,8 +289,9 @@ private fun MessageBubble(
 ) {
     val scheme = MaterialTheme.colorScheme
     val fromMe = message.fromMe
-    val container = if (fromMe) scheme.primaryContainer else scheme.surfaceContainerHigh
-    val content = if (fromMe) scheme.onPrimaryContainer else scheme.onSurface
+    val container = if (fromMe) Color(0xFF0066CC) else scheme.surfaceContainerHigh
+    val content = if (fromMe) Color.White else scheme.onSurface
+    val secondaryContent = content.copy(alpha = if (fromMe) 0.9f else 0.7f)
     val shape = RoundedCornerShape(
         topStart = 16.dp,
         topEnd = 16.dp,
@@ -360,13 +354,13 @@ private fun MessageBubble(
                 Text(
                     text = clockTime(message.timestamp),
                     style = MaterialTheme.typography.labelSmall,
-                    color = content.copy(alpha = 0.7f)
+                    color = secondaryContent
                 )
                 when (message.status) {
                     "sending" -> Text(
                         text = " · Sending…",
                         style = MaterialTheme.typography.labelSmall,
-                        color = content.copy(alpha = 0.7f)
+                        color = secondaryContent
                     )
 
                     "queued" -> Text(
@@ -378,31 +372,33 @@ private fun MessageBubble(
                     "failed" -> Text(
                         text = " · Not sent",
                         style = MaterialTheme.typography.labelSmall,
-                        color = scheme.error
+                        color = if (fromMe) content else scheme.error,
+                        fontWeight = FontWeight.SemiBold
                     )
 
                     "sent" -> Text(
                         text = " · Sent",
                         style = MaterialTheme.typography.labelSmall,
-                        color = content.copy(alpha = 0.7f)
+                        color = secondaryContent
                     )
 
                     "delivered" -> Text(
                         text = " · Delivered",
                         style = MaterialTheme.typography.labelSmall,
-                        color = content.copy(alpha = 0.7f)
+                        color = secondaryContent
                     )
 
                     "read" -> Text(
                         text = " · Read",
                         style = MaterialTheme.typography.labelSmall,
-                        color = content.copy(alpha = 0.7f)
+                        color = secondaryContent
                     )
 
                     "unconfirmed" -> Text(
                         text = " · Not confirmed",
                         style = MaterialTheme.typography.labelSmall,
-                        color = scheme.error
+                        color = if (fromMe) content else scheme.error,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }

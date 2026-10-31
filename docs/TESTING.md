@@ -17,7 +17,7 @@ The signed build is a separate manual workflow action. Enable the `signed_releas
 
 ## Protocol changes
 
-The protocol module is duplicated in the private phone patch repository. Any v4 wire-contract change must be applied to both copies and pass both repositories' protocol tests.
+The protocol module is duplicated in the phone patch repository. Any v4 wire-contract change must be applied to both copies and pass both repositories' protocol tests.
 
 ## Historical validation
 
