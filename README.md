@@ -18,3 +18,7 @@ The default CI builds and uploads an unsigned debug APK. A signed release build 
 The `testnotifier` module is a local test utility for producing sample OpenBubbles notifications. It is not part of the watch APK or CI release artifact.
 
 See [architecture and split maintenance](docs/ARCHITECTURE.md), [testing and release](docs/TESTING.md), and [historical 3.0.0 validation](docs/HISTORICAL-VALIDATION-3.0.0.md).
+
+## License
+
+OpenBubbles Wear is licensed under the [GNU General Public License v3.0](LICENSE). Third-party files retain their existing license notices.
