@@ -21,4 +21,4 @@ The protocol module is duplicated in the phone patch repository. Any v4 wire-con
 
 ## Historical validation
 
-[`HISTORICAL-VALIDATION-3.0.0.md`](HISTORICAL-VALIDATION-3.0.0.md) records a prior integrated watch/phone/Morphe validation. It is retained as historical evidence only; this watch-only checkout cannot reproduce its phone-side, Morphe, or stock-APK checks. Physical-device messaging and Data Layer behavior still require explicit device validation for the release being prepared.
+[`HISTORICAL-VALIDATION-3.0.0.md`](HISTORICAL-VALIDATION-3.0.0.md) records a prior integrated watch/phone/Morphe validation. It is retained as historical evidence only; this watch-only checkout cannot reproduce its phone-side, Morphe, or stock-APK checks.
