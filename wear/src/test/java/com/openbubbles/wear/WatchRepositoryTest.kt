@@ -218,6 +218,8 @@ class WatchRepositoryTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         assertEquals(2, manager.activeNotifications.size)
         for (posted in manager.activeNotifications) {
+            assertEquals(posted.tag, shadowOf(posted.notification.contentIntent).savedIntent
+                .getStringExtra(Protocol.EXTRA_NOTIFICATION_THREAD))
             val reply = posted.notification.actions.first { it.remoteInputs?.isNotEmpty() == true }.actionIntent
             assertEquals(posted.tag, shadowOf(reply).savedIntent.getStringExtra(WatchNotificationReceiver.EXTRA_THREAD_ID))
         }
@@ -225,7 +227,7 @@ class WatchRepositoryTest {
         assertEquals("BB", manager.activeNotifications.single().tag)
     }
 
-    @Test fun notificationOpensItsChatFromThePrimaryWearAction() {
+    @Test fun notificationContentIntentOpensItsChatAndOnlyMessageActionsAreExplicit() {
         val threadId = "chat-open-directly"
         val incoming = WireThread(id = threadId, title = "Alex", unread = true,
             messages = listOf(local.copy(id = "incoming-open", threadId = threadId, fromMe = false)))
@@ -233,24 +235,104 @@ class WatchRepositoryTest {
             alertMessageId = incoming.messages.single().id, hideAlertPreview = false)
 
         val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
-        val actions = notification.actions
-        val openChat = actions[0]
-        val openIntent = shadowOf(openChat.actionIntent).savedIntent
-        assertEquals("Open chat", openChat.title.toString())
+        val openIntent = shadowOf(notification.contentIntent).savedIntent
         assertEquals(MainActivity::class.java.name, openIntent.component?.className)
         assertEquals(WatchNavigation.ACTION_OPEN_CHAT, openIntent.action)
         assertEquals(threadId, openIntent.getStringExtra(WatchNavigation.EXTRA_THREAD_ID))
         assertEquals("openbubbles-wear://chat/$threadId", openIntent.data.toString())
-        assertEquals(notification.contentIntent, openChat.actionIntent)
 
+        val actions = notification.actions
+        assertEquals(2, actions.size)
         val extender = NotificationCompat.WearableExtender(notification)
-        assertEquals(0, extender.contentAction)
+        assertNull(extender.dismissalId)
+        assertEquals(0, notification.flags and Notification.FLAG_LOCAL_ONLY)
+        assertEquals(-1, extender.contentAction)
         assertTrue(extender.contentIntentAvailableOffline)
-        assertEquals("Reply", actions[1].title.toString())
-        assertTrue(actions[1].remoteInputs?.any { it.resultKey == WatchNotificationReceiver.KEY_REPLY } == true)
-        assertEquals("Mark read", actions[2].title.toString())
+        assertEquals("Reply", actions[0].title.toString())
+        assertTrue(actions[0].remoteInputs?.any { it.resultKey == WatchNotificationReceiver.KEY_REPLY } == true)
+        assertEquals("Mark read", actions[1].title.toString())
         assertEquals(WatchNotificationReceiver.ACTION_MARK_READ,
-            shadowOf(actions[2].actionIntent).savedIntent.action)
+            shadowOf(actions[1].actionIntent).savedIntent.action)
+    }
+
+    @Test fun testNotificationDoesNotCreateAChatOrAnyMessageActions() {
+        val thread = Protocol.testNotificationThread(1234)
+        val before = state.value
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+            thread = thread, alertMessageId = thread.messages.single().id))
+        assertEquals(before, state.value)
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
+        assertNull(NotificationCompat.WearableExtender(notification).dismissalId)
+        val openIntent = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(MainActivity::class.java.name, openIntent.component?.className)
+        assertNull(openIntent.action)
+        assertNull(openIntent.getStringExtra(WatchNavigation.EXTRA_THREAD_ID))
+        assertTrue(notification.actions == null || notification.actions.isEmpty())
+    }
+
+    @Test fun ineligibleAndNonTestPayloadsCannotCreateATestAlert() {
+        val thread = Protocol.testNotificationThread(1234)
+        val before = state.value
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(thread = thread))
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+            thread = thread.copy(id = "real-chat"), alertMessageId = thread.messages.single().id))
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
+        assertEquals(before, state.value)
+    }
+
+    @Test fun laterTestAlertHasANewerDismissalCutoff() {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val before = state.value
+        fun post(timestamp: Long): Long {
+            val thread = Protocol.testNotificationThread(timestamp)
+            WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+                thread = thread, alertMessageId = thread.messages.single().id))
+            return shadowOf(manager.activeNotifications.single().notification.contentIntent).savedIntent
+                .getLongExtra(Protocol.EXTRA_NOTIFICATION_TIME, 0L)
+        }
+        val first = post(1234)
+        WatchNotifications.cancel(context, Protocol.TEST_NOTIFICATION_THREAD_ID)
+        val second = post(1235)
+        assertNotEquals(first, second)
+        assertEquals(before, state.value)
+    }
+
+    @Test fun phoneDismissalClearsOnlyMatchingOlderAlertsAndBlocksLateReplay() {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val before = state.value
+        val thread = Protocol.testNotificationThread(1000)
+        WatchNotifications.dismiss(context, com.openbubbles.wear.protocol.NotificationDismissal(
+            threadId = thread.id, postedAt = 1000))
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+            thread = thread, alertMessageId = thread.messages.single().id))
+        assertTrue(manager.activeNotifications.isEmpty())
+        val newer = Protocol.testNotificationThread(2000)
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+            thread = newer, alertMessageId = newer.messages.single().id))
+        WatchNotifications.dismiss(context, com.openbubbles.wear.protocol.NotificationDismissal(
+            threadId = thread.id, postedAt = 1000))
+        assertEquals(1, manager.activeNotifications.size)
+        val other = newer.copy(id = "chat_iMessage;-;other@example.com", messages = listOf(
+            newer.messages.single().copy(id = "other", threadId = "chat_iMessage;-;other@example.com")))
+        WatchNotifications.syncThread(context, other, state.value, "other", false)
+        WatchNotifications.dismiss(context, com.openbubbles.wear.protocol.NotificationDismissal(
+            threadId = newer.id, postedAt = 2000))
+        assertEquals(other.id, manager.activeNotifications.single().tag)
+        assertEquals(before, state.value)
+    }
+
+    @Test fun notificationDeleteIntentCarriesAnExactConversationAndCutoff() {
+        val thread = Protocol.testNotificationThread(1000)
+        WatchRepository.onTestNotification(com.openbubbles.wear.protocol.UpdatePayload(
+            thread = thread, alertMessageId = thread.messages.single().id))
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
+        val deleted = shadowOf(notification.deleteIntent).savedIntent
+        assertEquals(WatchNotificationReceiver.ACTION_DISMISS, deleted.action)
+        assertEquals(thread.id, deleted.getStringExtra(Protocol.EXTRA_NOTIFICATION_THREAD))
+        assertEquals(1000L, deleted.getLongExtra(Protocol.EXTRA_NOTIFICATION_TIME, 0))
+        val opened = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(thread.id, opened.getStringExtra(Protocol.EXTRA_NOTIFICATION_THREAD))
+        assertEquals(1000L, opened.getLongExtra(Protocol.EXTRA_NOTIFICATION_TIME, 0))
     }
 
     @Test

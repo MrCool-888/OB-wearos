@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -22,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.wear.compose.material3.ColorScheme
 import androidx.wear.compose.material3.MaterialTheme
 import com.openbubbles.wear.WatchNavigation
 import com.openbubbles.wear.WatchNotifications
@@ -30,7 +32,7 @@ import com.openbubbles.wear.refreshVisibleConversations
 import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "3.0.0"
+const val WATCH_APP_VERSION = "3.0.1"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
@@ -44,7 +46,40 @@ sealed interface WearScreen {
 
 @Composable
 fun WearTheme(content: @Composable () -> Unit) {
-    MaterialTheme(content = content)
+    MaterialTheme(
+        colorScheme = ColorScheme(
+            primary = Color(0xFFA9C7FF),
+            primaryDim = Color(0xFF78A8F2),
+            primaryContainer = Color(0xFF143D73),
+            onPrimary = Color(0xFF06234D),
+            onPrimaryContainer = Color(0xFFEAF2FF),
+            secondary = Color(0xFFB8C2D1),
+            secondaryDim = Color(0xFF9AA5B4),
+            secondaryContainer = Color(0xFF303946),
+            onSecondary = Color(0xFF202833),
+            onSecondaryContainer = Color(0xFFE0E6EF),
+            tertiary = Color(0xFFF0C36A),
+            tertiaryDim = Color(0xFFD3A94F),
+            tertiaryContainer = Color(0xFF493600),
+            onTertiary = Color(0xFF332400),
+            onTertiaryContainer = Color(0xFFFFE6A9),
+            surfaceContainerLow = Color(0xFF11151B),
+            surfaceContainer = Color(0xFF171B22),
+            surfaceContainerHigh = Color(0xFF242A34),
+            onSurface = Color(0xFFE8EAF0),
+            onSurfaceVariant = Color(0xFFC0C8D4),
+            outline = Color(0xFF8993A1),
+            outlineVariant = Color(0xFF4C5664),
+            background = Color(0xFF090B10),
+            onBackground = Color(0xFFE8EAF0),
+            error = Color(0xFFFFB4AB),
+            errorDim = Color(0xFFD77D76),
+            errorContainer = Color(0xFF690005),
+            onError = Color(0xFF690005),
+            onErrorContainer = Color(0xFFFFDAD6)
+        ),
+        content = content
+    )
 }
 
 @Composable

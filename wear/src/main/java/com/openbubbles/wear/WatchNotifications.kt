@@ -16,6 +16,7 @@ import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
+import com.openbubbles.wear.protocol.Protocol
 
 /**
  * Builds the watch's own rich notification for an incoming message.
@@ -28,6 +29,7 @@ object WatchNotifications {
     private const val TAG = "OBWearNotify"
     private const val PREFS_NAME = "openbubbles_wear"
     private const val KEY_ALERTED_IDS = "alerted_backend_message_ids"
+    private const val KEY_DISMISSED_AT = "notification_dismissed_at:"
 
     const val CHANNEL_ID = "messages"
 
@@ -78,6 +80,10 @@ object WatchNotifications {
         }
         val messageId = alertMessageId ?: return
         val latest = thread.messages.firstOrNull { it.id == messageId && !it.fromMe } ?: return
+        if (latest.timestamp <= prefs(context).getLong(KEY_DISMISSED_AT + thread.id, 0L)) {
+            recordAlerted(context, messageId)
+            return
+        }
         if (wasAlerted(context, messageId)) return
         if (!state.canPostNotifications) return
         if (!areSystemNotificationsAllowed(context)) return
@@ -92,6 +98,7 @@ object WatchNotifications {
         hidePreview: Boolean
     ): Boolean {
         val id = notificationId(thread.id)
+        val isTest = thread.id == Protocol.TEST_NOTIFICATION_THREAD_ID
         val me = Person.Builder().setName("You").build()
         val style = NotificationCompat.MessagingStyle(me)
         if (thread.isGroup) style.setConversationTitle(thread.title)
@@ -111,9 +118,13 @@ object WatchNotifications {
             context,
             id,
             Intent(context, MainActivity::class.java).apply {
-                action = WatchNavigation.ACTION_OPEN_CHAT
                 data = threadUri(thread.id)
-                putExtra(WatchNavigation.EXTRA_THREAD_ID, thread.id)
+                putExtra(Protocol.EXTRA_NOTIFICATION_THREAD, thread.id)
+                putExtra(Protocol.EXTRA_NOTIFICATION_TIME, latest.timestamp)
+                if (!isTest) {
+                    action = WatchNavigation.ACTION_OPEN_CHAT
+                    putExtra(WatchNavigation.EXTRA_THREAD_ID, thread.id)
+                }
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -175,25 +186,34 @@ object WatchNotifications {
             .setContentText(if (hidePreview) "New message" else latest.displayText)
             .setStyle(style)
             .setContentIntent(contentIntent)
+            .setDeleteIntent(PendingIntent.getBroadcast(context, id,
+                Intent(context, WatchNotificationReceiver::class.java).apply {
+                    action = WatchNotificationReceiver.ACTION_DISMISS
+                    data = threadUri(thread.id).buildUpon().appendPath(latest.timestamp.toString()).build()
+                    putExtra(Protocol.EXTRA_NOTIFICATION_THREAD, thread.id)
+                    putExtra(Protocol.EXTRA_NOTIFICATION_TIME, latest.timestamp)
+                }, immutableFlags()))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setWhen(latest.timestamp)
             .setShowWhen(true)
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
-            .setLocalOnly(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setNumber(1)
-            .addAction(R.drawable.ic_notification, "Open chat", contentIntent)
-            .addAction(replyAction)
-            .addAction(markReadAction)
+            .apply {
+                if (!isTest) {
+                    addAction(replyAction)
+                    addAction(markReadAction)
+                }
+            }
             .extend(NotificationCompat.WearableExtender()
-                .setContentAction(0)
                 .setContentIntentAvailableOffline(true))
             .build()
 
         try {
             NotificationManagerCompat.from(context).notify(thread.id, id, notification)
+            if (isTest) Log.i("OBWearTest", "Watch test posted")
         } catch (error: SecurityException) {
             Log.w(TAG, "Notification permission was revoked for ${thread.id}", error)
             return false
@@ -208,6 +228,17 @@ object WatchNotifications {
         runCatching {
             NotificationManagerCompat.from(context).cancel(threadId, notificationId(threadId))
         }
+    }
+
+    @Synchronized
+    fun dismiss(context: Context, event: com.openbubbles.wear.protocol.NotificationDismissal) {
+        if (!event.isValid()) return
+        val key = KEY_DISMISSED_AT + event.threadId
+        val watermark = maxOf(prefs(context).getLong(key, 0L), event.postedAt)
+        prefs(context).edit().putLong(key, watermark).apply()
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (manager.activeNotifications.any { it.tag == event.threadId && it.notification.`when` <= watermark })
+            cancel(context, event.threadId)
     }
 
     fun cancelAll(context: Context) {

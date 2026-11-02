@@ -155,6 +155,16 @@ data class UpdatePayload(
 )
 
 @Serializable
+data class NotificationDismissal(
+    val version: Int = Protocol.VERSION,
+    val threadId: String,
+    val postedAt: Long
+) {
+    fun isValid(): Boolean = version == Protocol.VERSION && postedAt > 0L &&
+        Protocol.isNotificationThreadId(threadId)
+}
+
+@Serializable
 data class SyncRequest(
     val version: Int = Protocol.VERSION,
     val sentAt: Long = System.currentTimeMillis(),

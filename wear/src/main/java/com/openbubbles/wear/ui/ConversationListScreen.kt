@@ -11,12 +11,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.Card
 import androidx.wear.compose.material3.CardDefaults
-import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
@@ -82,15 +79,7 @@ fun ConversationListScreen(
                     }
                 }
 
-                item {
-                    PhoneStatusCard(
-                        state = state,
-                        unreadCount = unreadCount,
-                        onSync = onSync
-                    )
-                }
-
-                val notice = state.error ?: state.info
+                val notice = state.error
                 if (notice != null) {
                     item {
                         NoticeCard(
@@ -146,6 +135,12 @@ fun ConversationListScreen(
 
                 item { ChatDiscoveryControls(state) }
 
+                if (state.error == null && state.info != null) {
+                    item(key = "info_notice") {
+                        NoticeCard(message = state.info, isError = false, onDismiss = onDismissNotice)
+                    }
+                }
+
                 item {
                     Button(
                         onClick = onFindChat,
@@ -155,16 +150,12 @@ fun ConversationListScreen(
                     }
                 }
 
-                item {
-                    Button(
-                        onClick = onSync,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        IconLabel(
-                            icon = Icons.Filled.Refresh,
-                            text = if (state.syncing) "Syncing…" else "Sync now"
-                        )
-                    }
+                item(key = "phone_status") {
+                    PhoneStatusCard(
+                        state = state,
+                        unreadCount = unreadCount,
+                        onSync = onSync
+                    )
                 }
 
                 item {

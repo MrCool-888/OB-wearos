@@ -137,6 +137,28 @@ data class WatchState(
 }
 
 object WatchRepository {
+    fun dismissNotification(threadId: String?, postedAt: Long): com.google.android.gms.tasks.Task<com.google.android.gms.wearable.DataItem>? {
+        val event = com.openbubbles.wear.protocol.NotificationDismissal(threadId = threadId ?: return null, postedAt = postedAt)
+        if (!event.isValid()) return null
+        val context = appContext ?: return null
+        WatchNotifications.dismiss(context, event)
+        return runCatching {
+            val request = com.google.android.gms.wearable.PutDataMapRequest.create(Protocol.notificationDismissalDataPath(event.threadId))
+            request.dataMap.putString(Protocol.DATA_KEY_JSON, Wire.encode(event))
+            request.setUrgent()
+            Wearable.getDataClient(context).putDataItem(request.asPutDataRequest())
+                .addOnFailureListener { Log.w(TAG, "Could not sync notification dismissal", it) }
+        }.onFailure { Log.w(TAG, "Could not sync notification dismissal", it) }.getOrNull()
+    }
+
+    fun onTestNotification(update: UpdatePayload) {
+        if (update.version != Protocol.VERSION || update.thread.id != Protocol.TEST_NOTIFICATION_THREAD_ID) return
+        val context = appContext ?: return
+        Log.i("OBWearTest", "Test received; eligible=${update.alertMessageId != null}, alerts=${state.value.canPostNotifications}")
+        WatchNotifications.syncThread(context, update.thread, state.value,
+            update.alertMessageId, update.hideAlertPreview)
+    }
+
     private const val TAG = "OBWearRepo"
     private const val PREFS_NAME = "openbubbles_wear"
     private const val CONTACTS_PREFS_NAME = "openbubbles_wear_contacts"

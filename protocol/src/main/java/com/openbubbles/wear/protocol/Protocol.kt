@@ -22,6 +22,25 @@ object Protocol {
     const val CAPABILITY_WATCH = "openbubbles_wear"
 
     const val BASE_PATH = "/openbubbles_wear"
+    const val TEST_NOTIFICATION_THREAD_ID = "test:notification"
+    const val PATH_TEST_NOTIFICATION = "$BASE_PATH/test_notification"
+    const val DATA_DISMISS_PREFIX = "$BASE_PATH/notification_dismissed/"
+    const val EXTRA_NOTIFICATION_THREAD = "com.openbubbles.wear.notification.THREAD_ID"
+    const val EXTRA_NOTIFICATION_TIME = "com.openbubbles.wear.notification.POSTED_AT"
+
+    @JvmStatic fun isNotificationThreadId(id: String): Boolean =
+        id == TEST_NOTIFICATION_THREAD_ID ||
+            (id.startsWith("chat_") && isChatGuid(id.removePrefix("chat_")))
+
+    fun notificationDismissalDataPath(threadId: String): String =
+        DATA_DISMISS_PREFIX + threadDataPath(threadId).removePrefix(DATA_THREAD_PREFIX)
+
+    @JvmStatic fun testNotificationThread(timestamp: Long): WireThread = WireThread(
+        id = TEST_NOTIFICATION_THREAD_ID, title = "Test message", unread = true,
+        messages = listOf(WireMessage(id = "test-$timestamp", threadId = TEST_NOTIFICATION_THREAD_ID,
+            text = "This is a test notification. No message was sent.", timestamp = timestamp,
+            sender = "OpenBubbles test"))
+    )
 
     // MessageClient paths (small, request/response payloads).
     const val PATH_PING = "$BASE_PATH/ping"

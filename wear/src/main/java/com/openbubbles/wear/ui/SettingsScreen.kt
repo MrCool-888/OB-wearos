@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Refresh
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.Card
 import androidx.wear.compose.material3.CardDefaults
@@ -95,35 +94,13 @@ fun SettingsScreen(
                     }
                 }
 
-                val notice = state.error ?: state.info
+                val notice = state.error
                 if (notice != null) {
                     item {
                         NoticeCard(
                             message = notice,
                             isError = state.error != null,
                             onDismiss = onDismissNotice
-                        )
-                    }
-                }
-
-                item {
-                    Card(
-                        onClick = onSync,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = scheme.surfaceContainerLow
-                        )
-                    ) {
-                        StatusLine(
-                            color = statusColor,
-                            title = when {
-                                state.syncing -> "Syncing…"
-                                !state.phoneOnline -> "Phone offline"
-                                !state.directBridge -> "Wear patch unavailable"
-                                !state.relayEnabled -> "Relay is paused"
-                                else -> "Connected"
-                            },
-                            detail = "Tap to refresh the phone connection."
                         )
                     }
                 }
@@ -274,14 +251,30 @@ fun SettingsScreen(
                     }
                 }
 
-                item {
-                    Button(
+                if (state.error == null && state.info != null) {
+                    item(key = "info_notice") {
+                        NoticeCard(message = state.info, isError = false, onDismiss = onDismissNotice)
+                    }
+                }
+
+                item(key = "phone_status") {
+                    Card(
                         onClick = onSync,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = scheme.surfaceContainerLow
+                        )
                     ) {
-                        IconLabel(
-                            icon = Icons.Filled.Refresh,
-                            text = if (state.syncing) "Syncing…" else "Sync now"
+                        StatusLine(
+                            color = statusColor,
+                            title = when {
+                                state.syncing -> "Syncing…"
+                                !state.phoneOnline -> "Phone offline"
+                                !state.directBridge -> "Wear patch unavailable"
+                                !state.relayEnabled -> "Relay is paused"
+                                else -> "Connected"
+                            },
+                            detail = "Tap to refresh the phone connection."
                         )
                     }
                 }

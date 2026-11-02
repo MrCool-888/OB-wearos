@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.openbubbles.wear.ui.WearApp
 import com.openbubbles.wear.ui.WearTheme
+import com.openbubbles.wear.protocol.Protocol
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,6 +33,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNavigationIntent(intent: Intent?) {
+        WatchRepository.dismissNotification(intent?.getStringExtra(Protocol.EXTRA_NOTIFICATION_THREAD),
+            intent?.getLongExtra(Protocol.EXTRA_NOTIFICATION_TIME, 0L) ?: 0L)
         val threadId = intent?.getStringExtra(WatchNavigation.EXTRA_THREAD_ID)
             ?: intent?.getStringExtra("thread_id")
         WatchNavigation.requestOpen(threadId)

@@ -70,6 +70,11 @@ class WearListenerService : WearableListenerService() {
                     )
                 }
 
+                Protocol.PATH_TEST_NOTIFICATION -> {
+                    Wire.decodeBytes<com.openbubbles.wear.protocol.UpdatePayload>(data)
+                        ?.let { WatchRepository.onTestNotification(it) }
+                }
+
                 Protocol.PATH_PONG -> {
                     Wire.decodeBytes<com.openbubbles.wear.protocol.PongPayload>(data)
                         ?.let { WatchRepository.onPong(it) }
@@ -131,6 +136,12 @@ class WearListenerService : WearableListenerService() {
                     continue
                 }
                 val json = dataMap.getString(Protocol.DATA_KEY_JSON) ?: continue
+                if (path.startsWith(Protocol.DATA_DISMISS_PREFIX)) {
+                    Wire.decode<com.openbubbles.wear.protocol.NotificationDismissal>(json)
+                        ?.takeIf { it.isValid() && path == Protocol.notificationDismissalDataPath(it.threadId) }
+                        ?.let { WatchNotifications.dismiss(applicationContext, it) }
+                    continue
+                }
                 when {
                     path == Protocol.DATA_SYNC -> {
                         Wire.decode<SyncPayload>(json)?.let {

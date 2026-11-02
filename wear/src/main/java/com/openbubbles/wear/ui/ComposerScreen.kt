@@ -136,12 +136,11 @@ fun ComposerScreen(
                     }
                 }
 
-                val notice = state.error ?: state.info
-                if (notice != null) {
+                if (state.error != null) {
                     item {
                         NoticeCard(
-                            message = notice,
-                            isError = state.error != null,
+                            message = state.error.orEmpty(),
+                            isError = true,
                             onDismiss = onDismissNotice
                         )
                     }
@@ -180,6 +179,17 @@ fun ComposerScreen(
                 val quickReplies = state.quickReplies.ifEmpty {
                     listOf("On my way", "Yes", "No", "Thanks!")
                 }
+
+                item {
+                    FilledTonalButton(
+                        onClick = { launchVoiceInput() },
+                        enabled = enabled && !sending,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Type or speak reply")
+                    }
+                }
+
                 quickReplies.forEachIndexed { index, reply ->
                     item(key = "quick-$index") {
                         Button(
@@ -195,17 +205,14 @@ fun ComposerScreen(
                 }
 
                 item {
-                    FilledTonalButton(
-                        onClick = { launchVoiceInput() },
-                        enabled = enabled && !sending,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Speak or type a reply")
-                    }
-                }
-
-                item {
                     Spacer(Modifier.height(2.dp))
+                    if (state.error == null && state.info != null) {
+                        NoticeCard(
+                            message = state.info.orEmpty(),
+                            isError = false,
+                            onDismiss = onDismissNotice
+                        )
+                    }
                     TextButton(
                         onClick = onBack,
                         modifier = Modifier.fillMaxWidth()

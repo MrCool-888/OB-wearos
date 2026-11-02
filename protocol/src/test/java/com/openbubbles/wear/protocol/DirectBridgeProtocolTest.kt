@@ -7,6 +7,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DirectBridgeProtocolTest {
+    @Test fun notificationDismissalsValidateAndUseTheirOwnDurablePath() {
+        val event = NotificationDismissal(threadId = Protocol.TEST_NOTIFICATION_THREAD_ID, postedAt = 1000)
+        assertTrue(event.isValid())
+        assertEquals(event, Wire.decode<NotificationDismissal>(Wire.encode(event)))
+        assertTrue(Protocol.notificationDismissalDataPath(event.threadId).startsWith(Protocol.DATA_DISMISS_PREFIX))
+        assertFalse(event.copy(version = 0).isValid())
+        assertFalse(event.copy(postedAt = 0).isValid())
+        assertFalse(event.copy(threadId = "unrelated-package").isValid())
+        assertTrue(event.copy(threadId = "chat_iMessage;-;person@example.com").isValid())
+    }
+    @Test fun testNotificationIsAnIsolatedMessageWithoutBackendCapabilities() {
+        val thread = Protocol.testNotificationThread(1234)
+        assertEquals(Protocol.TEST_NOTIFICATION_THREAD_ID, thread.id)
+        assertFalse(Protocol.isChatGuid(thread.id))
+        assertTrue(thread.unread)
+        assertFalse(thread.canReply || thread.canSend || thread.canMarkRead)
+        assertNull(thread.address)
+        assertEquals(1234L, thread.messages.single().timestamp)
+        assertEquals(thread, Wire.decode<WireThread>(Wire.encode(thread)))
+        assertFalse(thread.messages.single().id == Protocol.testNotificationThread(1235).messages.single().id)
+    }
     @Test fun artworkSurvivesThreadSummaryAndContactTransportWithOldCacheDefaults() {
         val avatar = "avatar-" + "a".repeat(64)
         val thread = WireThread("chat", "Group", avatarId = avatar)

@@ -139,7 +139,7 @@ fun ChatScreen(
                                 )
                             }
                         }
-                        val notice = state.error ?: state.info
+                        val notice = state.error
                         if (notice != null) {
                             Spacer(Modifier.height(6.dp))
                             NoticeCard(
@@ -203,6 +203,12 @@ fun ChatScreen(
                             showSender = isGroup && !message.fromMe,
                             onOpenMedia = onOpenMedia
                         )
+                    }
+                }
+
+                if (state.error == null && state.info != null) {
+                    item(key = "chat-info") {
+                        NoticeCard(message = state.info, isError = false, onDismiss = onDismissNotice)
                     }
                 }
 
