@@ -2,7 +2,6 @@
 
 Wear OS companion for OpenBubbles. This repository builds the watch app and its shared protocol only; it does not build or patch a phone APK. The phone-side Morphe patch lives in the [mrcool-patches repository](https://github.com/MrCool-888/mrcool-patches).
 
-**Disclaimer:** OpenBubbles Wear is an independent project and is not affiliated with OpenBubbles.
 
 The watch package identity is `com.openbubbles.messaging`. Keep it and its release signing key aligned with the phone patch so the Wear Data Layer can authenticate the companion.
 
@@ -20,6 +19,8 @@ The default CI builds and uploads an unsigned debug APK. A signed release build 
 The `testnotifier` module is a local test utility for producing sample OpenBubbles notifications. It is not part of the watch APK or CI release artifact.
 
 See [architecture and split maintenance](docs/ARCHITECTURE.md), [testing and release](docs/TESTING.md), and [historical 3.0.0 validation](docs/HISTORICAL-VALIDATION-3.0.0.md).
+
+OpenBubbles Wear is an independent project and is not affiliated with OpenBubbles.
 
 ## License
 
