@@ -21,6 +21,9 @@ import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.GroupsResult
 import com.openbubbles.wear.protocol.ThreadPayload
 import com.openbubbles.wear.protocol.MarkReadRequest
+import com.openbubbles.wear.protocol.MessageReaction
+import com.openbubbles.wear.protocol.MessageReference
+import com.openbubbles.wear.protocol.ReactionRequest
 import com.openbubbles.wear.protocol.Wire
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
@@ -41,6 +44,7 @@ class WatchRepositoryTest {
     private lateinit var context: Context
     private lateinit var state: MutableStateFlow<WatchState>
     private lateinit var pending: MutableMap<String, String>
+    private lateinit var pendingReactions: MutableMap<String, ReactionRequest>
     private lateinit var threadRequests: MutableMap<String, String>
     private val local = WireMessage(id = "local-request", threadId = "chat", text = "Hello",
         timestamp = 1000, fromMe = true, status = "sending")
@@ -58,6 +62,9 @@ class WatchRepositoryTest {
         @Suppress("UNCHECKED_CAST")
         pending = field("pendingSends").get(null) as MutableMap<String, String>
         pending.clear()
+        @Suppress("UNCHECKED_CAST")
+        pendingReactions = field("pendingReactions").get(null) as MutableMap<String, ReactionRequest>
+        pendingReactions.clear()
         @Suppress("UNCHECKED_CAST")
         threadRequests = field("pendingThreadRequests").get(null) as MutableMap<String, String>
         threadRequests.clear()
@@ -365,6 +372,41 @@ class WatchRepositoryTest {
             incoming.messages.single().copy(timestamp = 2000, text = "Updated"))),
             connected = true, alertMessageId = "backend-id")
         assertEquals(1, manager.activeNotifications.size)
+    }
+
+    @Test fun reactionAlertShowsOnReadChatAndSurvivesAReadSyncWithoutReplaying() {
+        val thread = WireThread(id = "chat_iMessage;-;alex@example.com", title = "Alex", unread = false,
+            messages = listOf(message("original", 900, "Hello").copy(threadId = "chat_iMessage;-;alex@example.com", fromMe = true)))
+        val event = message("reaction-event", 1000, "👍 to: Hello").copy(threadId = thread.id, sender = "Alex")
+        val alert = com.openbubbles.wear.protocol.ReactionAlert(thread = thread, event = event)
+        state.value = WatchState(loading = false, alertsEnabled = true, notificationPermission = true)
+        WatchRepository.onReactionAlert(alert)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        assertEquals(1, manager.activeNotifications.size)
+        assertEquals("👍 to: Hello", manager.activeNotifications.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        WatchRepository.onThread(thread)
+        assertEquals(1, manager.activeNotifications.size)
+        WatchRepository.onReactionAlert(alert)
+        assertEquals(1, manager.activeNotifications.size)
+        assertEquals(listOf("original"), state.value.threads.getValue(thread.id).messages.map { it.id })
+        WatchNotifications.dismiss(context, com.openbubbles.wear.protocol.NotificationDismissal(threadId = thread.id, postedAt = 1000))
+        assertTrue(manager.activeNotifications.isEmpty())
+        WatchRepository.onReactionAlert(alert)
+        assertTrue(manager.activeNotifications.isEmpty())
+    }
+
+    @Test fun reactionAlertHonorsVisibilityAndHiddenPreviews() {
+        val id = "chat_iMessage;-;alex@example.com"
+        val thread = WireThread(id = id, title = "Alex")
+        val event = message("private-reaction", 2000, "❤️ to: Secret").copy(threadId = id, sender = "Alex")
+        state.value = WatchState(loading = false, visibleThreadId = id)
+        WatchRepository.onReactionAlert(com.openbubbles.wear.protocol.ReactionAlert(thread = thread, event = event))
+        val manager = context.getSystemService(NotificationManager::class.java)
+        assertTrue(manager.activeNotifications.isEmpty())
+        state.value = state.value.copy(visibleThreadId = null)
+        WatchRepository.onReactionAlert(com.openbubbles.wear.protocol.ReactionAlert(thread = thread,
+            event = event.copy(id = "private-reaction-2"), hidePreview = true))
+        assertEquals("New message", manager.activeNotifications.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
     }
 
     @Test fun hiddenAlertPreviewDoesNotPutMessageTextInNotification() {
@@ -794,7 +836,78 @@ class WatchRepositoryTest {
         )
         assertTrue(WatchRepository.sendReply("chat", "Saved reply"))
         assertEquals(1, state.value.queuedCount)
-        assertTrue(state.value.info!!.contains("outbox"))
+        assertNull(state.value.info)
+        assertEquals("queued", state.value.threads.getValue("chat").messages.single().status)
+    }
+
+    @Test fun quotedReplyIsKeptOnLocalMessageAndRestoredOutboxEntry() {
+        val root = MessageReference("root", "Original", "Alex", partIndex = 2)
+        val target = message("reply", text = "A reply").copy(canReply = true, replyTo = root)
+        state.value = state.value.copy(relayEnabled = true,
+            threads = mapOf("chat" to WireThread("chat", "Alex", canReply = true, messages = listOf(target))),
+            queuedSends = emptyList(), sendingThreads = emptySet())
+
+        assertTrue(WatchRepository.sendReply("chat", "Quoted", target.id))
+        val localMessage = state.value.threads.getValue("chat").messages.last()
+        val queued = state.value.queuedSends.single()
+        assertEquals(root.copy(partIndex = 0), localMessage.replyTo)
+        assertEquals(localMessage.replyTo, queued.replyTo)
+        val reload = WatchRepository::class.java.getDeclaredMethod("loadQueue", android.content.SharedPreferences::class.java)
+            .apply { isAccessible = true }
+        assertEquals(queued, (reload.invoke(WatchRepository, context.getSharedPreferences("openbubbles_wear", Context.MODE_PRIVATE)) as List<*>).single())
+    }
+
+    @Test fun missingReplyTargetIsRejectedWithoutSendingPlainText() {
+        state.value = state.value.copy(relayEnabled = true, threads = mapOf("chat" to WireThread("chat", "Alex", canReply = true)),
+            queuedSends = emptyList(), sendingThreads = emptySet())
+        assertFalse(WatchRepository.sendReply("chat", "Must stay quoted", "gone"))
+        assertTrue(state.value.queuedSends.isEmpty())
+        assertTrue(state.value.threads.getValue("chat").messages.isEmpty())
+    }
+
+    @Test fun plainSendDoesNotReconcileToAQuotedMessageWithTheSameText() {
+        val root = MessageReference("root", "Original")
+        val plain = local.copy(status = "sending", replyTo = null)
+        state.value = state.value.copy(threads = mapOf("chat" to WireThread("chat", "Alex", messages = listOf(plain))))
+        val quotedRemote = message("backend", text = plain.text).copy(fromMe = true, replyTo = root)
+        WatchRepository.onThread(WireThread("chat", "Alex", messages = listOf(quotedRemote)), connected = false)
+        assertEquals(setOf(plain.id, quotedRemote.id), state.value.threads.getValue("chat").messages.map { it.id }.toSet())
+    }
+
+    @Test fun reactionResultOnlyUpdatesItsExactTargetAndFailureClearsPendingState() {
+        val original = message("target").copy(canReact = true)
+        val other = message("other").copy(reactions = listOf(MessageReaction("like")))
+        state.value = state.value.copy(threads = mapOf("chat" to WireThread("chat", "Alex", messages = listOf(original, other))),
+            requestingThreads = setOf("chat"), reactingMessages = setOf(original.id))
+        val request = ReactionRequest(requestId = "react", threadId = "chat", messageId = original.id, reaction = "love")
+        pendingReactions[request.requestId] = request
+        WatchRepository.onActionResult(ActionResult(requestId = request.requestId, action = Protocol.ACTION_REACTION,
+            ok = true, threadId = "chat", message = original.copy(reactions = listOf(MessageReaction("love", 1, true)))))
+        assertEquals(listOf(MessageReaction("love", 1, true)), state.value.threads.getValue("chat").messages.first().reactions)
+        assertEquals(other, state.value.threads.getValue("chat").messages.last())
+        assertTrue(state.value.reactingMessages.isEmpty())
+
+        pendingReactions["wrong-target"] = request.copy(requestId = "wrong-target")
+        state.value = state.value.copy(reactingMessages = setOf(original.id))
+        WatchRepository.onActionResult(ActionResult(requestId = "wrong-target", action = Protocol.ACTION_REACTION,
+            ok = true, threadId = "chat", message = other.copy(reactions = listOf(MessageReaction("laugh")))))
+        assertEquals(other, state.value.threads.getValue("chat").messages.last())
+        assertTrue(state.value.reactingMessages.isEmpty())
+
+        pendingReactions["failed"] = request.copy(requestId = "failed")
+        state.value = state.value.copy(reactingMessages = setOf(original.id))
+        WatchRepository.failReaction("failed", "not sent")
+        assertTrue(state.value.reactingMessages.isEmpty())
+        assertEquals(original.copy(reactions = listOf(MessageReaction("love", 1, true))), state.value.threads.getValue("chat").messages.first())
+    }
+
+    @Test fun unavailableReactionCannotEnterPendingState() {
+        val unavailable = message("target")
+        state.value = state.value.copy(threads = mapOf("chat" to WireThread("chat", "Alex", messages = listOf(unavailable))),
+            connected = true, directBridge = true, relayEnabled = true)
+        assertFalse(WatchRepository.react("chat", unavailable.id, "love"))
+        assertTrue(pendingReactions.isEmpty())
+        assertTrue(state.value.reactingMessages.isEmpty())
     }
 
     @Test fun unlockOnlyUpdatesPhoneState() {

@@ -16,10 +16,13 @@ import com.openbubbles.wear.protocol.WatchContact
 import com.openbubbles.wear.protocol.MarkReadRequest
 import com.openbubbles.wear.protocol.MediaPayload
 import com.openbubbles.wear.protocol.MediaRequest
+import com.openbubbles.wear.protocol.MessageReference
 import com.openbubbles.wear.protocol.OpenPhoneRequest
 import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.Protocol
+import com.openbubbles.wear.protocol.ReactionRequest
+import com.openbubbles.wear.protocol.Tapback
 import com.openbubbles.wear.protocol.SendRequest
 import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.SyncRequest
@@ -57,7 +60,8 @@ data class QueuedSend(
     /** Time before which an automatic retry should not be attempted. */
     val nextAttemptAt: Long = 0L,
     /** A process restart cannot tell whether this send reached the phone. */
-    val dispatching: Boolean = false
+    val dispatching: Boolean = false,
+    val replyTo: MessageReference? = null
 )
 
 data class WatchMedia(
@@ -98,6 +102,7 @@ data class WatchState(
     val syncing: Boolean = false,
     val requestingThreads: Set<String> = emptySet(),
     val sendingThreads: Set<String> = emptySet(),
+    val reactingMessages: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
     val alertsEnabled: Boolean = true,
@@ -159,6 +164,13 @@ object WatchRepository {
             update.alertMessageId, update.hideAlertPreview)
     }
 
+    fun onReactionAlert(alert: com.openbubbles.wear.protocol.ReactionAlert) {
+        if (!initialized || alert.version != Protocol.VERSION || alert.event.fromMe ||
+            alert.event.threadId != alert.thread.id || alert.event.id.isBlank() || alert.event.timestamp <= 0) return
+        onThread(alert.thread)
+        appContext?.let { WatchNotifications.syncReaction(it, alert.thread, state.value, alert.event, alert.hidePreview) }
+    }
+
     private const val TAG = "OBWearRepo"
     private const val PREFS_NAME = "openbubbles_wear"
     private const val CONTACTS_PREFS_NAME = "openbubbles_wear_contacts"
@@ -211,6 +223,7 @@ object WatchRepository {
     private var queueFlushing = false
     private val pendingSends = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingThreadRequests = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val pendingReactions = java.util.concurrent.ConcurrentHashMap<String, ReactionRequest>()
     @Volatile
     private var appContext: Context? = null
 
@@ -377,7 +390,7 @@ object WatchRepository {
             val context = appContext
             if (context != null) {
                 summaries.filterNot { it.unread }.forEach { summary ->
-                    WatchNotifications.cancel(context, summary.id)
+                    WatchNotifications.cancelMessages(context, summary.id)
                 }
             }
             flushQueue()
@@ -492,6 +505,7 @@ object WatchRepository {
                 val backendMessage = result.message
                 val current = _state.value.threads[target]
                 if (result.ok && backendMessage != null && current != null) {
+                    val replyTo = current.messages.firstOrNull { it.id == localId }?.replyTo
                     val confirmed = current.copy(messages = current.messages.filterNot { it.id == localId })
                     replaceThread(confirmed)
                     onThread(confirmed.copy(
@@ -499,7 +513,8 @@ object WatchRepository {
                         // only its message status tells us whether it was delivered.
                         messages = listOf(backendMessage.copy(
                             threadId = current.id,
-                            status = backendMessage.status ?: "unconfirmed"
+                            status = backendMessage.status ?: "unconfirmed",
+                            replyTo = backendMessage.replyTo ?: replyTo
                         )),
                         updatedAt = maxOf(confirmed.updatedAt, backendMessage.timestamp),
                         directHistory = false
@@ -522,6 +537,24 @@ object WatchRepository {
                 if (result.ok && target != null) {
                     markReadLocally(target)
                 }
+            }
+
+            Protocol.ACTION_REACTION -> {
+                val request = pendingReactions.remove(result.requestId) ?: return
+                if (result.ok) {
+                    val thread = _state.value.threads[request.threadId]
+                    val message = result.message?.takeIf {
+                        it.id == request.messageId && it.threadId == request.threadId
+                    }
+                    if (thread != null && message != null) replaceThread(thread.copy(
+                        messages = thread.messages.map { if (it.id == message.id) message.mergeMediaFrom(it) else it }
+                    ))
+                }
+                _state.update { it.copy(
+                    reactingMessages = it.reactingMessages - request.messageId,
+                    error = if (result.ok) null else result.error ?: "Could not send the reaction."
+                ) }
+                if (result.ok) requestThread(request.threadId)
             }
 
             Protocol.ACTION_MARK_READ -> {
@@ -582,6 +615,7 @@ object WatchRepository {
     }
 
     fun onBridgeError(error: BridgeError) {
+        error.requestId?.let { failReaction(it, error.error) }
         _state.update { it.copy(error = error.error) }
     }
 
@@ -735,7 +769,7 @@ object WatchRepository {
     }
 
     @Synchronized
-    fun sendReply(threadId: String, rawText: String): Boolean {
+    fun sendReply(threadId: String, rawText: String, replyToMessageId: String? = null): Boolean {
         if (!initialized) return false
         val text = rawText.trim().take(MAX_REPLY_LENGTH)
         if (text.isEmpty()) return false
@@ -751,6 +785,14 @@ object WatchRepository {
             return false
         }
         val thread = state.threads[threadId]
+        val replyTarget = replyToMessageId?.let { id -> thread?.messages?.firstOrNull { it.id == id } }
+        if (replyToMessageId != null && replyTarget?.canReply != true) {
+            _state.update { it.copy(error = "This message is no longer available to reply to. Refresh the conversation.") }
+            return false
+        }
+        val replyTo = replyTarget?.let {
+            it.replyTo?.copy(partIndex = 0) ?: MessageReference(it.id, it.displayText.take(160), it.sender, it.fromMe)
+        }
         val summary = state.conversations.firstOrNull { it.id == threadId }
         if (!state.canReplyTo(threadId)) {
             _state.update {
@@ -767,7 +809,8 @@ object WatchRepository {
             text = text,
             timestamp = now,
             fromMe = true,
-            status = "queued"
+            status = "queued",
+            replyTo = replyTo
         )
         val current = thread ?: summary?.let { item ->
             WireThread(
@@ -802,7 +845,8 @@ object WatchRepository {
                 threadId = threadId,
                 text = text,
                 createdAt = now,
-                nextAttemptAt = 0L
+                nextAttemptAt = 0L,
+                replyTo = replyTo
             )
         )
         if (!persist(synchronous = true)) {
@@ -816,7 +860,6 @@ object WatchRepository {
         }
         WatchNotifications.cancel(context, threadId)
 
-        _state.update { it.copy(info = if (it.phoneOnline) "Message saved to the outbox." else "Phone offline. The message will send when it reconnects.") }
         flushQueue()
         return true
     }
@@ -929,7 +972,9 @@ object WatchRepository {
                             requestId = item.requestId,
                             threadId = target,
                             text = item.text,
-                            address = thread?.address ?: summary?.address
+                            address = thread?.address ?: summary?.address,
+                            replyToMessageId = item.replyTo?.messageId,
+                            replyToPartIndex = item.replyTo?.partIndex ?: 0
                         )
                     )
                     if (!prepareSendDispatch(item.requestId)) break
@@ -949,7 +994,7 @@ object WatchRepository {
             if (sentAny) {
                 _state.update {
                     it.copy(
-                        info = lastError ?: "Queued messages handed to the phone."
+                        info = if (manual) lastError ?: "Queued messages handed to the phone." else it.info
                     )
                 }
             } else if (lastError != null) {
@@ -1353,6 +1398,42 @@ object WatchRepository {
             Log.w(TAG, "Unable to import media $mediaId", it)
         }.getOrNull()
 
+    @Synchronized
+    fun react(threadId: String, messageId: String, reaction: String, partIndex: Int = 0): Boolean {
+        if (!initialized) return false
+        val context = appContext ?: return false
+        val state = _state.value
+        val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+        if (message?.canReact != true || Tapback.fromType(reaction) == null || partIndex < 0) return false
+        if (messageId in state.reactingMessages) return false
+        if (!state.phoneOnline || !state.directBridge || !state.relayEnabled) {
+            _state.update { it.copy(error = "Connect your phone and enable the Wear bridge to react.") }
+            return false
+        }
+        val request = ReactionRequest(
+            requestId = UUID.randomUUID().toString(), threadId = threadId, messageId = messageId,
+            reaction = reaction,
+            remove = message.reactions.any { it.type == reaction && it.partIndex == partIndex && it.fromMe },
+            partIndex = partIndex
+        )
+        pendingReactions[request.requestId] = request
+        _state.update { it.copy(reactingMessages = it.reactingMessages + messageId, error = null) }
+        PhoneLink.send(context, Protocol.PATH_REACTION, Wire.encodeBytes(request)) { sent ->
+            if (!sent) failReaction(request.requestId, "Phone unreachable. The reaction was not sent.")
+        }
+        scope.launch {
+            delay(35_000L)
+            failReaction(request.requestId, "Reaction not confirmed. Refresh the conversation before trying again.")
+        }
+        return true
+    }
+
+    @Synchronized
+    internal fun failReaction(requestId: String, error: String) {
+        val request = pendingReactions.remove(requestId) ?: return
+        _state.update { it.copy(reactingMessages = it.reactingMessages - request.messageId, error = error) }
+    }
+
     fun markRead(threadId: String) {
         if (!initialized) return
         val context = appContext ?: return
@@ -1578,6 +1659,8 @@ object WatchRepository {
                     candidate.id.startsWith(AUTO_PREFIX) &&
                         candidate.fromMe &&
                         candidate.text == message.text &&
+                        candidate.replyTo?.messageId == message.replyTo?.messageId &&
+                        candidate.replyTo?.partIndex == message.replyTo?.partIndex &&
                         abs(candidate.timestamp - message.timestamp) <=
                         AUTO_MATCH_WINDOW_MS
                 }
@@ -1599,6 +1682,8 @@ object WatchRepository {
             val match = unmatched.firstOrNull { message ->
                 message.id == AUTO_PREFIX + local.id.removePrefix(LOCAL_PREFIX) ||
                     (local.status != "queued" && message.text == local.text &&
+                        message.replyTo?.messageId == local.replyTo?.messageId &&
+                        message.replyTo?.partIndex == local.replyTo?.partIndex &&
                         abs(message.timestamp - local.timestamp) <= LOCAL_MATCH_WINDOW_MS)
             }
             if (match != null) {
@@ -1757,7 +1842,8 @@ object WatchRepository {
                             createdAt = item.optLong("createdAt", 0L),
                             attempts = item.optInt("attempts", 0),
                             nextAttemptAt = item.optLong("nextAttemptAt", 0L),
-                            dispatching = item.optBoolean("dispatching", false)
+                            dispatching = item.optBoolean("dispatching", false),
+                            replyTo = item.optJSONObject("replyTo")?.toString()?.let { Wire.decode<MessageReference>(it) }
                         )
                     )
                 }
@@ -1777,6 +1863,7 @@ object WatchRepository {
                     put("attempts", item.attempts)
                     put("nextAttemptAt", item.nextAttemptAt)
                     put("dispatching", item.dispatching)
+                    item.replyTo?.let { put("replyTo", JSONObject(Wire.encode(it))) }
                 }
             )
         }

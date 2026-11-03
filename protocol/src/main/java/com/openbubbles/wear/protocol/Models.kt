@@ -20,7 +20,13 @@ data class WireMessage(
     val mediaSize: Long = 0L,
     val status: String? = null,
     /** Authenticated phone-side media provider URI; the watch fetches bytes through the Data Layer. */
-    val sourceUri: String? = null
+    val sourceUri: String? = null,
+    val reactions: List<MessageReaction> = emptyList(),
+    /** Only the updated phone bridge can resolve this message as a reaction target. */
+    val canReact: Boolean = false,
+    val canReply: Boolean = false,
+    val replyTo: MessageReference? = null,
+    val replyCount: Int = 0
 ) {
     val displayText: String
         get() = when {
@@ -53,6 +59,55 @@ data class WireMessage(
         return this
     }
 }
+
+@Serializable
+data class MessageReaction(
+    val type: String,
+    val count: Int = 1,
+    val fromMe: Boolean = false,
+    val partIndex: Int = 0
+)
+
+@Serializable
+data class MessageReference(
+    val messageId: String,
+    val text: String = "",
+    val sender: String? = null,
+    val fromMe: Boolean = false,
+    val partIndex: Int = 0
+)
+
+enum class Tapback(val type: String, val symbol: String, val label: String) {
+    LOVE("love", "❤️", "Love"),
+    LIKE("like", "👍", "Like"),
+    DISLIKE("dislike", "👎", "Dislike"),
+    LAUGH("laugh", "😂", "Laugh"),
+    EMPHASIS("emphasize", "‼️", "Emphasis"),
+    QUESTION("question", "❓", "Question");
+
+    companion object {
+        fun fromType(type: String): Tapback? = entries.firstOrNull { it.type == type }
+    }
+}
+
+@Serializable
+data class ReactionRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String,
+    val messageId: String,
+    val reaction: String,
+    val remove: Boolean = false,
+    val partIndex: Int = 0
+)
+
+@Serializable
+data class ReactionAlert(
+    val version: Int = Protocol.VERSION,
+    val thread: WireThread,
+    val event: WireMessage,
+    val hidePreview: Boolean = false
+)
 
 @Serializable
 data class WireThread(
@@ -238,7 +293,9 @@ data class SendRequest(
     val text: String,
     /** Address for a chat the watch started from Contacts, before it has a GUID. */
     val address: String? = null,
-    val sentAt: Long = System.currentTimeMillis()
+    val sentAt: Long = System.currentTimeMillis(),
+    val replyToMessageId: String? = null,
+    val replyToPartIndex: Int = 0
 )
 
 /** Asks the phone to publish one cached image or GIF over the Data Layer. */

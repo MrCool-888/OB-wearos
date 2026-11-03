@@ -75,6 +75,11 @@ class WearListenerService : WearableListenerService() {
                         ?.let { WatchRepository.onTestNotification(it) }
                 }
 
+                Protocol.PATH_REACTION_ALERT -> {
+                    Wire.decodeBytes<com.openbubbles.wear.protocol.ReactionAlert>(data)
+                        ?.let { WatchRepository.onReactionAlert(it) }
+                }
+
                 Protocol.PATH_PONG -> {
                     Wire.decodeBytes<com.openbubbles.wear.protocol.PongPayload>(data)
                         ?.let { WatchRepository.onPong(it) }

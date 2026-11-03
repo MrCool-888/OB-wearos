@@ -5,6 +5,12 @@ Wear OS companion for OpenBubbles. This repository builds the watch app and its 
 
 The watch package identity is `com.openbubbles.messaging`. Keep it and its release signing key aligned with the phone patch so the Wear Data Layer can authenticate the companion.
 
+## Message actions
+
+With a matching phone bridge build, hold an iMessage bubble for quick reactions or Reply. Your reactions are highlighted; select the same reaction again to remove it. Swipe an incoming bubble left or an outgoing bubble right to reply. Replies show their quoted original and reply count.
+
+The bottom **Send message** button starts an ordinary message. Reaction notifications follow the existing phone and watch notification settings.
+
 ## Build and test
 
 Use JDK 17 and an Android SDK with platform 35 installed. `local.properties` is machine-specific and is not checked in.
