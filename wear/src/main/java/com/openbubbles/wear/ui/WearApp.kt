@@ -32,12 +32,12 @@ import com.openbubbles.wear.refreshVisibleConversations
 import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "3.0.1"
+const val WATCH_APP_VERSION = "3.1.0-dev"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
     data class Chat(val threadId: String) : WearScreen
-    data class Composer(val threadId: String) : WearScreen
+    data class Composer(val threadId: String, val replyToMessageId: String? = null) : WearScreen
     data class Media(val threadId: String, val mediaId: String) : WearScreen
     data object FindChat : WearScreen
     data object Contacts : WearScreen
@@ -203,6 +203,7 @@ fun WearApp() {
                 threadId = screen.threadId,
                 onBack = { pop() },
                 onReply = { push(WearScreen.Composer(screen.threadId)) },
+                onReplyToMessage = { messageId -> push(WearScreen.Composer(screen.threadId, messageId)) },
                 onOpenPhone = { WatchRepository.openOnPhone(screen.threadId) },
                 onOpenMedia = { mediaId ->
                     push(WearScreen.Media(screen.threadId, mediaId))
@@ -231,6 +232,7 @@ fun WearApp() {
             is WearScreen.Composer -> ComposerScreen(
                 state = state,
                 threadId = screen.threadId,
+                replyToMessageId = screen.replyToMessageId,
                 onBack = { pop() },
                 onSent = { pop() },
                 onDismissNotice = { WatchRepository.clearNotices() }

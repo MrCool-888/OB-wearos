@@ -1,7 +1,7 @@
 package com.openbubbles.wear.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,12 +29,17 @@ import androidx.wear.compose.material3.TextButton
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +62,7 @@ fun ChatScreen(
     threadId: String,
     onBack: () -> Unit,
     onReply: () -> Unit,
+    onReplyToMessage: (String) -> Unit,
     onOpenPhone: () -> Unit,
     onOpenMedia: (String) -> Unit,
     onSendQueued: () -> Unit,
@@ -69,6 +75,8 @@ fun ChatScreen(
     val scrollPosition = remember(threadId) { ChatScrollPosition() }
     val requesting = threadId in state.requestingThreads
     val canReply = state.canReplyTo(threadId)
+    var selectedMessageId by remember(threadId) { mutableStateOf<String?>(null) }
+    val haptics = LocalHapticFeedback.current
 
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val isGroup = thread?.isGroup ?: summary?.isGroup ?: false
@@ -201,7 +209,16 @@ fun ChatScreen(
                             requestingMedia = message.mediaId != null &&
                                 message.mediaId in state.requestingMedia,
                             showSender = isGroup && !message.fromMe,
-                            onOpenMedia = onOpenMedia
+                            onOpenMedia = onOpenMedia,
+                            onShowActions = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                selectedMessageId = message.id
+                            },
+                            onReply = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onReplyToMessage(message.id)
+                            },
+                            reacting = message.id in state.reactingMessages
                         )
                     }
                 }
@@ -227,6 +244,22 @@ fun ChatScreen(
                 }
             }
         }
+    }
+    messages.firstOrNull { it.id == selectedMessageId }?.let { message ->
+        MessageActionsDialog(
+            message = message,
+            canReact = state.phoneOnline && state.directBridge && state.relayEnabled &&
+                message.id !in state.reactingMessages,
+            canReply = canReply && state.relayEnabled,
+            onDismiss = { selectedMessageId = null },
+            onReact = { reaction, partIndex ->
+                if (WatchRepository.react(threadId, message.id, reaction, partIndex)) selectedMessageId = null
+            },
+            onReply = {
+                selectedMessageId = null
+                onReplyToMessage(message.id)
+            }
+        )
     }
 }
 
@@ -291,7 +324,10 @@ private fun MessageBubble(
     media: WatchMedia?,
     requestingMedia: Boolean,
     showSender: Boolean,
-    onOpenMedia: (String) -> Unit
+    onOpenMedia: (String) -> Unit,
+    onShowActions: () -> Unit,
+    onReply: () -> Unit,
+    reacting: Boolean
 ) {
     val scheme = MaterialTheme.colorScheme
     val fromMe = message.fromMe
@@ -314,8 +350,15 @@ private fun MessageBubble(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
+                .swipeToReply(enabled = message.canReply, fromMe = fromMe, onReply = onReply)
                 .clip(shape)
                 .background(container)
+                .combinedClickable(
+                    enabled = message.canReact || message.canReply,
+                    onClick = {},
+                    onLongClick = onShowActions,
+                    onLongClickLabel = "Reactions and reply"
+                )
                 .padding(horizontal = 10.dp, vertical = 7.dp)
         ) {
             val sender = message.sender
@@ -327,13 +370,19 @@ private fun MessageBubble(
                     color = scheme.primary
                 )
             }
+            message.replyTo?.let { quote ->
+                MessageQuote(quote = quote, color = content)
+                Spacer(Modifier.height(5.dp))
+            }
             if (message.attachment) {
                 AttachmentBubble(
                     message = message,
                     media = media,
                     requesting = requestingMedia,
                     content = content,
-                    onOpenMedia = onOpenMedia
+                    onOpenMedia = onOpenMedia,
+                    onLongPress = onShowActions,
+                    canShowActions = message.canReact || message.canReply
                 )
                 if (message.text.isNotBlank()) Spacer(Modifier.height(4.dp))
             }
@@ -350,6 +399,13 @@ private fun MessageBubble(
                     color = content
                 )
             }
+            ReactionBadges(message.reactions, content)
+            if (message.replyCount > 0) Text(
+                text = "${message.replyCount} ${if (message.replyCount == 1) "reply" else "replies"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = secondaryContent
+            )
+            if (reacting) Text("Reacting…", style = MaterialTheme.typography.labelSmall, color = secondaryContent)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -418,7 +474,9 @@ private fun AttachmentBubble(
     media: WatchMedia?,
     requesting: Boolean,
     content: Color,
-    onOpenMedia: (String) -> Unit
+    onOpenMedia: (String) -> Unit,
+    onLongPress: () -> Unit,
+    canShowActions: Boolean
 ) {
     val mediaId = message.mediaId
     val isGif = media?.isGif == true || message.mediaMime == "image/gif"
@@ -433,7 +491,11 @@ private fun AttachmentBubble(
                     .fillMaxWidth()
                     .height(112.dp)
                     .clip(thumbnailShape)
-                    .clickable { onOpenMedia(mediaId) }
+                    .combinedClickable(
+                        onClick = { onOpenMedia(mediaId) },
+                        onLongClick = onLongPress.takeIf { canShowActions },
+                        onLongClickLabel = "Reactions and reply"
+                    )
             )
             Text(
                 text = if (isGif) "Tap to play GIF" else "Tap to view photo",
@@ -469,7 +531,11 @@ private fun AttachmentBubble(
                     .height(88.dp)
                     .clip(thumbnailShape)
                     .background(content.copy(alpha = 0.12f))
-                    .clickable { WatchRepository.requestMedia(mediaId) },
+                    .combinedClickable(
+                        onClick = { WatchRepository.requestMedia(mediaId) },
+                        onLongClick = onLongPress.takeIf { canShowActions },
+                        onLongClickLabel = "Reactions and reply"
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -522,10 +588,8 @@ private fun ChatActions(
         ) {
             Text(
                 when {
-                    sending -> "Sending…"
-                    !state.phoneOnline && canReply -> "Queue reply"
-                    canReply -> "Reply"
-                    else -> "Reply unavailable"
+                    canReply -> "Send message"
+                    else -> "Send unavailable"
                 }
             )
         }
@@ -539,7 +603,7 @@ private fun ChatActions(
             )
         }
 
-        if (queuedCount > 0) {
+        if (queuedCount > 0 && !state.phoneOnline) {
             Text(
                 text = "$queuedCount queued ${if (queuedCount == 1) "message" else "messages"}",
                 style = MaterialTheme.typography.labelSmall,

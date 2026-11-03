@@ -6,12 +6,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -40,6 +42,7 @@ import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.input.RemoteInputIntentHelper
 import com.openbubbles.wear.WatchRepository
 import com.openbubbles.wear.WatchState
+import com.openbubbles.wear.protocol.MessageReference
 
 private const val REPLY_INPUT_KEY = "openbubbles_wear_reply"
 
@@ -47,6 +50,7 @@ private const val REPLY_INPUT_KEY = "openbubbles_wear_reply"
 fun ComposerScreen(
     state: WatchState,
     threadId: String,
+    replyToMessageId: String? = null,
     onBack: () -> Unit,
     onSent: () -> Unit,
     onDismissNotice: () -> Unit
@@ -55,7 +59,9 @@ fun ComposerScreen(
     val summary = state.conversations.firstOrNull { it.id == threadId }
     val title = thread?.title ?: summary?.title ?: "Conversation"
     val canReply = state.canReplyTo(threadId)
-    val enabled = canReply && state.relayEnabled
+    var replyTargetId by remember(threadId, replyToMessageId) { mutableStateOf(replyToMessageId) }
+    val replyTarget = thread?.messages?.firstOrNull { it.id == replyTargetId }
+    val enabled = canReply && state.relayEnabled && (replyTargetId == null || replyTarget?.canReply == true)
     val sending = threadId in state.sendingThreads
     val listState = rememberScalingLazyListState()
     var voiceError by remember { mutableStateOf<String?>(null) }
@@ -67,18 +73,18 @@ fun ComposerScreen(
         val results = result.data?.let { RemoteInput.getResultsFromIntent(it) }
         val reply = results?.getCharSequence(REPLY_INPUT_KEY)?.toString()?.trim()
         if (!reply.isNullOrEmpty()) {
-            if (WatchRepository.sendReply(threadId, reply)) onSent()
+            if (WatchRepository.sendReply(threadId, reply, replyTargetId)) onSent()
         }
     }
 
     fun launchVoiceInput() {
         voiceError = null
         val input = RemoteInput.Builder(REPLY_INPUT_KEY)
-            .setLabel("Reply")
+            .setLabel(if (replyTargetId == null) "Message" else "Reply")
             .build()
         val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
         RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(input))
-        RemoteInputIntentHelper.putTitleExtra(intent, "Reply to $title")
+        RemoteInputIntentHelper.putTitleExtra(intent, if (replyTargetId == null) "Message $title" else "Reply to $title")
         runCatching { launcher.launch(intent) }
             .onFailure { voiceError = "Voice or keyboard input is not available on this watch." }
     }
@@ -124,15 +130,22 @@ fun ComposerScreen(
                 }
 
                 item {
-                    SectionHeader("Reply")
+                    SectionHeader(if (replyTargetId == null) "Send message" else "Reply to message")
                 }
 
-                if (sending) {
+                if (replyTargetId != null) {
                     item {
-                        NoticeCard(
-                            message = "Sending through OpenBubbles on your phone…",
-                            isError = false
-                        )
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                            MessageQuote(replyTarget?.replyTo ?: MessageReference(
+                                messageId = replyTargetId.orEmpty(),
+                                text = replyTarget?.displayText ?: "Original message unavailable",
+                                sender = replyTarget?.sender,
+                                fromMe = replyTarget?.fromMe == true
+                            ))
+                            TextButton(onClick = { replyTargetId = null }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Remove reply")
+                            }
+                        }
                     }
                 }
 
@@ -161,6 +174,9 @@ fun ComposerScreen(
                                 !state.relayEnabled ->
                                     "Relay is paused on the phone. Resume it in the bridge app to send."
 
+                                replyTargetId != null && replyTarget?.canReply != true ->
+                                    "This message is no longer available to reply to. Refresh the conversation."
+
                                 else ->
                                     "Enable the Wear patch in OpenBubbles to send from the watch."
                             },
@@ -186,7 +202,7 @@ fun ComposerScreen(
                         enabled = enabled && !sending,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Type or speak reply")
+                        Text(if (replyTargetId == null) "Type or speak message" else "Type or speak reply")
                     }
                 }
 
@@ -194,7 +210,7 @@ fun ComposerScreen(
                     item(key = "quick-$index") {
                         Button(
                             onClick = {
-                                if (WatchRepository.sendReply(threadId, reply)) onSent()
+                                if (WatchRepository.sendReply(threadId, reply, replyTargetId)) onSent()
                             },
                             enabled = enabled && !sending,
                             modifier = Modifier.fillMaxWidth()

@@ -74,7 +74,7 @@ object WatchNotifications {
         hideAlertPreview: Boolean
     ) {
         if (thread.id == state.visibleThreadId || !thread.unread) {
-            cancel(context, thread.id)
+            if (thread.id == state.visibleThreadId) cancel(context, thread.id) else cancelMessages(context, thread.id)
             alertMessageId?.let { recordAlerted(context, it) }
             return
         }
@@ -90,14 +90,26 @@ object WatchNotifications {
         if (show(context, thread, latest, state.quickReplies, hideAlertPreview)) recordAlerted(context, messageId)
     }
 
+    fun syncReaction(context: Context, thread: WireThread, state: WatchState, event: WireMessage, hidePreview: Boolean) {
+        if (event.fromMe || event.threadId != thread.id || event.id.isBlank() || event.timestamp <= 0) return
+        if (thread.id == state.visibleThreadId || event.timestamp <= prefs(context).getLong(KEY_DISMISSED_AT + thread.id, 0L)) {
+            recordAlerted(context, event.id)
+            return
+        }
+        if (wasAlerted(context, event.id) || !state.canPostNotifications || !areSystemNotificationsAllowed(context)) return
+        val content = thread.copy(messages = thread.messages.takeLast(4) + event)
+        if (show(context, content, event, state.quickReplies, hidePreview, reaction = true)) recordAlerted(context, event.id)
+    }
+
     private fun show(
         context: Context,
         thread: WireThread,
         latest: WireMessage,
         quickReplies: List<String>,
-        hidePreview: Boolean
+        hidePreview: Boolean,
+        reaction: Boolean = false
     ): Boolean {
-        val id = notificationId(thread.id)
+        val id = if (reaction) reactionNotificationId(thread.id) else notificationId(thread.id)
         val isTest = thread.id == Protocol.TEST_NOTIFICATION_THREAD_ID
         val me = Person.Builder().setName("You").build()
         val style = NotificationCompat.MessagingStyle(me)
@@ -227,7 +239,12 @@ object WatchNotifications {
     fun cancel(context: Context, threadId: String) {
         runCatching {
             NotificationManagerCompat.from(context).cancel(threadId, notificationId(threadId))
+            NotificationManagerCompat.from(context).cancel(threadId, reactionNotificationId(threadId))
         }
+    }
+
+    fun cancelMessages(context: Context, threadId: String) {
+        runCatching { NotificationManagerCompat.from(context).cancel(threadId, notificationId(threadId)) }
     }
 
     @Synchronized
@@ -237,8 +254,8 @@ object WatchNotifications {
         val watermark = maxOf(prefs(context).getLong(key, 0L), event.postedAt)
         prefs(context).edit().putLong(key, watermark).apply()
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.activeNotifications.any { it.tag == event.threadId && it.notification.`when` <= watermark })
-            cancel(context, event.threadId)
+        manager.activeNotifications.filter { it.tag == event.threadId && it.notification.`when` <= watermark }
+            .forEach { manager.cancel(it.tag, it.id) }
     }
 
     fun cancelAll(context: Context) {
@@ -251,6 +268,8 @@ object WatchNotifications {
         val raw = threadId.hashCode() and 0x7fffffff
         return if (raw == 0) 1 else raw
     }
+
+    private fun reactionNotificationId(threadId: String): Int = notificationId(threadId) xor Int.MIN_VALUE
 
     @Synchronized
     private fun wasAlerted(context: Context, messageId: String): Boolean = messageId in alertedIds(context)

@@ -21,8 +21,8 @@ android {
         applicationId = rootProject.extra["companionApplicationId"] as String
         minSdk = 30
         targetSdk = 35
-        versionCode = 23
-        versionName = "3.0.1"
+        versionCode = 24
+        versionName = "3.1.0-dev"
     }
 
     signingConfigs {
