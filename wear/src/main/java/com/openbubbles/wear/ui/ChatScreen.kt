@@ -60,6 +60,7 @@ import java.io.File
 fun ChatScreen(
     state: WatchState,
     threadId: String,
+    reverseReplySwipe: Boolean,
     onBack: () -> Unit,
     onReply: () -> Unit,
     onReplyToMessage: (String) -> Unit,
@@ -205,6 +206,7 @@ fun ChatScreen(
                     ) { message ->
                         MessageBubble(
                             message = message,
+                            reverseReplySwipe = reverseReplySwipe,
                             media = message.mediaId?.let { state.media[it] },
                             requestingMedia = message.mediaId != null &&
                                 message.mediaId in state.requestingMedia,
@@ -321,6 +323,7 @@ private fun ChatStatus(
 @Composable
 private fun MessageBubble(
     message: WireMessage,
+    reverseReplySwipe: Boolean,
     media: WatchMedia?,
     requestingMedia: Boolean,
     showSender: Boolean,
@@ -350,7 +353,8 @@ private fun MessageBubble(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
-                .swipeToReply(enabled = message.canReply, fromMe = fromMe, onReply = onReply)
+                .swipeToReply(enabled = message.canReply, fromMe = fromMe,
+                    reverse = reverseReplySwipe, onReply = onReply)
                 .clip(shape)
                 .background(container)
                 .combinedClickable(

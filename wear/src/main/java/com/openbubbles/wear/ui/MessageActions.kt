@@ -177,14 +177,14 @@ internal fun MessageActionsDialog(
 }
 
 @Composable
-internal fun Modifier.swipeToReply(enabled: Boolean, fromMe: Boolean, onReply: () -> Unit): Modifier {
+internal fun Modifier.swipeToReply(enabled: Boolean, fromMe: Boolean, reverse: Boolean, onReply: () -> Unit): Modifier {
     val threshold = with(LocalDensity.current) { 44.dp.toPx() }
     val edge = with(LocalDensity.current) { 20.dp.toPx() }
     val reply by rememberUpdatedState(onReply)
     var offset by remember { mutableFloatStateOf(0f) }
-    return graphicsLayer { translationX = offset }.pointerInput(enabled, fromMe, threshold) {
+    return graphicsLayer { translationX = offset }.pointerInput(enabled, fromMe, reverse, threshold) {
         if (!enabled) return@pointerInput
-        val direction = if (fromMe) 1f else -1f
+        val direction = if (fromMe != reverse) 1f else -1f
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             // Keep the left edge available for the watch's back gesture.

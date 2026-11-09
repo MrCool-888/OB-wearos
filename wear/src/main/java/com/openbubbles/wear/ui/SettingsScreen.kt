@@ -38,6 +38,8 @@ import com.openbubbles.wear.WatchState
 @Composable
 fun SettingsScreen(
     state: WatchState,
+    reverseReplySwipe: Boolean,
+    onToggleReplySwipe: () -> Unit,
     onBack: () -> Unit,
     onSync: () -> Unit,
     onOpenPhone: () -> Unit,
@@ -124,6 +126,21 @@ fun SettingsScreen(
                             "Last sync",
                             if (state.lastSyncAt > 0L) relativeTime(state.lastSyncAt) else "Never"
                         )
+                    }
+                }
+
+                item {
+                    InfoCard {
+                        Text("Swipe to reply", style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Text(if (reverseReplySwipe) "Swipe toward the center of the screen."
+                            else "Swipe toward the edge of the screen.",
+                            style = MaterialTheme.typography.bodyExtraSmall, color = scheme.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        Button(onClick = onToggleReplySwipe, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (reverseReplySwipe) "Use edge swipe" else "Use center swipe")
+                        }
                     }
                 }
 

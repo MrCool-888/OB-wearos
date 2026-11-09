@@ -2,6 +2,7 @@ package com.openbubbles.wear.ui
 
 import android.Manifest
 import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
@@ -32,7 +33,7 @@ import com.openbubbles.wear.refreshVisibleConversations
 import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "3.1.0-dev"
+const val WATCH_APP_VERSION = "3.1.0"
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
@@ -85,6 +86,8 @@ fun WearTheme(content: @Composable () -> Unit) {
 @Composable
 fun WearApp() {
     val context = LocalContext.current
+    val uiPreferences = remember(context) { context.getSharedPreferences("watch_ui", Context.MODE_PRIVATE) }
+    var reverseReplySwipe by remember { mutableStateOf(uiPreferences.getBoolean("reverse_reply_swipe", false)) }
     val state by WatchRepository.state.collectAsStateWithLifecycle()
     var stack by remember { mutableStateOf(listOf<WearScreen>(WearScreen.Conversations)) }
     val current = stack.last()
@@ -201,6 +204,7 @@ fun WearApp() {
             is WearScreen.Chat -> ChatScreen(
                 state = state,
                 threadId = screen.threadId,
+                reverseReplySwipe = reverseReplySwipe,
                 onBack = { pop() },
                 onReply = { push(WearScreen.Composer(screen.threadId)) },
                 onReplyToMessage = { messageId -> push(WearScreen.Composer(screen.threadId, messageId)) },
@@ -240,6 +244,11 @@ fun WearApp() {
 
             WearScreen.Settings -> SettingsScreen(
                 state = state,
+                reverseReplySwipe = reverseReplySwipe,
+                onToggleReplySwipe = {
+                    reverseReplySwipe = !reverseReplySwipe
+                    uiPreferences.edit().putBoolean("reverse_reply_swipe", reverseReplySwipe).apply()
+                },
                 onBack = { pop() },
                 onSync = { WatchRepository.sync(context) },
                 onOpenPhone = { WatchRepository.openOnPhone(null) },
