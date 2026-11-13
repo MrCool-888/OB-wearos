@@ -253,6 +253,8 @@ fun ChatScreen(
             canReact = state.phoneOnline && state.directBridge && state.relayEnabled &&
                 message.id !in state.reactingMessages,
             canReply = canReply && state.relayEnabled,
+            canUnsend = state.phoneOnline && state.directBridge && state.relayEnabled &&
+                message.id !in state.unsendingMessages,
             onDismiss = { selectedMessageId = null },
             onReact = { reaction, partIndex ->
                 if (WatchRepository.react(threadId, message.id, reaction, partIndex)) selectedMessageId = null
@@ -260,6 +262,9 @@ fun ChatScreen(
             onReply = {
                 selectedMessageId = null
                 onReplyToMessage(message.id)
+            },
+            onUnsend = {
+                if (WatchRepository.unsend(threadId, message.id)) selectedMessageId = null
             }
         )
     }
@@ -358,10 +363,10 @@ private fun MessageBubble(
                 .clip(shape)
                 .background(container)
                 .combinedClickable(
-                    enabled = message.canReact || message.canReply,
+                    enabled = message.canReact || message.canReply || message.canUnsendAt(),
                     onClick = {},
                     onLongClick = onShowActions,
-                    onLongClickLabel = "Reactions and reply"
+                    onLongClickLabel = "Message actions"
                 )
                 .padding(horizontal = 10.dp, vertical = 7.dp)
         ) {
@@ -386,7 +391,7 @@ private fun MessageBubble(
                     content = content,
                     onOpenMedia = onOpenMedia,
                     onLongPress = onShowActions,
-                    canShowActions = message.canReact || message.canReply
+                    canShowActions = message.canReact || message.canReply || message.canUnsendAt()
                 )
                 if (message.text.isNotBlank()) Spacer(Modifier.height(4.dp))
             }
@@ -498,7 +503,7 @@ private fun AttachmentBubble(
                     .combinedClickable(
                         onClick = { onOpenMedia(mediaId) },
                         onLongClick = onLongPress.takeIf { canShowActions },
-                        onLongClickLabel = "Reactions and reply"
+                        onLongClickLabel = "Message actions"
                     )
             )
             Text(
@@ -538,7 +543,7 @@ private fun AttachmentBubble(
                     .combinedClickable(
                         onClick = { WatchRepository.requestMedia(mediaId) },
                         onLongClick = onLongPress.takeIf { canShowActions },
-                        onLongClickLabel = "Reactions and reply"
+                        onLongClickLabel = "Message actions"
                     ),
                 contentAlignment = Alignment.Center
             ) {

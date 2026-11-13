@@ -9,6 +9,10 @@ The watch package identity is `com.openbubbles.messaging`. Keep it and its relea
 
 With a matching phone bridge build, hold an iMessage bubble for quick reactions or Reply. Your reactions are highlighted; select the same reaction again to remove it. Swipe an incoming bubble left or an outgoing bubble right to reply. Replies show their quoted original and reply count.
 
+With phone patches **v1.3.3-dev.1** or newer, the hold menu also offers **Unsend** for your own iMessages within two minutes. The phone validates the target and confirms the action before the watch replaces the bubble with “Message unsent.” Older recipient software may still retain a message. Unsend needs a connected phone and an enabled Wear bridge.
+
+Groups without a custom picture use a cluster of member contact or shared profile photos, with individual initials when a photo is unavailable. The home screen keeps the Messages heading’s text size with less surrounding space.
+
 In watch Settings, use **Swipe to reply** to choose between swiping toward the edge or the center. The choice applies immediately.
 
 The bottom **Send message** button starts an ordinary message. Reaction notifications follow the existing phone and watch notification settings.

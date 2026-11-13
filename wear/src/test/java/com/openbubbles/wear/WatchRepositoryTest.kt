@@ -77,6 +77,30 @@ class WatchRepositoryTest {
         WatchNotifications.createChannel(context)
     }
 
+    @Test fun unsendWaitsForConfirmationAndFailurePreservesMessage() {
+        val message = local.copy(id = "recent", timestamp = System.currentTimeMillis(), canUnsend = true)
+        state.value = state.value.copy(threads = mapOf("chat" to WireThread("chat", "Test", messages = listOf(message))))
+        assertFalse(WatchRepository.unsend("chat", "recent"))
+        assertEquals(message, state.value.threads.getValue("chat").messages.single())
+        @Suppress("UNCHECKED_CAST")
+        val requests = WatchRepository::class.java.getDeclaredField("pendingUnsends").apply { isAccessible = true }
+            .get(null) as MutableMap<String, com.openbubbles.wear.protocol.UnsendRequest>
+        requests.clear()
+        requests["unsend"] = com.openbubbles.wear.protocol.UnsendRequest(requestId = "unsend", threadId = "chat", messageId = "recent")
+        state.value = state.value.copy(unsendingMessages = setOf("recent"))
+        WatchRepository.onActionResult(ActionResult(requestId = "unsend", action = Protocol.ACTION_UNSEND,
+            ok = false, threadId = "chat", error = "Expired"))
+        assertEquals(message, state.value.threads.getValue("chat").messages.single())
+        assertTrue(state.value.unsendingMessages.isEmpty())
+        assertEquals("Expired", state.value.error)
+        requests["unsend2"] = com.openbubbles.wear.protocol.UnsendRequest(requestId = "unsend2", threadId = "chat", messageId = "recent")
+        val tombstone = message.copy(text = "Message unsent", unsent = true, canUnsend = false,
+            attachment = false, mediaId = null)
+        WatchRepository.onActionResult(ActionResult(requestId = "unsend2", action = Protocol.ACTION_UNSEND,
+            ok = true, threadId = "chat", message = tombstone))
+        assertEquals(tombstone, state.value.threads.getValue("chat").messages.single())
+    }
+
     @Test fun avatarMetadataSurvivesThreadRefreshWithoutAvatar() {
         val original = WireThread(id = "chat", title = "Group", isGroup = true, avatarId = "avatar-abc")
         state.value = state.value.copy(threads = mapOf(original.id to original),

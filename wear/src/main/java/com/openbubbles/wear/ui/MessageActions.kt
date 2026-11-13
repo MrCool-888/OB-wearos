@@ -18,9 +18,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -52,6 +54,7 @@ import com.openbubbles.wear.protocol.MessageReaction
 import com.openbubbles.wear.protocol.MessageReference
 import com.openbubbles.wear.protocol.Tapback
 import com.openbubbles.wear.protocol.WireMessage
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun MessageQuote(quote: MessageReference, color: Color = MaterialTheme.colorScheme.onSurface) {
@@ -109,11 +112,20 @@ internal fun MessageActionsDialog(
     message: WireMessage,
     canReact: Boolean,
     canReply: Boolean,
+    canUnsend: Boolean,
     onDismiss: () -> Unit,
     onReact: (String, Int) -> Unit,
-    onReply: () -> Unit
+    onReply: () -> Unit,
+    onUnsend: () -> Unit
 ) {
     var partIndex by remember(message.id) { mutableIntStateOf(0) }
+    var withinUnsendWindow by remember(message) { mutableStateOf(message.canUnsendAt()) }
+    LaunchedEffect(message) {
+        if (withinUnsendWindow) {
+            delay((message.timestamp + 120_000L - System.currentTimeMillis()).coerceAtLeast(0L))
+            withinUnsendWindow = false
+        }
+    }
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         ScalingLazyColumn(
@@ -168,6 +180,13 @@ internal fun MessageActionsDialog(
             }
             if (message.canReply) item {
                 Button(onClick = onReply, enabled = canReply, modifier = Modifier.fillMaxWidth()) { Text("Reply") }
+            }
+            if (withinUnsendWindow) item {
+                Button(onClick = onUnsend, enabled = canUnsend, modifier = Modifier.fillMaxWidth()) { Text("Unsend") }
+            }
+            if (withinUnsendWindow && !canUnsend) item {
+                Text("Connect your phone to unsend.", style = MaterialTheme.typography.bodyExtraSmall,
+                    textAlign = TextAlign.Center)
             }
             item {
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }

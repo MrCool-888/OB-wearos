@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.Card
 import androidx.wear.compose.material3.CardDefaults
-import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
@@ -28,6 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -47,7 +49,7 @@ fun ConversationListScreen(
     onOpenPhone: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
     val conversations = remember(state.conversations) { state.conversationsForDisplay }
     val unreadCount = conversations.count { it.unread }
     var groupsOnly by remember { mutableStateOf(false) }
@@ -62,6 +64,7 @@ fun ConversationListScreen(
             ScalingLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
+                autoCentering = null,
                 contentPadding = PaddingValues(
                     start = 8.dp,
                     end = 8.dp,
@@ -71,12 +74,14 @@ fun ConversationListScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 item {
-                    ListHeader {
-                        Text(
-                            text = "Messages",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
+                    Text(
+                        text = "Messages",
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).semantics { heading() },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
 
                 val notice = state.error

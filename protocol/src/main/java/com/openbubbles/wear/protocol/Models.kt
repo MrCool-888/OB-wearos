@@ -26,8 +26,14 @@ data class WireMessage(
     val canReact: Boolean = false,
     val canReply: Boolean = false,
     val replyTo: MessageReference? = null,
-    val replyCount: Int = 0
+    val replyCount: Int = 0,
+    val canUnsend: Boolean = false,
+    val unsent: Boolean = false,
+    val hasRetractedParts: Boolean = false
 ) {
+    fun canUnsendAt(now: Long = System.currentTimeMillis()): Boolean =
+        canUnsend && fromMe && !unsent && timestamp > 0L && now >= timestamp && now - timestamp < 120_000L
+
     val displayText: String
         get() = when {
             text.isNotBlank() -> text
@@ -42,6 +48,7 @@ data class WireMessage(
      * already known rather than degrading an attachment to a placeholder.
      */
     fun mergeMediaFrom(previous: WireMessage): WireMessage {
+        if (unsent || hasRetractedParts) return this
         if (mediaId == null && previous.mediaId != null) {
             return copy(
                 attachment = true,
@@ -99,6 +106,14 @@ data class ReactionRequest(
     val reaction: String,
     val remove: Boolean = false,
     val partIndex: Int = 0
+)
+
+@Serializable
+data class UnsendRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String,
+    val messageId: String
 )
 
 @Serializable

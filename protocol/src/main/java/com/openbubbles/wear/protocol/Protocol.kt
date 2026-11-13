@@ -57,6 +57,7 @@ object Protocol {
     const val PATH_OPEN_PHONE = "$BASE_PATH/open_phone"
     const val PATH_SEND = "$BASE_PATH/send"
     const val PATH_REACTION = "$BASE_PATH/reaction"
+    const val PATH_UNSEND = "$BASE_PATH/unsend"
     const val PATH_REACTION_ALERT = "$BASE_PATH/reaction_alert"
     const val PATH_MEDIA_REQUEST = "$BASE_PATH/media_request"
     const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
@@ -82,6 +83,7 @@ object Protocol {
     const val ACTION_OPEN_PHONE = "open_phone"
     const val ACTION_SEND = "send"
     const val ACTION_REACTION = "reaction"
+    const val ACTION_UNSEND = "unsend"
     const val ACTION_MEDIA = "media"
 
     val DEFAULT_QUICK_REPLIES: List<String> = listOf(

@@ -22,6 +22,7 @@ import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.ReactionRequest
+import com.openbubbles.wear.protocol.UnsendRequest
 import com.openbubbles.wear.protocol.Tapback
 import com.openbubbles.wear.protocol.SendRequest
 import com.openbubbles.wear.protocol.SyncPayload
@@ -103,6 +104,7 @@ data class WatchState(
     val requestingThreads: Set<String> = emptySet(),
     val sendingThreads: Set<String> = emptySet(),
     val reactingMessages: Set<String> = emptySet(),
+    val unsendingMessages: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
     val alertsEnabled: Boolean = true,
@@ -224,6 +226,7 @@ object WatchRepository {
     private val pendingSends = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingThreadRequests = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingReactions = java.util.concurrent.ConcurrentHashMap<String, ReactionRequest>()
+    private val pendingUnsends = java.util.concurrent.ConcurrentHashMap<String, UnsendRequest>()
     @Volatile
     private var appContext: Context? = null
 
@@ -557,6 +560,25 @@ object WatchRepository {
                 if (result.ok) requestThread(request.threadId)
             }
 
+            Protocol.ACTION_UNSEND -> {
+                val request = pendingUnsends.remove(result.requestId) ?: return
+                if (result.ok) {
+                    val thread = _state.value.threads[request.threadId]
+                    val updated = result.message?.takeIf {
+                        it.id == request.messageId && it.threadId == request.threadId && it.unsent
+                    }
+                    if (thread != null && updated != null) replaceThread(thread.copy(
+                        messages = thread.messages.map { if (it.id == updated.id) updated else it }
+                    ))
+                }
+                if (_state.value.phoneOnline && _state.value.directBridge && _state.value.relayEnabled)
+                    requestThread(request.threadId)
+                _state.update { it.copy(
+                    unsendingMessages = it.unsendingMessages - request.messageId,
+                    error = if (result.ok) null else result.error ?: "Could not unsend the message."
+                ) }
+            }
+
             Protocol.ACTION_MARK_READ -> {
                 if (result.ok) {
                     markReadLocally(preview)
@@ -616,6 +638,7 @@ object WatchRepository {
 
     fun onBridgeError(error: BridgeError) {
         error.requestId?.let { failReaction(it, error.error) }
+        error.requestId?.let { failUnsend(it, error.error) }
         _state.update { it.copy(error = error.error) }
     }
 
@@ -1432,6 +1455,36 @@ object WatchRepository {
     internal fun failReaction(requestId: String, error: String) {
         val request = pendingReactions.remove(requestId) ?: return
         _state.update { it.copy(reactingMessages = it.reactingMessages - request.messageId, error = error) }
+    }
+
+    @Synchronized
+    fun unsend(threadId: String, messageId: String): Boolean {
+        if (!initialized) return false
+        val context = appContext ?: return false
+        val state = _state.value
+        val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+        if (message?.canUnsendAt() != true || messageId in state.unsendingMessages) return false
+        if (!state.phoneOnline || !state.directBridge || !state.relayEnabled) {
+            _state.update { it.copy(error = "Connect your phone and enable the Wear bridge to unsend.") }
+            return false
+        }
+        val request = UnsendRequest(requestId = UUID.randomUUID().toString(), threadId = threadId, messageId = messageId)
+        pendingUnsends[request.requestId] = request
+        _state.update { it.copy(unsendingMessages = it.unsendingMessages + messageId, error = null) }
+        PhoneLink.send(context, Protocol.PATH_UNSEND, Wire.encodeBytes(request)) { sent ->
+            if (!sent) failUnsend(request.requestId, "Phone unreachable. The message was not unsent.")
+        }
+        scope.launch {
+            delay(35_000L)
+            failUnsend(request.requestId, "Unsend not confirmed. Refresh the conversation before trying again.")
+        }
+        return true
+    }
+
+    @Synchronized
+    internal fun failUnsend(requestId: String, error: String) {
+        val request = pendingUnsends.remove(requestId) ?: return
+        _state.update { it.copy(unsendingMessages = it.unsendingMessages - request.messageId, error = error) }
     }
 
     fun markRead(threadId: String) {
