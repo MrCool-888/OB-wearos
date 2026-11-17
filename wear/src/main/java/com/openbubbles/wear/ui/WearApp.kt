@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.wear.compose.material3.ColorScheme
 import androidx.wear.compose.material3.MaterialTheme
+import com.openbubbles.wear.BuildConfig
 import com.openbubbles.wear.WatchNavigation
 import com.openbubbles.wear.WatchNotifications
 import com.openbubbles.wear.WatchRepository
@@ -33,7 +34,7 @@ import com.openbubbles.wear.refreshVisibleConversations
 import com.openbubbles.wear.refreshVisibleDirectChat
 import kotlinx.coroutines.delay
 
-const val WATCH_APP_VERSION = "3.1.0"
+const val WATCH_APP_VERSION = BuildConfig.VERSION_NAME
 
 sealed interface WearScreen {
     data object Conversations : WearScreen
