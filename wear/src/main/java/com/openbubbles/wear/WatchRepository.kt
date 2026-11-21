@@ -35,6 +35,7 @@ import com.openbubbles.wear.protocol.Wire
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
 import java.io.File
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -214,6 +215,7 @@ object WatchRepository {
     private const val QUEUE_DISPATCH_TIMEOUT_MS = 20_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mediaWriteLock = Any()
     private val _state = MutableStateFlow(WatchState())
     val state: StateFlow<WatchState> = _state.asStateFlow()
 
@@ -1324,33 +1326,40 @@ object WatchRepository {
         val height = dataMap.getInt(Protocol.DATA_KEY_HEIGHT)
         val declaredSize = dataMap.getLong(Protocol.DATA_KEY_SIZE)
         scope.launch {
-            val file = writeMediaAsset(context, mediaId, asset)
-            if (file == null) {
+            val response = runCatching {
+                Tasks.await(Wearable.getDataClient(context).getFdForAsset(asset), 25, TimeUnit.SECONDS)
+            }.onFailure { Log.w(TAG, "Unable to read media asset $mediaId", it) }.getOrNull()
+            val saved = response?.inputStream?.use { stream ->
+                synchronized(mediaWriteLock) {
+                    val file = writeMediaAsset(context, mediaId, stream) ?: return@synchronized false
+                    val media = WatchMedia(
+                        id = mediaId,
+                        path = file.absolutePath,
+                        mimeType = mimeType,
+                        width = width,
+                        height = height,
+                        size = if (declaredSize > 0L) declaredSize else file.length(),
+                        createdAt = System.currentTimeMillis()
+                    )
+                    val mediaMap = trimMedia(context, _state.value.media + (mediaId to media))
+                    persistMedia(context, mediaMap)
+                    _state.update {
+                        it.copy(
+                            media = mediaMap,
+                            requestingMedia = it.requestingMedia - mediaId,
+                            error = if (isAvatarMedia(mediaId)) it.error else null
+                        )
+                    }
+                    true
+                }
+            }
+            if (saved != true) {
                 _state.update {
                     it.copy(
                         requestingMedia = it.requestingMedia - mediaId,
                         error = if (isAvatarMedia(mediaId)) it.error else "The photo could not be saved on the watch."
                     )
                 }
-                return@launch
-            }
-            val media = WatchMedia(
-                id = mediaId,
-                path = file.absolutePath,
-                mimeType = mimeType,
-                width = width,
-                height = height,
-                size = if (declaredSize > 0L) declaredSize else file.length(),
-                createdAt = System.currentTimeMillis()
-            )
-            val mediaMap = trimMedia(context, _state.value.media + (mediaId to media))
-            persistMedia(context, mediaMap)
-            _state.update {
-                it.copy(
-                    media = mediaMap,
-                    requestingMedia = it.requestingMedia - mediaId,
-                    error = if (isAvatarMedia(mediaId)) it.error else null
-                )
             }
         }
     }
@@ -1365,13 +1374,13 @@ object WatchRepository {
         width: Int,
         height: Int,
         bytes: ByteArray
-    ): WatchMedia? {
-        if (!initialized) return null
-        val context = appContext ?: return null
+    ): WatchMedia? = synchronized(mediaWriteLock) {
+        if (!initialized) return@synchronized null
+        val context = appContext ?: return@synchronized null
         val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
         val file = File(directory, id)
         val written = runCatching { file.writeBytes(bytes) }.isSuccess
-        if (!written) return null
+        if (!written) return@synchronized null
         val media = WatchMedia(
             id = id,
             path = file.absolutePath,
@@ -1389,37 +1398,28 @@ object WatchRepository {
                 requestingMedia = it.requestingMedia - id
             )
         }
-        return media
+        media
     }
 
-    private fun writeMediaAsset(context: Context, mediaId: String, asset: Asset): File? =
-        runCatching {
-            val response = Tasks.await(
-                Wearable.getDataClient(context).getFdForAsset(asset),
-                25,
-                TimeUnit.SECONDS
-            )
-            val input = response.inputStream
-                ?: throw IllegalStateException("No asset stream")
-            input.use { stream ->
-                val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
-                val target = File(directory, mediaId)
-                val temp = File(directory, "$mediaId.tmp")
+    private fun writeMediaAsset(context: Context, mediaId: String, stream: InputStream): File? {
+        val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
+        val target = File(directory, mediaId)
+        val temp = File(directory, "$mediaId.tmp")
+        return runCatching {
+            try {
                 temp.outputStream().use { output -> stream.copyTo(output) }
-                if (temp.length() <= 0L) {
-                    temp.delete()
-                    throw IllegalStateException("Empty asset")
-                }
-                if (target.exists()) target.delete()
+                check(temp.length() > 0L) { "Empty asset" }
                 if (!temp.renameTo(target)) {
                     temp.copyTo(target, overwrite = true)
-                    temp.delete()
                 }
                 target
+            } finally {
+                temp.delete()
             }
         }.onFailure {
             Log.w(TAG, "Unable to import media $mediaId", it)
         }.getOrNull()
+    }
 
     @Synchronized
     fun react(threadId: String, messageId: String, reaction: String, partIndex: Int = 0): Boolean {

@@ -204,12 +204,12 @@ fun ChatScreen(
                         items = messages,
                         key = { "message:${it.id}" }
                     ) { message ->
+                        val primaryMediaId = message.attachmentIds.firstOrNull()
                         MessageBubble(
                             message = message,
                             reverseReplySwipe = reverseReplySwipe,
-                            media = message.mediaId?.let { state.media[it] },
-                            requestingMedia = message.mediaId != null &&
-                                message.mediaId in state.requestingMedia,
+                            media = primaryMediaId?.let { state.media[it] },
+                            requestingMedia = primaryMediaId != null && primaryMediaId in state.requestingMedia,
                             showSender = isGroup && !message.fromMe,
                             onOpenMedia = onOpenMedia,
                             onShowActions = {
@@ -487,27 +487,37 @@ private fun AttachmentBubble(
     onLongPress: () -> Unit,
     canShowActions: Boolean
 ) {
-    val mediaId = message.mediaId
+    val mediaIds = message.attachmentIds
+    val mediaId = mediaIds.firstOrNull()
+    val isCollection = mediaIds.size > 1
     val isGif = media?.isGif == true || message.mediaMime == "image/gif"
     val thumbnailShape = RoundedCornerShape(10.dp)
     when {
         media != null && mediaId != null -> {
             AsyncImage(
                 model = File(media.path),
-                contentDescription = if (isGif) "Animated GIF" else "Photo",
+                contentDescription = when {
+                    isCollection -> "${mediaIds.size} photos"
+                    isGif -> "Animated GIF"
+                    else -> "Photo"
+                },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(112.dp)
                     .clip(thumbnailShape)
                     .combinedClickable(
-                        onClick = { onOpenMedia(mediaId) },
+                        onClick = { onOpenMedia(message.id) },
                         onLongClick = onLongPress.takeIf { canShowActions },
                         onLongClickLabel = "Message actions"
                     )
             )
             Text(
-                text = if (isGif) "Tap to play GIF" else "Tap to view photo",
+                text = when {
+                    isCollection -> "${mediaIds.size} photos · Tap to view"
+                    isGif -> "Tap to play GIF"
+                    else -> "Tap to view photo"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = content.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -515,7 +525,7 @@ private fun AttachmentBubble(
             )
         }
 
-        mediaId != null && requesting -> {
+        mediaId != null && requesting && !isCollection -> {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -541,7 +551,9 @@ private fun AttachmentBubble(
                     .clip(thumbnailShape)
                     .background(content.copy(alpha = 0.12f))
                     .combinedClickable(
-                        onClick = { WatchRepository.requestMedia(mediaId) },
+                        onClick = {
+                            if (isCollection) onOpenMedia(message.id) else WatchRepository.requestMedia(mediaId)
+                        },
                         onLongClick = onLongPress.takeIf { canShowActions },
                         onLongClickLabel = "Message actions"
                     ),
@@ -549,13 +561,17 @@ private fun AttachmentBubble(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = if (isGif) "Load GIF" else "Load photo",
+                        text = when {
+                            isCollection -> "${mediaIds.size} photos"
+                            isGif -> "Load GIF"
+                            else -> "Load photo"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = content
                     )
                     Text(
-                        text = "From your phone",
+                        text = if (isCollection) "Open collection" else "From your phone",
                         style = MaterialTheme.typography.labelSmall,
                         color = content.copy(alpha = 0.7f)
                     )

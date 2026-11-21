@@ -26,8 +26,13 @@ object Wire {
      * the phone keeps the full store.
      */
     fun threadForTransport(thread: WireThread, maxBytes: Int = 90_000): WireThread {
-        if (encode(thread).toByteArray(Charsets.UTF_8).size <= maxBytes) return thread
-        var candidate = thread
+        var candidate = thread.copy(messages = thread.messages.map { message ->
+            message.copy(
+                sourceUri = null,
+                attachments = message.attachments.map { it.copy(sourceUri = null) }
+            )
+        })
+        if (encodeBytes(candidate).size <= maxBytes) return candidate
         while (candidate.messages.size > 1) {
             val drop = maxOf(1, candidate.messages.size / 8)
             candidate = candidate.copy(messages = candidate.messages.drop(drop))

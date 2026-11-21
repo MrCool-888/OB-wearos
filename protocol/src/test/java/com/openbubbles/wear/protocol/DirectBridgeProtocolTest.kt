@@ -76,6 +76,28 @@ class DirectBridgeProtocolTest {
         assertEquals("", Wire.decode<WireThread>("""{"id":"chat","title":"Alex"}""")!!.lastPreview)
     }
 
+    @Test fun photoCollectionsKeepOrderAcrossRefreshAndStripProviderUrisForTheWatch() {
+        val legacy = Wire.decode<WireMessage>(
+            """{"id":"m","threadId":"chat","text":"","timestamp":1,"attachment":true,"mediaId":"first"}"""
+        )!!
+        assertEquals(listOf("first"), legacy.attachmentIds)
+        val photos = listOf(
+            MessageAttachment("first", "image/jpeg", "content://provider/first"),
+            MessageAttachment("second", "image/jpeg", "content://provider/second")
+        )
+        val collection = legacy.copy(attachments = photos, sourceUri = photos.first().sourceUri)
+        val thread = WireThread("chat", "Group", messages = listOf(collection))
+        val transported = Wire.decode<WireThread>(Wire.encode(Wire.threadForTransport(thread)))!!.messages.single()
+        assertEquals(listOf("first", "second"), transported.attachmentIds)
+        assertEquals("2 photos", transported.displayText)
+        assertEquals("first", transported.mediaId)
+        assertNull(transported.sourceUri)
+        assertTrue(transported.attachments.all { it.sourceUri == null })
+        assertEquals(photos, legacy.mergeMediaFrom(collection).attachments)
+        assertEquals(photos, legacy.copy(mediaId = null).mergeMediaFrom(collection).attachments)
+        assertTrue(legacy.copy(hasRetractedParts = true).mergeMediaFrom(collection).attachmentIds.isEmpty())
+    }
+
     @Test
     fun sendRequestCarriesAddressForANewChat() {
         val request = SendRequest(

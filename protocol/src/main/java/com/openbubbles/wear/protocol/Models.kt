@@ -29,14 +29,23 @@ data class WireMessage(
     val replyCount: Int = 0,
     val canUnsend: Boolean = false,
     val unsent: Boolean = false,
-    val hasRetractedParts: Boolean = false
+    val hasRetractedParts: Boolean = false,
+    val attachments: List<MessageAttachment> = emptyList()
 ) {
     fun canUnsendAt(now: Long = System.currentTimeMillis()): Boolean =
         canUnsend && fromMe && !unsent && timestamp > 0L && now >= timestamp && now - timestamp < 120_000L
 
+    val attachmentIds: List<String>
+        get() = when {
+            unsent || hasRetractedParts -> emptyList()
+            attachments.isNotEmpty() -> attachments.map { it.id }
+            else -> listOfNotNull(mediaId)
+        }
+
     val displayText: String
         get() = when {
             text.isNotBlank() -> text
+            attachments.size > 1 -> "${attachments.size} photos"
             mediaMime == "image/gif" -> "GIF"
             attachment -> "Photo"
             else -> "Message"
@@ -57,15 +66,29 @@ data class WireMessage(
                 mediaWidth = previous.mediaWidth,
                 mediaHeight = previous.mediaHeight,
                 mediaSize = previous.mediaSize,
-                sourceUri = sourceUri ?: previous.sourceUri
+                sourceUri = sourceUri ?: previous.sourceUri,
+                attachments = attachments.ifEmpty { previous.attachments }
             )
         }
         if (!attachment && previous.attachment) return copy(attachment = true)
-        if (sourceUri == null && mediaId == previous.mediaId && previous.sourceUri != null)
-            return copy(sourceUri = previous.sourceUri)
+        if (mediaId == previous.mediaId &&
+            (sourceUri == null && previous.sourceUri != null || attachments.isEmpty() && previous.attachments.isNotEmpty())
+        ) {
+            return copy(
+                sourceUri = sourceUri ?: previous.sourceUri,
+                attachments = attachments.ifEmpty { previous.attachments }
+            )
+        }
         return this
     }
 }
+
+@Serializable
+data class MessageAttachment(
+    val id: String,
+    val mimeType: String,
+    val sourceUri: String? = null
+)
 
 @Serializable
 data class MessageReaction(

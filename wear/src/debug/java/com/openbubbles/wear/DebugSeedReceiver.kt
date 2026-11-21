@@ -11,6 +11,7 @@ import android.graphics.Path
 import android.graphics.Shader
 import android.util.Base64
 import android.widget.Toast
+import com.openbubbles.wear.protocol.MessageAttachment
 import com.openbubbles.wear.protocol.SyncPayload
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
@@ -149,7 +150,15 @@ class DebugSeedReceiver : BroadcastReceiver() {
                     text = "Sending one back later",
                     timestamp = now - 2 * 60_000L,
                     fromMe = true
-                )
+                ),
+                message(
+                    id = "media-4",
+                    threadId = "demo-media",
+                    text = "",
+                    timestamp = now,
+                    sender = "Riley Park",
+                    media = photo
+                ).copy(attachments = listOfNotNull(photo, gif).map { MessageAttachment(it.id, it.mimeType) })
             )
         )
         publish(listOf(thread), now)

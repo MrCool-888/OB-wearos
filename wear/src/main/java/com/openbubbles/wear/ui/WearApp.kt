@@ -40,7 +40,7 @@ sealed interface WearScreen {
     data object Conversations : WearScreen
     data class Chat(val threadId: String) : WearScreen
     data class Composer(val threadId: String, val replyToMessageId: String? = null) : WearScreen
-    data class Media(val threadId: String, val mediaId: String) : WearScreen
+    data class Media(val threadId: String, val messageId: String) : WearScreen
     data object FindChat : WearScreen
     data object Contacts : WearScreen
     data object Settings : WearScreen
@@ -210,8 +210,8 @@ fun WearApp() {
                 onReply = { push(WearScreen.Composer(screen.threadId)) },
                 onReplyToMessage = { messageId -> push(WearScreen.Composer(screen.threadId, messageId)) },
                 onOpenPhone = { WatchRepository.openOnPhone(screen.threadId) },
-                onOpenMedia = { mediaId ->
-                    push(WearScreen.Media(screen.threadId, mediaId))
+                onOpenMedia = { messageId ->
+                    push(WearScreen.Media(screen.threadId, messageId))
                 },
                 onSendQueued = { WatchRepository.flushQueue(manual = true) },
                 onDismissNotice = { WatchRepository.clearNotices() }
@@ -219,7 +219,8 @@ fun WearApp() {
 
             is WearScreen.Media -> MediaViewerScreen(
                 state = state,
-                mediaId = screen.mediaId,
+                threadId = screen.threadId,
+                messageId = screen.messageId,
                 onBack = { pop() }
             )
 
