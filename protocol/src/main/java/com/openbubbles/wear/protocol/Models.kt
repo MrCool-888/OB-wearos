@@ -30,10 +30,16 @@ data class WireMessage(
     val canUnsend: Boolean = false,
     val unsent: Boolean = false,
     val hasRetractedParts: Boolean = false,
-    val attachments: List<MessageAttachment> = emptyList()
+    val attachments: List<MessageAttachment> = emptyList(),
+    val canEdit: Boolean = false,
+    val editedAt: Long = 0L
 ) {
     fun canUnsendAt(now: Long = System.currentTimeMillis()): Boolean =
         canUnsend && fromMe && !unsent && timestamp > 0L && now >= timestamp && now - timestamp < 120_000L
+
+    fun canEditAt(now: Long = System.currentTimeMillis()): Boolean =
+        canEdit && fromMe && !unsent && !hasRetractedParts && !attachment &&
+            timestamp > 0L && now >= timestamp && now - timestamp < Protocol.EDIT_WINDOW_MS
 
     val attachmentIds: List<String>
         get() = when {
@@ -137,6 +143,16 @@ data class UnsendRequest(
     val requestId: String,
     val threadId: String,
     val messageId: String
+)
+
+@Serializable
+data class EditMessageRequest(
+    val version: Int = Protocol.VERSION,
+    val requestId: String,
+    val threadId: String,
+    val messageId: String,
+    val originalText: String,
+    val text: String
 )
 
 @Serializable

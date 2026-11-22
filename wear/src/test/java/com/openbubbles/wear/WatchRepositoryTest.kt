@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import com.openbubbles.wear.protocol.ActionResult
+import com.openbubbles.wear.protocol.EditMessageRequest
 import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.MediaPayload
 import com.openbubbles.wear.protocol.SyncPayload
@@ -99,6 +100,36 @@ class WatchRepositoryTest {
         WatchRepository.onActionResult(ActionResult(requestId = "unsend2", action = Protocol.ACTION_UNSEND,
             ok = true, threadId = "chat", message = tombstone))
         assertEquals(tombstone, state.value.threads.getValue("chat").messages.single())
+    }
+
+    @Test fun editWaitsForConfirmationAndFailureKeepsOriginalText() {
+        val original = local.copy(id = "recent", timestamp = 1_000L, canEdit = true, status = "sent")
+        val thread = WireThread("chat", "Test", messages = listOf(original))
+        state.value = state.value.copy(threads = mapOf("chat" to thread))
+        @Suppress("UNCHECKED_CAST")
+        val requests = WatchRepository::class.java.getDeclaredField("pendingEdits").apply { isAccessible = true }
+            .get(null) as MutableMap<String, EditMessageRequest>
+        val edit = EditMessageRequest(requestId = "edit", threadId = "chat", messageId = original.id,
+            originalText = original.text, text = "Edited text")
+        val updated = original.copy(text = edit.text, editedAt = 2_000L)
+        requests[edit.requestId] = edit
+        state.value = state.value.copy(editingMessages = setOf(original.id))
+        WatchRepository.onThread(thread.copy(messages = listOf(updated)))
+        assertEquals(original, state.value.threads.getValue("chat").messages.single())
+
+        WatchRepository.onActionResult(ActionResult(requestId = edit.requestId, action = Protocol.ACTION_EDIT,
+            ok = false, threadId = "chat", error = "Rejected"))
+        assertEquals(original, state.value.threads.getValue("chat").messages.single())
+        assertTrue(state.value.editingMessages.isEmpty())
+        assertEquals("Rejected", state.value.error)
+
+        val retry = edit.copy(requestId = "edit2")
+        requests[retry.requestId] = retry
+        state.value = state.value.copy(editingMessages = setOf(original.id))
+        WatchRepository.onActionResult(ActionResult(requestId = retry.requestId, action = Protocol.ACTION_EDIT,
+            ok = true, threadId = "chat", message = updated))
+        assertEquals(updated, state.value.threads.getValue("chat").messages.single())
+        assertTrue(state.value.editingMessages.isEmpty())
     }
 
     @Test fun avatarMetadataSurvivesThreadRefreshWithoutAvatar() {

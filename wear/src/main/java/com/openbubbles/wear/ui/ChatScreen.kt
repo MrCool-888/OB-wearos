@@ -77,6 +77,7 @@ fun ChatScreen(
     val requesting = threadId in state.requestingThreads
     val canReply = state.canReplyTo(threadId)
     var selectedMessageId by remember(threadId) { mutableStateOf<String?>(null) }
+    var editingMessage by remember(threadId) { mutableStateOf<WireMessage?>(null) }
     val haptics = LocalHapticFeedback.current
 
     val title = thread?.title ?: summary?.title ?: "Conversation"
@@ -220,7 +221,8 @@ fun ChatScreen(
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onReplyToMessage(message.id)
                             },
-                            reacting = message.id in state.reactingMessages
+                            reacting = message.id in state.reactingMessages,
+                            editing = message.id in state.editingMessages
                         )
                     }
                 }
@@ -248,13 +250,15 @@ fun ChatScreen(
         }
     }
     messages.firstOrNull { it.id == selectedMessageId }?.let { message ->
+        val canChange = state.phoneOnline && state.directBridge && state.relayEnabled &&
+            message.id !in state.unsendingMessages && message.id !in state.editingMessages
         MessageActionsDialog(
             message = message,
             canReact = state.phoneOnline && state.directBridge && state.relayEnabled &&
                 message.id !in state.reactingMessages,
             canReply = canReply && state.relayEnabled,
-            canUnsend = state.phoneOnline && state.directBridge && state.relayEnabled &&
-                message.id !in state.unsendingMessages,
+            canUnsend = canChange,
+            canEdit = canChange,
             onDismiss = { selectedMessageId = null },
             onReact = { reaction, partIndex ->
                 if (WatchRepository.react(threadId, message.id, reaction, partIndex)) selectedMessageId = null
@@ -263,8 +267,24 @@ fun ChatScreen(
                 selectedMessageId = null
                 onReplyToMessage(message.id)
             },
+            onEdit = {
+                WatchRepository.clearNotices()
+                editingMessage = message
+                selectedMessageId = null
+            },
             onUnsend = {
                 if (WatchRepository.unsend(threadId, message.id)) selectedMessageId = null
+            }
+        )
+    }
+    editingMessage?.let { message ->
+        EditMessageDialog(
+            message = message,
+            online = state.phoneOnline && state.directBridge && state.relayEnabled,
+            error = state.error,
+            onDismiss = { editingMessage = null },
+            onSave = { text ->
+                if (WatchRepository.editMessage(threadId, message.id, message.text, text)) editingMessage = null
             }
         )
     }
@@ -335,7 +355,8 @@ private fun MessageBubble(
     onOpenMedia: (String) -> Unit,
     onShowActions: () -> Unit,
     onReply: () -> Unit,
-    reacting: Boolean
+    reacting: Boolean,
+    editing: Boolean
 ) {
     val scheme = MaterialTheme.colorScheme
     val fromMe = message.fromMe
@@ -363,7 +384,7 @@ private fun MessageBubble(
                 .clip(shape)
                 .background(container)
                 .combinedClickable(
-                    enabled = message.canReact || message.canReply || message.canUnsendAt(),
+                    enabled = message.canReact || message.canReply || message.canUnsendAt() || message.canEditAt(),
                     onClick = {},
                     onLongClick = onShowActions,
                     onLongClickLabel = "Message actions"
@@ -415,6 +436,10 @@ private fun MessageBubble(
                 color = secondaryContent
             )
             if (reacting) Text("Reacting…", style = MaterialTheme.typography.labelSmall, color = secondaryContent)
+            if (editing || message.editedAt > 0L && !message.unsent) {
+                Text(if (editing) "Saving edit…" else "Edited",
+                    style = MaterialTheme.typography.labelSmall, color = secondaryContent)
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

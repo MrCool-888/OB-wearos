@@ -17,6 +17,8 @@ object Protocol {
     fun isNotificationMessageId(id: String): Boolean = notificationMessageId.matches(id)
 
     const val VERSION = 4
+    const val EDIT_WINDOW_MS = 15 * 60_000L
+    const val MAX_EDIT_LENGTH = 800
 
     const val CAPABILITY_PHONE = "openbubbles_wear_bridge"
     const val CAPABILITY_WATCH = "openbubbles_wear"
@@ -58,6 +60,7 @@ object Protocol {
     const val PATH_SEND = "$BASE_PATH/send"
     const val PATH_REACTION = "$BASE_PATH/reaction"
     const val PATH_UNSEND = "$BASE_PATH/unsend"
+    const val PATH_EDIT = "$BASE_PATH/edit"
     const val PATH_REACTION_ALERT = "$BASE_PATH/reaction_alert"
     const val PATH_MEDIA_REQUEST = "$BASE_PATH/media_request"
     const val PATH_MEDIA_RESULT = "$BASE_PATH/media_result"
@@ -84,6 +87,7 @@ object Protocol {
     const val ACTION_SEND = "send"
     const val ACTION_REACTION = "reaction"
     const val ACTION_UNSEND = "unsend"
+    const val ACTION_EDIT = "edit"
     const val ACTION_MEDIA = "media"
 
     val DEFAULT_QUICK_REPLIES: List<String> = listOf(

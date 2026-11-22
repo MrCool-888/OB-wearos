@@ -12,6 +12,7 @@ import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.BridgeError
 import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.ContactsRequest
+import com.openbubbles.wear.protocol.EditMessageRequest
 import com.openbubbles.wear.protocol.WatchContact
 import com.openbubbles.wear.protocol.MarkReadRequest
 import com.openbubbles.wear.protocol.MediaPayload
@@ -106,6 +107,7 @@ data class WatchState(
     val sendingThreads: Set<String> = emptySet(),
     val reactingMessages: Set<String> = emptySet(),
     val unsendingMessages: Set<String> = emptySet(),
+    val editingMessages: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
     val alertsEnabled: Boolean = true,
@@ -229,6 +231,7 @@ object WatchRepository {
     private val pendingThreadRequests = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingReactions = java.util.concurrent.ConcurrentHashMap<String, ReactionRequest>()
     private val pendingUnsends = java.util.concurrent.ConcurrentHashMap<String, UnsendRequest>()
+    private val pendingEdits = mutableMapOf<String, EditMessageRequest>()
     @Volatile
     private var appContext: Context? = null
 
@@ -581,6 +584,26 @@ object WatchRepository {
                 ) }
             }
 
+            Protocol.ACTION_EDIT -> {
+                val request = pendingEdits.remove(result.requestId) ?: return
+                val updated = result.message?.takeIf {
+                    result.ok && it.id == request.messageId && it.threadId == request.threadId && it.editedAt > 0L
+                }
+                val thread = _state.value.threads[request.threadId]
+                if (thread != null && updated != null) replaceThread(thread.copy(
+                    messages = thread.messages.map {
+                        if (it.id == updated.id && !it.unsent && !it.hasRetractedParts) updated.mergeMediaFrom(it) else it
+                    }
+                ))
+                if (updated == null && _state.value.phoneOnline && _state.value.directBridge && _state.value.relayEnabled) {
+                    requestThread(request.threadId)
+                }
+                _state.update { it.copy(
+                    editingMessages = it.editingMessages - request.messageId,
+                    error = if (result.ok) null else result.error ?: "Could not edit the message."
+                ) }
+            }
+
             Protocol.ACTION_MARK_READ -> {
                 if (result.ok) {
                     markReadLocally(preview)
@@ -641,6 +664,7 @@ object WatchRepository {
     fun onBridgeError(error: BridgeError) {
         error.requestId?.let { failReaction(it, error.error) }
         error.requestId?.let { failUnsend(it, error.error) }
+        error.requestId?.let { failEdit(it, error.error) }
         _state.update { it.copy(error = error.error) }
     }
 
@@ -1463,7 +1487,8 @@ object WatchRepository {
         val context = appContext ?: return false
         val state = _state.value
         val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
-        if (message?.canUnsendAt() != true || messageId in state.unsendingMessages) return false
+        if (message?.canUnsendAt() != true || messageId in state.unsendingMessages ||
+            messageId in state.editingMessages) return false
         if (!state.phoneOnline || !state.directBridge || !state.relayEnabled) {
             _state.update { it.copy(error = "Connect your phone and enable the Wear bridge to unsend.") }
             return false
@@ -1485,6 +1510,44 @@ object WatchRepository {
     internal fun failUnsend(requestId: String, error: String) {
         val request = pendingUnsends.remove(requestId) ?: return
         _state.update { it.copy(unsendingMessages = it.unsendingMessages - request.messageId, error = error) }
+    }
+
+    @Synchronized
+    fun editMessage(threadId: String, messageId: String, originalText: String, text: String): Boolean {
+        if (!initialized) return false
+        val context = appContext ?: return false
+        val state = _state.value
+        val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+        val error = when {
+            message?.canEditAt() != true -> "This message can no longer be edited."
+            message.text != originalText -> "This message changed. Reopen it to edit the latest text."
+            text.isBlank() || text.length > Protocol.MAX_EDIT_LENGTH -> "Enter a message of 1–800 characters."
+            !state.phoneOnline || !state.directBridge || !state.relayEnabled -> "Connect your phone to edit."
+            else -> null
+        }
+        if (error != null) {
+            _state.update { it.copy(error = error) }
+            return false
+        }
+        if (text == originalText || messageId in state.editingMessages || messageId in state.unsendingMessages) return false
+        val request = EditMessageRequest(requestId = UUID.randomUUID().toString(), threadId = threadId,
+            messageId = messageId, originalText = originalText, text = text)
+        pendingEdits[request.requestId] = request
+        _state.update { it.copy(editingMessages = it.editingMessages + messageId, error = null) }
+        PhoneLink.send(context, Protocol.PATH_EDIT, Wire.encodeBytes(request)) { sent ->
+            if (!sent) failEdit(request.requestId, "Phone unreachable. The edit was not sent.")
+        }
+        scope.launch {
+            delay(35_000L)
+            failEdit(request.requestId, "Edit not confirmed. Refresh the conversation before trying again.")
+        }
+        return true
+    }
+
+    @Synchronized
+    private fun failEdit(requestId: String, error: String) {
+        val request = pendingEdits.remove(requestId) ?: return
+        _state.update { it.copy(editingMessages = it.editingMessages - request.messageId, error = error) }
     }
 
     fun markRead(threadId: String) {
@@ -1721,7 +1784,11 @@ object WatchRepository {
             }
             val previous = remote[message.id] ?: oldMessages[message.id]
             remote[message.id] = previous?.let {
-                message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
+                val merged = message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
+                // OpenBubbles stores the edit optimistically and rolls it back if delivery to Apple fails.
+                if (message.id in _state.value.editingMessages && !message.unsent && !message.hasRetractedParts) {
+                    merged.copy(text = it.text, editedAt = it.editedAt)
+                } else merged
             } ?: message
         }
         var mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
