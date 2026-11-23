@@ -17,10 +17,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -28,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -50,8 +54,10 @@ import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
 import com.openbubbles.wear.protocol.MessageReaction
 import com.openbubbles.wear.protocol.MessageReference
+import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.Tapback
 import com.openbubbles.wear.protocol.WireMessage
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun MessageQuote(quote: MessageReference, color: Color = MaterialTheme.colorScheme.onSurface) {
@@ -109,11 +115,23 @@ internal fun MessageActionsDialog(
     message: WireMessage,
     canReact: Boolean,
     canReply: Boolean,
+    canUnsend: Boolean,
+    canEdit: Boolean,
     onDismiss: () -> Unit,
     onReact: (String, Int) -> Unit,
-    onReply: () -> Unit
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onUnsend: () -> Unit
 ) {
     var partIndex by remember(message.id) { mutableIntStateOf(0) }
+    var withinUnsendWindow by remember(message) { mutableStateOf(message.canUnsendAt()) }
+    LaunchedEffect(message) {
+        if (withinUnsendWindow) {
+            delay((message.timestamp + 120_000L - System.currentTimeMillis()).coerceAtLeast(0L))
+            withinUnsendWindow = false
+        }
+    }
+    val withinEditWindow = rememberEditWindow(message)
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         ScalingLazyColumn(
@@ -168,6 +186,81 @@ internal fun MessageActionsDialog(
             }
             if (message.canReply) item {
                 Button(onClick = onReply, enabled = canReply, modifier = Modifier.fillMaxWidth()) { Text("Reply") }
+            }
+            if (withinEditWindow) item {
+                Button(onClick = onEdit, enabled = canEdit, modifier = Modifier.fillMaxWidth()) { Text("Edit") }
+            }
+            if (withinUnsendWindow) item {
+                Button(onClick = onUnsend, enabled = canUnsend, modifier = Modifier.fillMaxWidth()) { Text("Unsend") }
+            }
+            if (withinUnsendWindow && !canUnsend) item {
+                Text("Connect your phone to unsend.", style = MaterialTheme.typography.bodyExtraSmall,
+                    textAlign = TextAlign.Center)
+            }
+            item {
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberEditWindow(message: WireMessage): Boolean {
+    var withinWindow by remember(message) { mutableStateOf(message.canEditAt()) }
+    LaunchedEffect(message) {
+        if (withinWindow) {
+            delay((message.timestamp + Protocol.EDIT_WINDOW_MS - System.currentTimeMillis()).coerceAtLeast(0L))
+            withinWindow = false
+        }
+    }
+    return withinWindow
+}
+
+@Composable
+internal fun EditMessageDialog(
+    message: WireMessage,
+    online: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by remember(message.id) { mutableStateOf(message.text) }
+    val withinWindow = rememberEditWindow(message)
+    val colors = MaterialTheme.colorScheme
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        ScalingLazyColumn(
+            modifier = Modifier.fillMaxSize().background(colors.background),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item { Text("Edit message", style = MaterialTheme.typography.titleSmall) }
+            item {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        .background(colors.surfaceContainerHigh).padding(10.dp)
+                        .semantics { contentDescription = "Message text" },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.onSurface),
+                    cursorBrush = SolidColor(colors.primary),
+                    minLines = 2,
+                    maxLines = 4
+                )
+            }
+            val notice = when {
+                !withinWindow -> "This message can no longer be edited."
+                !online -> "Connect your phone to edit."
+                text.length > Protocol.MAX_EDIT_LENGTH -> "Use 800 characters or fewer."
+                else -> error
+            }
+            if (notice != null) item {
+                Text(notice, style = MaterialTheme.typography.bodyExtraSmall, textAlign = TextAlign.Center)
+            }
+            item {
+                Button(onClick = { onSave(text) }, modifier = Modifier.fillMaxWidth(),
+                    enabled = withinWindow && online && text.isNotBlank() && text != message.text &&
+                        text.length <= Protocol.MAX_EDIT_LENGTH) { Text("Save edit") }
             }
             item {
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }

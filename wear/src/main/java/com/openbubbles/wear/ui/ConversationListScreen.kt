@@ -9,15 +9,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.Card
 import androidx.wear.compose.material3.CardDefaults
-import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
+import androidx.wear.compose.material3.TextButtonDefaults
 import androidx.wear.compose.material3.TimeText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -28,6 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -47,7 +49,7 @@ fun ConversationListScreen(
     onOpenPhone: () -> Unit,
     onDismissNotice: () -> Unit
 ) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
     val conversations = remember(state.conversations) { state.conversationsForDisplay }
     val unreadCount = conversations.count { it.unread }
     var groupsOnly by remember { mutableStateOf(false) }
@@ -62,6 +64,7 @@ fun ConversationListScreen(
             ScalingLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
+                autoCentering = null,
                 contentPadding = PaddingValues(
                     start = 8.dp,
                     end = 8.dp,
@@ -71,12 +74,14 @@ fun ConversationListScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 item {
-                    ListHeader {
-                        Text(
-                            text = "Messages",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
+                    Text(
+                        text = "Messages",
+                        modifier = Modifier.fillMaxWidth().semantics { heading() },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
 
                 val notice = state.error
@@ -94,12 +99,26 @@ fun ConversationListScreen(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(
                             onClick = { groupsOnly = false },
-                            modifier = Modifier.weight(1f)
-                        ) { Text(if (!groupsOnly) "All ✓" else "All", maxLines = 1, softWrap = false) }
+                            modifier = Modifier.weight(1f).height(TextButtonDefaults.SmallButtonSize)
+                        ) {
+                            Text(
+                                text = if (!groupsOnly) "All ✓" else "All",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                         TextButton(
                             onClick = { groupsOnly = true },
-                            modifier = Modifier.weight(1.4f)
-                        ) { Text(if (groupsOnly) "Groups ✓" else "Groups", maxLines = 1, softWrap = false) }
+                            modifier = Modifier.weight(1.4f).height(TextButtonDefaults.SmallButtonSize)
+                        ) {
+                            Text(
+                                text = if (groupsOnly) "Groups ✓" else "Groups",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
 
@@ -327,24 +346,17 @@ private fun ConversationCard(
                         StatusDot(scheme.primary)
                     }
                 }
-                Text(
-                    text = summary.lastPreview.ifBlank { "No messages" },
-                    style = MaterialTheme.typography.bodyExtraSmall,
-                    color = scheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 2.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = if (summary.isGroup) "Group" else "Chat",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.bodyExtraSmall,
                         color = scheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = relativeTime(summary.lastTimestamp),
@@ -352,6 +364,13 @@ private fun ConversationCard(
                         color = scheme.onSurfaceVariant
                     )
                 }
+                Text(
+                    text = summary.lastPreview.ifBlank { "No messages" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

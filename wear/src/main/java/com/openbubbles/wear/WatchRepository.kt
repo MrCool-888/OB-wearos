@@ -12,6 +12,7 @@ import com.openbubbles.wear.protocol.ActionResult
 import com.openbubbles.wear.protocol.BridgeError
 import com.openbubbles.wear.protocol.ContactsPage
 import com.openbubbles.wear.protocol.ContactsRequest
+import com.openbubbles.wear.protocol.EditMessageRequest
 import com.openbubbles.wear.protocol.WatchContact
 import com.openbubbles.wear.protocol.MarkReadRequest
 import com.openbubbles.wear.protocol.MediaPayload
@@ -22,6 +23,7 @@ import com.openbubbles.wear.protocol.PingPayload
 import com.openbubbles.wear.protocol.PongPayload
 import com.openbubbles.wear.protocol.Protocol
 import com.openbubbles.wear.protocol.ReactionRequest
+import com.openbubbles.wear.protocol.UnsendRequest
 import com.openbubbles.wear.protocol.Tapback
 import com.openbubbles.wear.protocol.SendRequest
 import com.openbubbles.wear.protocol.SyncPayload
@@ -34,6 +36,7 @@ import com.openbubbles.wear.protocol.Wire
 import com.openbubbles.wear.protocol.WireMessage
 import com.openbubbles.wear.protocol.WireThread
 import java.io.File
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -103,6 +106,8 @@ data class WatchState(
     val requestingThreads: Set<String> = emptySet(),
     val sendingThreads: Set<String> = emptySet(),
     val reactingMessages: Set<String> = emptySet(),
+    val unsendingMessages: Set<String> = emptySet(),
+    val editingMessages: Set<String> = emptySet(),
     val requestingMedia: Set<String> = emptySet(),
     val queuedSends: List<QueuedSend> = emptyList(),
     val alertsEnabled: Boolean = true,
@@ -212,6 +217,7 @@ object WatchRepository {
     private const val QUEUE_DISPATCH_TIMEOUT_MS = 20_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mediaWriteLock = Any()
     private val _state = MutableStateFlow(WatchState())
     val state: StateFlow<WatchState> = _state.asStateFlow()
 
@@ -224,6 +230,8 @@ object WatchRepository {
     private val pendingSends = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingThreadRequests = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingReactions = java.util.concurrent.ConcurrentHashMap<String, ReactionRequest>()
+    private val pendingUnsends = java.util.concurrent.ConcurrentHashMap<String, UnsendRequest>()
+    private val pendingEdits = mutableMapOf<String, EditMessageRequest>()
     @Volatile
     private var appContext: Context? = null
 
@@ -557,6 +565,45 @@ object WatchRepository {
                 if (result.ok) requestThread(request.threadId)
             }
 
+            Protocol.ACTION_UNSEND -> {
+                val request = pendingUnsends.remove(result.requestId) ?: return
+                if (result.ok) {
+                    val thread = _state.value.threads[request.threadId]
+                    val updated = result.message?.takeIf {
+                        it.id == request.messageId && it.threadId == request.threadId && it.unsent
+                    }
+                    if (thread != null && updated != null) replaceThread(thread.copy(
+                        messages = thread.messages.map { if (it.id == updated.id) updated else it }
+                    ))
+                }
+                if (_state.value.phoneOnline && _state.value.directBridge && _state.value.relayEnabled)
+                    requestThread(request.threadId)
+                _state.update { it.copy(
+                    unsendingMessages = it.unsendingMessages - request.messageId,
+                    error = if (result.ok) null else result.error ?: "Could not unsend the message."
+                ) }
+            }
+
+            Protocol.ACTION_EDIT -> {
+                val request = pendingEdits.remove(result.requestId) ?: return
+                val updated = result.message?.takeIf {
+                    result.ok && it.id == request.messageId && it.threadId == request.threadId && it.editedAt > 0L
+                }
+                val thread = _state.value.threads[request.threadId]
+                if (thread != null && updated != null) replaceThread(thread.copy(
+                    messages = thread.messages.map {
+                        if (it.id == updated.id && !it.unsent && !it.hasRetractedParts) updated.mergeMediaFrom(it) else it
+                    }
+                ))
+                if (updated == null && _state.value.phoneOnline && _state.value.directBridge && _state.value.relayEnabled) {
+                    requestThread(request.threadId)
+                }
+                _state.update { it.copy(
+                    editingMessages = it.editingMessages - request.messageId,
+                    error = if (result.ok) null else result.error ?: "Could not edit the message."
+                ) }
+            }
+
             Protocol.ACTION_MARK_READ -> {
                 if (result.ok) {
                     markReadLocally(preview)
@@ -616,6 +663,8 @@ object WatchRepository {
 
     fun onBridgeError(error: BridgeError) {
         error.requestId?.let { failReaction(it, error.error) }
+        error.requestId?.let { failUnsend(it, error.error) }
+        error.requestId?.let { failEdit(it, error.error) }
         _state.update { it.copy(error = error.error) }
     }
 
@@ -1301,33 +1350,40 @@ object WatchRepository {
         val height = dataMap.getInt(Protocol.DATA_KEY_HEIGHT)
         val declaredSize = dataMap.getLong(Protocol.DATA_KEY_SIZE)
         scope.launch {
-            val file = writeMediaAsset(context, mediaId, asset)
-            if (file == null) {
+            val response = runCatching {
+                Tasks.await(Wearable.getDataClient(context).getFdForAsset(asset), 25, TimeUnit.SECONDS)
+            }.onFailure { Log.w(TAG, "Unable to read media asset $mediaId", it) }.getOrNull()
+            val saved = response?.inputStream?.use { stream ->
+                synchronized(mediaWriteLock) {
+                    val file = writeMediaAsset(context, mediaId, stream) ?: return@synchronized false
+                    val media = WatchMedia(
+                        id = mediaId,
+                        path = file.absolutePath,
+                        mimeType = mimeType,
+                        width = width,
+                        height = height,
+                        size = if (declaredSize > 0L) declaredSize else file.length(),
+                        createdAt = System.currentTimeMillis()
+                    )
+                    val mediaMap = trimMedia(context, _state.value.media + (mediaId to media))
+                    persistMedia(context, mediaMap)
+                    _state.update {
+                        it.copy(
+                            media = mediaMap,
+                            requestingMedia = it.requestingMedia - mediaId,
+                            error = if (isAvatarMedia(mediaId)) it.error else null
+                        )
+                    }
+                    true
+                }
+            }
+            if (saved != true) {
                 _state.update {
                     it.copy(
                         requestingMedia = it.requestingMedia - mediaId,
                         error = if (isAvatarMedia(mediaId)) it.error else "The photo could not be saved on the watch."
                     )
                 }
-                return@launch
-            }
-            val media = WatchMedia(
-                id = mediaId,
-                path = file.absolutePath,
-                mimeType = mimeType,
-                width = width,
-                height = height,
-                size = if (declaredSize > 0L) declaredSize else file.length(),
-                createdAt = System.currentTimeMillis()
-            )
-            val mediaMap = trimMedia(context, _state.value.media + (mediaId to media))
-            persistMedia(context, mediaMap)
-            _state.update {
-                it.copy(
-                    media = mediaMap,
-                    requestingMedia = it.requestingMedia - mediaId,
-                    error = if (isAvatarMedia(mediaId)) it.error else null
-                )
             }
         }
     }
@@ -1342,13 +1398,13 @@ object WatchRepository {
         width: Int,
         height: Int,
         bytes: ByteArray
-    ): WatchMedia? {
-        if (!initialized) return null
-        val context = appContext ?: return null
+    ): WatchMedia? = synchronized(mediaWriteLock) {
+        if (!initialized) return@synchronized null
+        val context = appContext ?: return@synchronized null
         val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
         val file = File(directory, id)
         val written = runCatching { file.writeBytes(bytes) }.isSuccess
-        if (!written) return null
+        if (!written) return@synchronized null
         val media = WatchMedia(
             id = id,
             path = file.absolutePath,
@@ -1366,37 +1422,28 @@ object WatchRepository {
                 requestingMedia = it.requestingMedia - id
             )
         }
-        return media
+        media
     }
 
-    private fun writeMediaAsset(context: Context, mediaId: String, asset: Asset): File? =
-        runCatching {
-            val response = Tasks.await(
-                Wearable.getDataClient(context).getFdForAsset(asset),
-                25,
-                TimeUnit.SECONDS
-            )
-            val input = response.inputStream
-                ?: throw IllegalStateException("No asset stream")
-            input.use { stream ->
-                val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
-                val target = File(directory, mediaId)
-                val temp = File(directory, "$mediaId.tmp")
+    private fun writeMediaAsset(context: Context, mediaId: String, stream: InputStream): File? {
+        val directory = File(context.filesDir, MEDIA_DIR).apply { mkdirs() }
+        val target = File(directory, mediaId)
+        val temp = File(directory, "$mediaId.tmp")
+        return runCatching {
+            try {
                 temp.outputStream().use { output -> stream.copyTo(output) }
-                if (temp.length() <= 0L) {
-                    temp.delete()
-                    throw IllegalStateException("Empty asset")
-                }
-                if (target.exists()) target.delete()
+                check(temp.length() > 0L) { "Empty asset" }
                 if (!temp.renameTo(target)) {
                     temp.copyTo(target, overwrite = true)
-                    temp.delete()
                 }
                 target
+            } finally {
+                temp.delete()
             }
         }.onFailure {
             Log.w(TAG, "Unable to import media $mediaId", it)
         }.getOrNull()
+    }
 
     @Synchronized
     fun react(threadId: String, messageId: String, reaction: String, partIndex: Int = 0): Boolean {
@@ -1432,6 +1479,75 @@ object WatchRepository {
     internal fun failReaction(requestId: String, error: String) {
         val request = pendingReactions.remove(requestId) ?: return
         _state.update { it.copy(reactingMessages = it.reactingMessages - request.messageId, error = error) }
+    }
+
+    @Synchronized
+    fun unsend(threadId: String, messageId: String): Boolean {
+        if (!initialized) return false
+        val context = appContext ?: return false
+        val state = _state.value
+        val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+        if (message?.canUnsendAt() != true || messageId in state.unsendingMessages ||
+            messageId in state.editingMessages) return false
+        if (!state.phoneOnline || !state.directBridge || !state.relayEnabled) {
+            _state.update { it.copy(error = "Connect your phone and enable the Wear bridge to unsend.") }
+            return false
+        }
+        val request = UnsendRequest(requestId = UUID.randomUUID().toString(), threadId = threadId, messageId = messageId)
+        pendingUnsends[request.requestId] = request
+        _state.update { it.copy(unsendingMessages = it.unsendingMessages + messageId, error = null) }
+        PhoneLink.send(context, Protocol.PATH_UNSEND, Wire.encodeBytes(request)) { sent ->
+            if (!sent) failUnsend(request.requestId, "Phone unreachable. The message was not unsent.")
+        }
+        scope.launch {
+            delay(35_000L)
+            failUnsend(request.requestId, "Unsend not confirmed. Refresh the conversation before trying again.")
+        }
+        return true
+    }
+
+    @Synchronized
+    internal fun failUnsend(requestId: String, error: String) {
+        val request = pendingUnsends.remove(requestId) ?: return
+        _state.update { it.copy(unsendingMessages = it.unsendingMessages - request.messageId, error = error) }
+    }
+
+    @Synchronized
+    fun editMessage(threadId: String, messageId: String, originalText: String, text: String): Boolean {
+        if (!initialized) return false
+        val context = appContext ?: return false
+        val state = _state.value
+        val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+        val error = when {
+            message?.canEditAt() != true -> "This message can no longer be edited."
+            message.text != originalText -> "This message changed. Reopen it to edit the latest text."
+            text.isBlank() || text.length > Protocol.MAX_EDIT_LENGTH -> "Enter a message of 1–800 characters."
+            !state.phoneOnline || !state.directBridge || !state.relayEnabled -> "Connect your phone to edit."
+            else -> null
+        }
+        if (error != null) {
+            _state.update { it.copy(error = error) }
+            return false
+        }
+        if (text == originalText || messageId in state.editingMessages || messageId in state.unsendingMessages) return false
+        val request = EditMessageRequest(requestId = UUID.randomUUID().toString(), threadId = threadId,
+            messageId = messageId, originalText = originalText, text = text)
+        pendingEdits[request.requestId] = request
+        _state.update { it.copy(editingMessages = it.editingMessages + messageId, error = null) }
+        PhoneLink.send(context, Protocol.PATH_EDIT, Wire.encodeBytes(request)) { sent ->
+            if (!sent) failEdit(request.requestId, "Phone unreachable. The edit was not sent.")
+        }
+        scope.launch {
+            delay(35_000L)
+            failEdit(request.requestId, "Edit not confirmed. Refresh the conversation before trying again.")
+        }
+        return true
+    }
+
+    @Synchronized
+    private fun failEdit(requestId: String, error: String) {
+        val request = pendingEdits.remove(requestId) ?: return
+        _state.update { it.copy(editingMessages = it.editingMessages - request.messageId, error = error) }
     }
 
     fun markRead(threadId: String) {
@@ -1668,7 +1784,11 @@ object WatchRepository {
             }
             val previous = remote[message.id] ?: oldMessages[message.id]
             remote[message.id] = previous?.let {
-                message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
+                val merged = message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
+                // OpenBubbles stores the edit optimistically and rolls it back if delivery to Apple fails.
+                if (message.id in _state.value.editingMessages && !message.unsent && !message.hasRetractedParts) {
+                    merged.copy(text = it.text, editedAt = it.editedAt)
+                } else merged
             } ?: message
         }
         var mergedRemote = remote.values.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)

@@ -7,15 +7,18 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +39,7 @@ import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.IconButton
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.TextButton
 import coil.compose.AsyncImage
 import com.openbubbles.wear.WatchRepository
 import com.openbubbles.wear.WatchState
@@ -48,14 +52,21 @@ import java.io.File
 @Composable
 fun MediaViewerScreen(
     state: WatchState,
-    mediaId: String,
+    threadId: String,
+    messageId: String,
     onBack: () -> Unit
 ) {
+    val message = state.threads[threadId]?.messages?.firstOrNull { it.id == messageId }
+    val mediaIds = message?.attachmentIds.orEmpty()
+    var selectedMediaId by remember(threadId, messageId) { mutableStateOf<String?>(null) }
+    val index = mediaIds.indexOf(selectedMediaId).coerceAtLeast(0)
+    val mediaId = mediaIds.getOrNull(index)
     val media = state.media[mediaId]
-    val requesting = mediaId in state.requestingMedia
+    val requesting = mediaId != null && mediaId in state.requestingMedia
 
     LaunchedEffect(mediaId) {
-        if (media == null) WatchRepository.requestMedia(mediaId)
+        selectedMediaId = mediaId
+        if (mediaId != null && media == null) WatchRepository.requestMedia(mediaId)
     }
 
     Box(
@@ -63,11 +74,21 @@ fun MediaViewerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (media != null) {
-            ZoomableImage(
-                file = File(media.path),
-                description = if (media.isGif) "Animated GIF" else "Photo"
+        if (mediaId == null) {
+            Text(
+                text = "Photo no longer available",
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White,
+                textAlign = TextAlign.Center
             )
+        } else if (media != null) {
+            key(mediaId) {
+                ZoomableImage(
+                    file = File(media.path),
+                    description = if (media.isGif) "Animated GIF" else "Photo"
+                )
+            }
         } else {
             Column(
                 modifier = Modifier
@@ -113,6 +134,25 @@ fun MediaViewerScreen(
                 contentDescription = "Close",
                 tint = Color.White
             )
+        }
+        if (mediaIds.size > 1) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(24.dp))
+                    .padding(start = 4.dp, top = 4.dp, end = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("${index + 1} of ${mediaIds.size}", color = Color.White,
+                    style = MaterialTheme.typography.labelSmall)
+                Row {
+                    TextButton(onClick = { selectedMediaId = mediaIds[index - 1] },
+                        enabled = index > 0) { Text("Previous") }
+                    TextButton(onClick = { selectedMediaId = mediaIds[index + 1] },
+                        enabled = index < mediaIds.lastIndex) { Text("Next") }
+                }
+            }
         }
     }
 }
