@@ -332,9 +332,13 @@ object WatchRepository {
         payload.conversations.forEach { migrateThreadIds(it.id, aliasesFor(it.id, it.address, it.isGroup)) }
         val summaries = payload.conversations.map { incoming ->
             val old = _state.value.conversations.firstOrNull { it.id == incoming.id }
-            incoming.copy(title = Protocol.preferredConversationTitle(
-                incoming.title, old?.title, incoming.id, incoming.address
-            ), avatarId = incoming.avatarId ?: old?.avatarId)
+            val latest = _state.value.threads[incoming.id]?.latestMessage()
+            incoming.copy(
+                title = Protocol.preferredConversationTitle(incoming.title, old?.title, incoming.id, incoming.address),
+                avatarId = incoming.avatarId ?: old?.avatarId,
+                lastPreview = if (latest?.unsent == true && incoming.lastTimestamp == latest.timestamp)
+                    latest.displayText else incoming.lastPreview
+            )
         }.map(::respectLocalRead).sortedByDescending { it.lastTimestamp }
         val byId = summaries.associateBy { it.id }
         val existingThreads = _state.value.threads.mapValues { (id, thread) ->
@@ -571,9 +575,10 @@ object WatchRepository {
                     val thread = _state.value.threads[request.threadId]
                     val updated = result.message?.takeIf {
                         it.id == request.messageId && it.threadId == request.threadId && it.unsent
-                    }
+                    } ?: thread?.messages?.firstOrNull { it.id == request.messageId }
                     if (thread != null && updated != null) replaceThread(thread.copy(
-                        messages = thread.messages.map { if (it.id == updated.id) updated else it }
+                        messages = (thread.messages.filterNot { it.id == updated.id } + updated.asUnsent())
+                            .sortedBy { it.timestamp }.takeLast(MAX_MESSAGES)
                     ))
                 }
                 if (_state.value.phoneOnline && _state.value.directBridge && _state.value.relayEnabled)
@@ -607,7 +612,6 @@ object WatchRepository {
             Protocol.ACTION_MARK_READ -> {
                 if (result.ok) {
                     markReadLocally(preview)
-                    _state.update { it.copy(info = if (preview == it.visibleThreadId) it.info else "Marked as read") }
                 } else {
                     _state.update {
                         it.copy(error = result.error ?: "Could not mark the chat as read.")
@@ -1702,7 +1706,8 @@ object WatchRepository {
         val migrated = base?.copy(
             id = threadId,
             messages = oldThreads.flatMap { it.messages }.groupBy { it.id }.values.map { copies ->
-                copies.reduce { old, new -> new.mergeMediaFrom(old) }.copy(threadId = threadId)
+                copies.reduce { old, new -> if (old.unsent) old else new.mergeMediaFrom(old) }
+                    .copy(threadId = threadId)
             }.sortedBy { it.timestamp }.takeLast(MAX_MESSAGES),
             unread = oldThreads.any { it.unread },
             directHistory = oldThreads.any { it.directHistory }
@@ -1754,6 +1759,11 @@ object WatchRepository {
         }
     }
 
+    private fun WireMessage.asUnsent() = WireMessage(
+        id = id, threadId = threadId, text = "Message unsent", timestamp = timestamp,
+        sender = sender, fromMe = fromMe, unsent = true, hasRetractedParts = hasRetractedParts
+    )
+
     private fun mergeThread(incoming: WireThread): WireThread {
         val old = _state.value.threads[incoming.id]
         val oldMessages = old?.messages.orEmpty().associateBy { it.id }
@@ -1767,6 +1777,13 @@ object WatchRepository {
                 (!Protocol.isNotificationMessageId(it.id) && oldest != null && it.timestamp < oldest) }
             .forEach { remote[it.id] = it }
         incomingRemote.forEach { message ->
+            val previous = remote[message.id] ?: oldMessages[message.id]
+            // A delayed history response can still contain the original after a confirmed unsend.
+            val unsent = message.takeIf { it.unsent } ?: previous?.takeIf { it.unsent }
+            if (unsent != null) {
+                remote[message.id] = unsent.asUnsent()
+                return@forEach
+            }
             if (message.fromMe && !message.id.startsWith(AUTO_PREFIX)) {
                 // The phone records an optimistic "auto-" send until the real
                 // message appears. Drop that placeholder when the real one
@@ -1782,11 +1799,10 @@ object WatchRepository {
                 }
                 if (optimistic != null) remote.remove(optimistic.id)
             }
-            val previous = remote[message.id] ?: oldMessages[message.id]
             remote[message.id] = previous?.let {
                 val merged = message.mergeMediaFrom(it).copy(status = message.status ?: it.status)
                 // OpenBubbles stores the edit optimistically and rolls it back if delivery to Apple fails.
-                if (message.id in _state.value.editingMessages && !message.unsent && !message.hasRetractedParts) {
+                if (message.id in _state.value.editingMessages && !message.hasRetractedParts) {
                     merged.copy(text = it.text, editedAt = it.editedAt)
                 } else merged
             } ?: message

@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +42,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -226,6 +229,9 @@ internal fun EditMessageDialog(
 ) {
     var text by remember(message.id) { mutableStateOf(message.text) }
     val withinWindow = rememberEditWindow(message)
+    val canSave = withinWindow && online && text.isNotBlank() && text != message.text &&
+        text.length <= Protocol.MAX_EDIT_LENGTH
+    val saveEdit = { if (canSave) onSave(text) }
     val colors = MaterialTheme.colorScheme
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         ScalingLazyColumn(
@@ -244,6 +250,8 @@ internal fun EditMessageDialog(
                         .semantics { contentDescription = "Message text" },
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.onSurface),
                     cursorBrush = SolidColor(colors.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { saveEdit() }),
                     minLines = 2,
                     maxLines = 4
                 )
@@ -258,9 +266,8 @@ internal fun EditMessageDialog(
                 Text(notice, style = MaterialTheme.typography.bodyExtraSmall, textAlign = TextAlign.Center)
             }
             item {
-                Button(onClick = { onSave(text) }, modifier = Modifier.fillMaxWidth(),
-                    enabled = withinWindow && online && text.isNotBlank() && text != message.text &&
-                        text.length <= Protocol.MAX_EDIT_LENGTH) { Text("Save edit") }
+                Button(onClick = saveEdit, modifier = Modifier.fillMaxWidth(),
+                    enabled = canSave) { Text("Save edit") }
             }
             item {
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }

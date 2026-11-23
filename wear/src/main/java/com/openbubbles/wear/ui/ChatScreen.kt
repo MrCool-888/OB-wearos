@@ -249,7 +249,7 @@ fun ChatScreen(
             }
         }
     }
-    messages.firstOrNull { it.id == selectedMessageId }?.let { message ->
+    messages.firstOrNull { it.id == selectedMessageId && !it.unsent }?.let { message ->
         val canChange = state.phoneOnline && state.directBridge && state.relayEnabled &&
             message.id !in state.unsendingMessages && message.id !in state.editingMessages
         MessageActionsDialog(
@@ -277,7 +277,7 @@ fun ChatScreen(
             }
         )
     }
-    editingMessage?.let { message ->
+    editingMessage?.takeIf { draft -> messages.any { it.id == draft.id && !it.unsent } }?.let { message ->
         EditMessageDialog(
             message = message,
             online = state.phoneOnline && state.directBridge && state.relayEnabled,
@@ -360,6 +360,16 @@ private fun MessageBubble(
 ) {
     val scheme = MaterialTheme.colorScheme
     val fromMe = message.fromMe
+    if (message.unsent) {
+        Text(
+            text = "Message unsent",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.bodyExtraSmall,
+            color = scheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        return
+    }
     val container = if (fromMe) Color(0xFF0066CC) else scheme.surfaceContainerHigh
     val content = if (fromMe) Color.White else scheme.onSurface
     val secondaryContent = content.copy(alpha = if (fromMe) 0.9f else 0.7f)
@@ -436,7 +446,7 @@ private fun MessageBubble(
                 color = secondaryContent
             )
             if (reacting) Text("Reacting…", style = MaterialTheme.typography.labelSmall, color = secondaryContent)
-            if (editing || message.editedAt > 0L && !message.unsent) {
+            if (editing || message.editedAt > 0L) {
                 Text(if (editing) "Saving edit…" else "Edited",
                     style = MaterialTheme.typography.labelSmall, color = secondaryContent)
             }

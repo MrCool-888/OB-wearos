@@ -79,8 +79,10 @@ class WatchRepositoryTest {
     }
 
     @Test fun unsendWaitsForConfirmationAndFailurePreservesMessage() {
-        val message = local.copy(id = "recent", timestamp = System.currentTimeMillis(), canUnsend = true)
-        state.value = state.value.copy(threads = mapOf("chat" to WireThread("chat", "Test", messages = listOf(message))))
+        val message = local.copy(id = "recent", timestamp = System.currentTimeMillis(), canUnsend = true,
+            attachment = true, mediaId = "cached-photo")
+        val thread = WireThread("chat", "Test", messages = listOf(message), directHistory = true)
+        state.value = state.value.copy(threads = mapOf("chat" to thread))
         assertFalse(WatchRepository.unsend("chat", "recent"))
         assertEquals(message, state.value.threads.getValue("chat").messages.single())
         @Suppress("UNCHECKED_CAST")
@@ -95,11 +97,34 @@ class WatchRepositoryTest {
         assertTrue(state.value.unsendingMessages.isEmpty())
         assertEquals("Expired", state.value.error)
         requests["unsend2"] = com.openbubbles.wear.protocol.UnsendRequest(requestId = "unsend2", threadId = "chat", messageId = "recent")
-        val tombstone = message.copy(text = "Message unsent", unsent = true, canUnsend = false,
-            attachment = false, mediaId = null)
+        val tombstone = WireMessage(message.id, thread.id, "Message unsent", message.timestamp,
+            fromMe = true, unsent = true)
         WatchRepository.onActionResult(ActionResult(requestId = "unsend2", action = Protocol.ACTION_UNSEND,
-            ok = true, threadId = "chat", message = tombstone))
+            ok = true, threadId = "chat"))
         assertEquals(tombstone, state.value.threads.getValue("chat").messages.single())
+        WatchRepository.onThread(thread, connected = false)
+        assertEquals(tombstone, state.value.threads.getValue("chat").messages.single())
+        WatchRepository.onSync(SyncPayload(generatedAt = message.timestamp, phoneName = "Phone", bridgeVersion = "3.0.0",
+            relayEnabled = false, conversations = listOf(thread.toSummary())), fromCache = true)
+        assertEquals("Message unsent", state.value.conversations.single().lastPreview)
+
+        val newer = message.copy(id = "newer", text = "New message", timestamp = message.timestamp + 1)
+        WatchRepository.onSync(SyncPayload(generatedAt = newer.timestamp, phoneName = "Phone", bridgeVersion = "3.0.0",
+            relayEnabled = false, conversations = listOf(thread.copy(messages = listOf(newer)).toSummary())),
+            fromCache = true)
+        assertEquals("New message", state.value.conversations.single().lastPreview)
+    }
+
+    @Test fun phoneUnsendReplacesCachedContentAndOnlyAffectsTheRetractedMessage() {
+        val photo = local.copy(id = "photo", attachment = true, mediaId = "cached-photo", canReply = true)
+        val other = local.copy(id = "other", timestamp = photo.timestamp + 1)
+        val thread = WireThread("chat", "Test", messages = listOf(photo, other), directHistory = true)
+        state.value = state.value.copy(threads = mapOf("chat" to thread))
+        WatchRepository.onThread(thread.copy(messages = listOf(photo.copy(unsent = true), other)), connected = false)
+        val (retracted, unchanged) = state.value.threads.getValue("chat").messages
+        assertEquals(WireMessage(photo.id, thread.id, "Message unsent", photo.timestamp,
+            fromMe = true, unsent = true), retracted)
+        assertEquals(other, unchanged)
     }
 
     @Test fun editWaitsForConfirmationAndFailureKeepsOriginalText() {
@@ -1026,12 +1051,17 @@ class WatchRepositoryTest {
         assertEquals(firstId, pending["request"])
     }
 
-    @Test fun automaticReadConfirmationDoesNotInsertANoticeAboveTheVisibleMessages() {
-        state.value = WatchState(loading = false, visibleThreadId = "chat", info = null,
-            threads = mapOf("chat" to WireThread(id = "chat", title = "Alex")))
-        WatchRepository.onActionResult(ActionResult(requestId = "read", action = Protocol.ACTION_MARK_READ,
-            ok = true, threadId = "chat"))
-        assertNull(state.value.info)
+    @Test fun readConfirmationClearsUnreadWithoutShowingANotice() {
+        val thread = WireThread(id = "chat", title = "Alex", unread = true)
+        for (visibleThreadId in listOf("chat", null)) {
+            state.value = WatchState(loading = false, visibleThreadId = visibleThreadId,
+                threads = mapOf(thread.id to thread), conversations = listOf(thread.toSummary()))
+            WatchRepository.onActionResult(ActionResult(requestId = "read", action = Protocol.ACTION_MARK_READ,
+                ok = true, threadId = thread.id))
+            assertFalse(state.value.threads.getValue(thread.id).unread)
+            assertFalse(state.value.conversations.single().unread)
+            assertNull(state.value.info)
+        }
     }
 
     @Test fun directBridgeCreatesAConversationForANewAddress() {
